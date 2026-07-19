@@ -14,7 +14,7 @@ assignment, checkpoint choices, wandb layout, journal entries. Never decide thes
 ├── config/          # hydra yaml configs for code/
 ├── evaluations/     # data produced by running experiments (+ .status markers)
 ├── logs/            # run logs (wandb dirs, stdout dumps); gitignored, dir tracked, rig-local, never synced
-├── plots/           # plots produced by visualizations/
+├── plots/           # plots produced by visualizations/ (one subfolder per plotting script)
 ├── scripts/         # shell scripts that LAUNCH things (shell only — never yaml)
 ├── visualizations/  # plotting code (argparse python), sibling of code/
 ├── shitpads/        # temp space; gitignored, dir tracked, rig-local, never synced

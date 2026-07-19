@@ -11,7 +11,7 @@ Plotting code conventions. Canon: `../research-project-init/references/conventio
 
 - Viz code lives in the **`visualizations/` root folder** (sibling of `code/`), mirroring the experiment hierarchy: `visualizations/NNN_exp/plot_*.py`. `code/` stays purely experiment code.
 - Input: **`evaluations/` only** — viz never reads checkpoints or recomputes; if a quantity isn't in evaluations, the producer experiment must export it first.
-- Output: under `plots/NNN_exp/`.
+- Output: under `plots/NNN_exp/<script_stem>/` — one subfolder per script (stem = filename without `.py`).
 
 ## Interface: argparse, NOT hydra
 
@@ -21,14 +21,14 @@ Plotting is too dynamic to standardize into configs. Each script takes CLI args 
 python visualizations/000_grokking/plot_loss.py --model mlp --lr 1e-3 --seed 0
 ```
 
-## Output paths — partial run_id rule (default; user has final choice per case)
+## Output paths — per-script subfolder + partial run_id rule (default; user has final choice per case)
 
-A plot sits at the path of the run_id params it holds **fixed**; params it aggregates over are elided:
+Each script writes only under `plots/NNN_exp/<script_stem>/` (e.g. `plot_loss.py` → `plots/000_grokking/plot_loss/`). Inside that subfolder, the partial run_id rule applies: a plot sits at the path of the run_id params it holds **fixed**; params it aggregates over are elided:
 
 ```
-plots/000_grokking/model=mlp/lr=1e-3/seed=0/loss_curve.pdf   # per-run: full run_id path
-plots/000_grokking/model=mlp/acc_vs_lr.pdf                   # fixed model, aggregated over lr+seed
-plots/000_grokking/acc_vs_lr_by_model.pdf                    # aggregated over everything
+plots/000_grokking/plot_loss/model=mlp/lr=1e-3/seed=0/loss_curve.pdf   # per-run: full run_id path
+plots/000_grokking/plot_acc_vs_lr/model=mlp/acc_vs_lr.pdf              # fixed model, aggregated over lr+seed
+plots/000_grokking/plot_acc_vs_lr/acc_vs_lr_by_model.pdf               # aggregated over everything
 ```
 
 Propose the placement for each new plot; the user decides.
