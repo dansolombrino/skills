@@ -1,5 +1,9 @@
 {
   "name": "research",
   "version": "0.1.0",
-  "description": "Skills for research work"
+  "description": "Skills for research work",
+  "author": {
+    "name": "Dan Solombrino",
+    "email": "dansolombrino@gmail.com"
+  }
 }
