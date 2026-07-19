@@ -36,6 +36,7 @@ Protocol for creating a new experiment. Conventions canon: `../research-project-
 2. If yes: which metrics, their names/keys — the user controls the dashboard layout.
 3. Propose the default mapping — project = research project, group = `NNN_experiment`, run name = flat run_id — and get explicit approval (user may override).
 4. Online mode on all rigs; `WANDB_API_KEY` from `.env`.
+5. wandb files go under `logs/` — `wandb.init(dir=<project_root>/"logs")` — never the project root.
 
 ## 6. Wrap up
 

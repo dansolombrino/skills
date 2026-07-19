@@ -17,6 +17,7 @@ Substitute `{{PROJECT_NAME}}` / `{{PROJECT_DESCRIPTION}}` and adjust with the us
 | `code/` | experiment code (hydra-configured) |
 | `config/` | hydra yaml configs for `code/` |
 | `evaluations/` | data produced by running experiments |
+| `logs/` | run logs — wandb files etc. (gitignored, rig-local) |
 | `plots/` | plots produced by `visualizations/` |
 | `scripts/` | shell scripts that launch experiments/sweeps |
 | `visualizations/` | plotting code (argparse), reads `evaluations/`, writes `plots/` |
@@ -98,6 +99,8 @@ WANDB_API_KEY=
 .env
 shitpads/*
 !shitpads/.gitkeep
+logs/*
+!logs/.gitkeep
 references/*
 !references/.gitkeep
 checkpoints/*

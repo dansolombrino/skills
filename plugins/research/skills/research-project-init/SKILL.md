@@ -11,7 +11,7 @@ Scaffold the standard research-project structure. The full canon (taxonomy, run_
 
 1. **Confirm the project name and location** with the user before creating anything.
 2. **Create the taxonomy** (empty dirs tracked with `.gitkeep`):
-   `checkpoints/ code/ config/ evaluations/ plots/ scripts/ visualizations/ shitpads/ references/`
+   `checkpoints/ code/ config/ evaluations/ logs/ plots/ scripts/ visualizations/ shitpads/ references/`
 3. **Create the root files** from the templates:
    - `README.md` — static scaffold: taxonomy, setup steps, how running/tracking works, pointers to JOURNAL.md and EXPERIMENTS.md stating their purposes. Only ever touched again when the structure itself changes.
    - `CLAUDE.md` — thin: project-specific facts/quirks plus a light awareness map (what exists, purpose of the md files, how to deepen awareness when needed). Never duplicate skill content into it.

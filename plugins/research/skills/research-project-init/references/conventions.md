@@ -13,6 +13,7 @@ assignment, checkpoint choices, wandb layout, journal entries. Never decide thes
 │   └── common/run_id.py   # shared run_id helper (see below)
 ├── config/          # hydra yaml configs for code/
 ├── evaluations/     # data produced by running experiments (+ .status markers)
+├── logs/            # run logs (wandb dirs, stdout dumps); gitignored, dir tracked, rig-local, never synced
 ├── plots/           # plots produced by visualizations/
 ├── scripts/         # shell scripts that LAUNCH things (shell only — never yaml)
 ├── visualizations/  # plotting code (argparse python), sibling of code/
@@ -25,6 +26,9 @@ assignment, checkpoint choices, wandb layout, journal entries. Never decide thes
 ├── JOURNAL.md       # story: prose log of what/why/learned (append-only)
 └── EXPERIMENTS.md   # state: run tracking tables
 ```
+
+Run-log-producing tools must write into `logs/` — e.g. `wandb.init(dir=<project_root>/"logs")` —
+never the project root.
 
 Experiments are named `NNN_[experiment_name]` (three-digit zero-padded), optionally nested
 (`NNN_exp/NNN_sub_exp/...`). The same `NNN_...` hierarchy is mirrored across
