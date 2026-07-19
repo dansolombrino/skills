@@ -7,7 +7,7 @@ description: Audit a SKILL.md against best practices. Use when the user asks to 
 
 Review a skill (a SKILL.md and its surrounding folder) and report concrete findings. Do NOT apply fixes unless the user asks — output a findings list, most important first.
 
-If the user didn't name a skill, list the skills in `plugins/*/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md` and ask which to review.
+If the user didn't name a skill, list the skills in `plugins/<bundle>/skills/*/SKILL.md` (distributable skills live inside domain bundles like `research`) and `.claude/skills/*/SKILL.md` (meta-skills) and ask which to review.
 
 ## Checklist
 
@@ -23,10 +23,11 @@ If the user didn't name a skill, list the skills in `plugins/*/skills/*/SKILL.md
 - Concrete over abstract: prefer exact commands, exact paths, exact formats over vague guidance ("handle errors appropriately" is a finding).
 - No contradictions, no dead references (files or paths mentioned that don't exist in the skill folder).
 
-### Distributable skills only (plugins/)
-- `plugin.json` exists with `name`, `version`, `description`; description matches SKILL.md frontmatter.
-- Registered in `.claude-plugin/marketplace.json` with a matching `source` path.
-- Version bumped if the skill changed since the last git tag `<name>--v<version>`.
+### Distributable skills only (plugins/<bundle>/skills/)
+- The bundle's `plugin.json` exists with `name`, `version`, `description` describing the domain (not a single skill).
+- The bundle is registered in `.claude-plugin/marketplace.json` with a matching `source` path.
+- The BUNDLE version was bumped if any skill inside changed since the last git tag `<bundle>--v<version>`.
+- The skill topically belongs in its bundle; flag skills that look like they belong to a different domain.
 
 ## Output format
 

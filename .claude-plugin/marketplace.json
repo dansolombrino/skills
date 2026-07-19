@@ -5,5 +5,11 @@
     "name": "Dan Solombrino",
     "email": "dansolombrino@gmail.com"
   },
-  "plugins": []
+  "plugins": [
+    {
+      "name": "research",
+      "source": "./plugins/research",
+      "description": "Skills for research work"
+    }
+  ]
 }
