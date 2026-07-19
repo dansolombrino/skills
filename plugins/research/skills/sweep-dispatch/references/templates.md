@@ -12,10 +12,11 @@ set -uo pipefail
 cd "$(dirname "$0")/../../.."   # → project root (scripts/NNN_exp/<run_id>/ is 3 deep; adjust for sub-experiments)
 
 EVAL_DIR="evaluations/<NNN_exp>/<run_id path>"
-mkdir -p "$EVAL_DIR"
+LOG_DIR="logs/<NNN_exp>/<run_id path>"
+mkdir -p "$EVAL_DIR" "$LOG_DIR"
 echo running > "$EVAL_DIR/.status"
 
-python code/<NNN_exp>/<script>.py <param>=<value> <param>=<value> ...
+python code/<NNN_exp>/<script>.py <param>=<value> <param>=<value> ... 2>&1 | tee "$LOG_DIR/run-$(date +%Y%m%d-%H%M%S).log"
 rc=$?
 
 if [ $rc -eq 0 ]; then echo done > "$EVAL_DIR/.status"; else echo failed > "$EVAL_DIR/.status"; fi
@@ -27,6 +28,11 @@ Notes:
   script is meaningful standalone.
 - `<run_id path>` / `<flat run_id>` must be produced with `code/common/run_id.py` at generation
   time — never hand-composed.
+- The `tee` into `logs/<NNN_exp>/<run_id path>/run-<timestamp>.log` is mandatory (conventions):
+  timestamped per launch, history kept, never overwritten. `pipefail` keeps python's exit code
+  authoritative despite the pipe, so `rc` reflects python, not `tee`.
+- Hydra projects must have job file logging disabled (`- override hydra/job_logging: none`) or
+  pointed inside `logs/` — no `.log` may land in the project root.
 
 ## launch_<rig>.sh — per-rig sequential slice
 

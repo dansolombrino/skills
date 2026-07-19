@@ -135,6 +135,22 @@ fi
 
 Install with: `chmod +x .githooks/pre-commit && git config core.hooksPath .githooks`
 
+## scripts/ run.sh (log-capture core)
+
+Canonical pattern every launch script follows (full self-contained template with `.status`
+markers: sweep-dispatch skill, `references/templates.md`):
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/../../.."            # to project root (depth varies with nesting)
+LOGDIR="logs/NNN_experiment/<run_id path>"
+mkdir -p "$LOGDIR"
+python code/NNN_experiment/script.py <overrides> 2>&1 | tee "$LOGDIR/run-$(date +%Y%m%d-%H%M%S).log"
+```
+
+`pipefail` keeps python's exit code authoritative despite the `tee` pipe.
+
 ## code/common/run_id.py
 
 ```python

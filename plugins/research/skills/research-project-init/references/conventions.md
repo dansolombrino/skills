@@ -30,6 +30,13 @@ assignment, checkpoint choices, wandb layout, journal entries. Never decide thes
 Run-log-producing tools must write into `logs/` — e.g. `wandb.init(dir=<project_root>/"logs")` —
 never the project root.
 
+Every `scripts/` `run.sh` captures its own stdout/stderr: the python invocation is piped
+through `tee` into `logs/NNN_experiment/<run_id path>/run-<YYYYmmdd-HHMMSS>.log` (nested
+run_id path form, exactly mirroring `checkpoints/` and `evaluations/`). Timestamped per
+launch — history is kept, logs are never overwritten. Hydra projects must disable hydra's
+job file logging (defaults entry `- override hydra/job_logging: none`) or explicitly point
+it inside `logs/` — a stray `<job_name>.log` must never appear in the project root.
+
 Experiments are named `NNN_[experiment_name]` (three-digit zero-padded), optionally nested
 (`NNN_exp/NNN_sub_exp/...`). The same `NNN_...` hierarchy is mirrored across
 `checkpoints/ code/ config/ evaluations/ plots/ scripts/ visualizations/`.

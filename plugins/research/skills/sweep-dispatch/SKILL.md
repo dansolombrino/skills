@@ -22,6 +22,7 @@ scripts/NNN_exp/launch_<rig>.sh          # per-rig launcher: its slice, sequenti
 ```
 
 - `run.sh` is **self-contained**: the full python command with explicit hydra overrides, plus `.status` marker writes (template). Rerunning a failed run = rerunning its `run.sh` — whether that resumes or restarts was fixed at experiment design time (resume decision), never re-asked here.
+- `run.sh` **captures its own log**: the python invocation is piped through `tee` into `logs/NNN_exp/<run_id path>/run-<timestamp>.log` (conventions; pattern in the template). Timestamped per launch, history kept, never overwritten.
 - Folder names come from `run_id_flat` — identical strings to EXPERIMENTS.md rows and wandb run names.
 - `scripts/` contains shell only. **Never put yaml under scripts/** — the grid lives in the launcher generation conversation and in EXPERIMENTS.md rows.
 
