@@ -1,0 +1,193 @@
+this is the description of how the code of my research will be structured.
+
+"structured" covers multiple aspects of the code, so we will unpack those one by one.
+
+we will then brainstorm how to structure skills that handle all the aspects covered in the description.
+
+
+let's start from the code structure for a research project.
+
+this is the first level project folder structure
+
+[project root]
+|
+|--checkpoints
+|
+|--code
+|
+|--config
+|
+|--evaluations
+|
+|--plots
+|
+|--scripts
+|
+|--shitpads
+|
+|--references
+|
+|--.env
+|
+|--.env.example
+|
+|--README.md
+|
+|--CLAUDE.md
+|
+|--JOURNAL.md
+|
+|--EXPERIMENTS.md
+
+and this is the description for each of these first level folders. 
+additional details on the structure of these folders will follow later on.
+- checkpoints    --> stores the checkpoints produced by trainings, finetunings, etc.
+- code           --> stores the code that is needed to carry the experiments out.
+- config         --> stores the hydra yaml configs needed to launch the experiments in code. 
+- evaluations    --> stores the data resulting from running experiments, i.e. the data produced by stuff in code
+- plots          --> stores the plots resulting from plotting the data read by evaluations
+- scripts        --> stores the scripts that launch the various scripts produced in code.
+- shitpads       --> temp dir that could be useful to me or claude, its content is gitignored but the dir is present and can be useful.
+- references     --> stores references i need to reference to claude, e.g. existing codebases, papers, whatever. content is gitignored but synced across rigs/servers (see later for machines-related stuff)
+- .env           --> stores .env stuff (see later for what it has to be stored there)
+- .env.example   --> populated so as then one can fill the actual secrets
+- README.md      --> repo readme, we will discuss what to put there
+- CLAUDE.md      --> we will discuss what to put there
+- JOURNAL.md     --> journal of what has been done, why, etc. in textual form. we will discuss what to put there and how, and also how to guarantee that it gets properly updated everytime we do something
+- EXPERIMENTS.md --> tracks experiments todo, running, done in a precise way, i.e. the actual configs that are being ran, etc. we will brainstorm the structure later on.
+
+
+now i will start upacking the structure of some of these folders.
+
+
+first, we need to understand an important concept about an experiment, i.e. the run_id.
+
+the run_id is what uniquely identifies a run of an experiment as far as the experiment config parameters are concerned.
+
+the experiment config params that uniquely identify a run vary from experiment to experiment, from research project to research project.
+so i want this to be defined crystal clearly everytime code for a new exp is being designed.
+claude has to brainstorm with me about it. 
+claude should NEVER decide which run parameters determine the run_id, i should always have the final say.
+once the run_id is elected, it has to be stored somewhere.
+this is point 1) that we have to brainstorm about... where and how to store the run_id.
+This run_id identifies the experiments that we need todo, that are inpr, and that are done, and once is set it always identifies that run of that experiment.
+
+you can think the run_id as a dict going from the config param name to the config param value, a string, a path or subpaths, or cells in a table...
+it can be used in multiple ways, however its most appropriate to function as unique id for a run of an experiment.
+
+from now on, we will refer to it as run_id and then refer to its "form" depending on the context.
+
+
+each experiment will be assigned a name of the form NNN_[experiment name], where NNN is a three-digit zero padded number.
+this is a generic rule, in some cases i might want something like NNN_[experiment name]/{NNN,NNN}_{[sub experiment name 1], [subexperiment name 2]}.
+i.e. the atomic NNN_[experiment name] is always present, then i might have some sub exps, sub sub exps, etc.
+
+each NNN_[experiment name], no matter what it's final form is, i.e. just one level or with sub-levels, will have a matching structure in code, configs, evaluations, plots, and scripts.
+
+for example, something like this.
+please note that filenames are just placeholders and examples, they are NOT the final name.
+please also note that run_id in this case could be a set of subfolders, e.g. [some run id params]/[some other run id params]/[some other run id params else]/...
+this will be decided on a per-experiment basis. claude should NEVER decide this, i should ALWAYS have the final say about it.
+
+[project root]
+├── checkpoints
+│   ├── 000_experiment_name
+│   │   ├── [run_id]
+│   │   │   └── step_01000.pt
+│   │   └── [run_id]
+│   │       └── step_01000.pt
+│   └── 001_experiment_name
+│       └── 000_sub_experiment_name
+│           ├── [run_id]
+│           │   └── step_01000.pt
+│           └── [run_id]
+│               └── step_01000.pt
+│
+├── code
+│   ├── 000_experiment_name
+│   │   └── whatever.py
+│   └── 001_experiment_name
+│       └── 000_sub_experiment_name
+│           └── whatever.py
+│
+├── config
+│   ├── 000_experiment_name
+│   │   └── whatever.yaml
+│   └── 001_experiment_name
+│       └── 000_sub_experiment_name
+│           └── whatever.yaml
+│
+├── evaluations
+│   ├── 000_experiment_name
+│   │   ├── [run_id]
+│   │   │   └── whatever.json
+│   │   └── [run_id]
+│   │       └── whatever.json
+│   └── 001_experiment_name
+│       └── 000_sub_experiment_name
+│           ├── [run_id]
+│           │   └── whatever.json
+│           └── [run_id]
+│               └── whatever.json
+│
+├── plots
+│   ├── 000_experiment_name
+│   │   ├── [run_id]
+│   │   │   └── whatever.pdf
+│   │   └── [run_id]
+│   │       └── whatever.pdf
+│   └── 001_experiment_name
+│       └── 000_sub_experiment_name
+│           ├── [run_id]
+│           │   └── whatever.pdf
+│           └── [run_id]
+│               └── whatever.pdf
+│
+├── scripts
+│   ├── 000_experiment_name
+│   │   ├── [run_id]
+│   │   │   └── run_whatever.sh
+│   │   └── [run_id]
+│   │       └── run_whatever.sh
+│   └── 001_experiment_name
+│       └── 000_sub_experiment_name
+│           ├── [run_id]
+│           │   └── run_whatever.sh
+│           └── [run_id]
+│               └── run_whatever.sh
+│
+├── shitpads
+├── references
+├── .env
+├── .env.example
+├── README.md
+├── CLAUDE.md
+├── JOURNAL.md
+└── EXPERIMENTS.md
+
+of course, the run_id and its splitting into subfolder will determine the export and import paths for artifacts in the various scripts.
+
+
+when creating new experiment scripts, claude should ask me whether to use wandb for tracking or not.
+if yes, claude should also ask me which metrics to track and how to call them and which keys to use for them in wandb, so as i have control on the layout of the visualization.
+
+
+next, we will deal with the experiment launch
+
+first and foremost, you have to know that i own multiple servers, called rig-4090, rig-3090ti, rig-3080ti and server-pro-6000-bw.
+claude should be aware of these names and their "imprecise" name versions, like 4090, 3080 ti, pro 6000, or bw/blackwell, etc.
+
+each server can access the others in ssh, so you can assume that the connection works seamelessly via ssh key exchange, no need for passwords.
+
+my workflow is usually as follows.
+i start a project on rig-4090, where i put claude to work on the code, and i run experiments there.
+at some point, when i need to run sweeps, say across dataset, models, hparams, etc. i use the other machine as well.
+
+i want to keep this flow. rig-4090 is the main and the other ones support it in running the stuff.
+
+for this reason, i need the following.
+
+claude will craft scripts under scripts/NNN_experiment_name/ to handle the split across machine
+not yet sure what run_id means in the run script, as those might sweep some values... i guess this is point 2) we have to brainstorm about
+
+
