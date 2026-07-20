@@ -29,6 +29,15 @@ Protocol for creating a new experiment. Conventions canon: `../research-project-
 2. Contents? Present trade-offs: full training state (model+optimizer+scheduler+RNG+step+config snapshot; exact resume) vs weights-only (small; cannot truly resume).
 3. Resume support in this script, yes/no? — decided NOW, before coding; sweep-rerun behavior later inherits this silently.
 4. Which checkpoints to produce / retention?
+5. **Expected final artifact** — which file (final checkpoint and/or final eval output) proves the run truly finished? This is the **golden completion signal** monitors check first (`conventions.md`); record the choice in the experiment's EXPERIMENTS.md section header.
+
+## 4b. Run signaling & timing (mandatory, no user decision needed)
+
+Every training/eval script wraps its work in the **StatusWriter** pattern (`code/common/status.py`; template in `sweep-dispatch` references/templates.md):
+
+- owns `evaluations/NNN_exp/<run_id path>/.status.json` (state running/done/failed, started, ended, elapsed_s, heartbeat, progress);
+- calls `heartbeat(progress=...)` at least once per epoch/major step;
+- prints start time, end time, and elapsed to stdout — `run.sh` tees all stdout+stderr to `logs/NNN_exp/<run_id path>/run-<timestamp>.log`, so scripts need no separate file logging, and the elapsed lands in EXPERIMENTS.md as the run's reference runtime.
 
 ## 5. wandb checklist (MUST ask)
 

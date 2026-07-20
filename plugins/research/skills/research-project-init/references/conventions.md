@@ -12,8 +12,8 @@ assignment, checkpoint choices, wandb layout, journal entries. Never decide thes
 ├── code/            # experiment code (hydra-configured python)
 │   └── common/run_id.py   # shared run_id helper (see below)
 ├── config/          # hydra yaml configs for code/
-├── evaluations/     # data produced by running experiments (+ .status markers)
-├── logs/            # run logs (wandb dirs, stdout dumps); gitignored, dir tracked, rig-local, never synced
+├── evaluations/     # data produced by running experiments (+ .status.json markers)
+├── logs/            # run logs (tee'd stdout+stderr of each run, wandb dirs); gitignored, dir tracked, rig-local, never synced
 ├── plots/           # plots produced by visualizations/ (one subfolder per plotting script)
 ├── scripts/         # shell scripts that LAUNCH things (shell only — never yaml)
 ├── visualizations/  # plotting code (argparse python), sibling of code/
@@ -39,7 +39,7 @@ it inside `logs/` — a stray `<job_name>.log` must never appear in the project 
 
 Experiments are named `NNN_[experiment_name]` (three-digit zero-padded), optionally nested
 (`NNN_exp/NNN_sub_exp/...`). The same `NNN_...` hierarchy is mirrored across
-`checkpoints/ code/ config/ evaluations/ plots/ scripts/ visualizations/`.
+`checkpoints/ code/ config/ evaluations/ logs/ plots/ scripts/ visualizations/`.
 
 ## run_id
 
@@ -68,14 +68,38 @@ The per-experiment **ordered** set of config params that uniquely identifies a r
 Passwordless ssh between all rigs. Cross-machine file movement (references/, checkpoints, code)
 is **rig-sync's job** — never invent ad-hoc sync.
 
-## Status ground truth
+## Status ground truth — three signals, artifacts golden
 
-- Each run writes `evaluations/NNN_exp/<run_id path>/.status` (`running` / `done` / `failed`).
-  One file per run → conflict-free by construction; deleting a run's outputs resets its status.
-- **EXPERIMENTS.md is single-writer: only ever edited on rig-4090.**
+Every run leaves three on-disk signals. When they disagree, **artifacts win** (golden signal),
+then `.status.json`, then the log.
+
+1. **Artifacts (golden)** — the run's expected final artifact (final checkpoint under
+   `checkpoints/NNN_exp/<run_id path>/` and/or final eval output under
+   `evaluations/NNN_exp/<run_id path>/`), declared at experiment design time. Present ⇒ the
+   run really finished; absent ⇒ not done, whatever the status file says.
+2. **`.status.json`** — `evaluations/NNN_exp/<run_id path>/.status.json`, written by the
+   python script itself (via the StatusWriter pattern — see `sweep-dispatch` templates):
+
+   ```json
+   {"state": "running|done|failed", "started": "<ISO>", "ended": "<ISO>|null",
+    "elapsed_s": 1234.5, "heartbeat": "<ISO>", "progress": "epoch 3/10"}
+   ```
+
+   Single writer: the python script owns it; `run.sh` only overwrites it with `failed` if the
+   process died before python could. One file per run → conflict-free by construction;
+   deleting a run's outputs resets its status.
+3. **Run log** — the latest `logs/NNN_exp/<run_id path>/run-<YYYYmmdd-HHMMSS>.log`: the run's
+   **entire stdout+stderr** (tee'd by `run.sh`, terminal-redirection style; timestamped per
+   launch, history kept). Tracebacks/errors near the tail ⇒ failed; a stale heartbeat plus a
+   silent log ⇒ suspect a hang.
+
+- **EXPERIMENTS.md is single-writer: only ever edited on rig-4090** — and within a launch
+  session, only by the orchestrator chat, never by monitoring subagents.
 
 ## Root-file duties
 
-- EXPERIMENTS.md = **state** (tables, reconciled from markers). JOURNAL.md = **story**
-  (prose: what, why, what was learned; append-only, never rewritten).
+- EXPERIMENTS.md = **state** (tables, reconciled from the three signals above; includes each
+  run's `started`/`ended`/`elapsed` — reference runtimes for estimating future temporal
+  budgets). JOURNAL.md = **story** (prose: what, why, what was learned; append-only, never
+  rewritten).
 - New env var read by code → `.env.example` updated in the SAME turn.

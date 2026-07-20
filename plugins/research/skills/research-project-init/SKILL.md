@@ -1,6 +1,6 @@
 ---
 name: research-project-init
-description: Scaffold a new research project with the standard taxonomy (checkpoints/code/config/evaluations/plots/scripts/visualizations/shitpads/references + README/CLAUDE/JOURNAL/EXPERIMENTS md files, .env, hooks). Use when the user asks to start, init, bootstrap, or scaffold a new research project or repo, or to bring an existing project up to the standard structure.
+description: Scaffold a new research project with the standard taxonomy (checkpoints/code/config/evaluations/logs/plots/scripts/visualizations/shitpads/references + README/CLAUDE/JOURNAL/EXPERIMENTS md files, .env, hooks). Use when the user asks to start, init, bootstrap, or scaffold a new research project or repo, or to bring an existing project up to the standard structure.
 ---
 
 # research-project-init

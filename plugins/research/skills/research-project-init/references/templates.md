@@ -16,8 +16,8 @@ Substitute `{{PROJECT_NAME}}` / `{{PROJECT_DESCRIPTION}}` and adjust with the us
 | `checkpoints/` | checkpoints produced by trainings/finetunings |
 | `code/` | experiment code (hydra-configured) |
 | `config/` | hydra yaml configs for `code/` |
-| `evaluations/` | data produced by running experiments |
-| `logs/` | run logs — wandb files etc. (gitignored, rig-local) |
+| `evaluations/` | data produced by running experiments (+ `.status.json` markers) |
+| `logs/` | run logs — tee'd stdout+stderr per run, wandb files (gitignored, rig-local) |
 | `plots/` | plots produced by `visualizations/` |
 | `scripts/` | shell scripts that launch experiments/sweeps |
 | `visualizations/` | plotting code (argparse), reads `evaluations/`, writes `plots/` |
@@ -75,7 +75,9 @@ run, named by the flat run_id, each with a self-contained `run.sh`).
 ```markdown
 # Experiments
 
-<!-- state only; the story lives in JOURNAL.md. One section per NNN_experiment. -->
+<!-- state only; the story lives in JOURNAL.md. One section per NNN_experiment.
+     Run tables: | <run_id params...> | rig | status | started | ended | elapsed | notes |
+     (schema: experiments-tracking skill) -->
 ```
 
 ## JOURNAL.md (initial)
@@ -115,7 +117,7 @@ outputs/          # hydra default run dir, if left enabled
 ```
 
 Adjust with the user: they may want evaluations/ (small jsons) or plots/ committed.
-`.status` markers live inside evaluations/ and follow whatever is decided for it.
+`.status.json` markers live inside evaluations/ and follow whatever is decided for it.
 
 ## .githooks/pre-commit (journal guard)
 
@@ -137,8 +139,8 @@ Install with: `chmod +x .githooks/pre-commit && git config core.hooksPath .githo
 
 ## scripts/ run.sh (log-capture core)
 
-Canonical pattern every launch script follows (full self-contained template with `.status`
-markers: sweep-dispatch skill, `references/templates.md`):
+Canonical pattern every launch script follows (full self-contained template with the
+`.status.json` failed-fallback: sweep-dispatch skill, `references/templates.md`):
 
 ```bash
 #!/usr/bin/env bash
