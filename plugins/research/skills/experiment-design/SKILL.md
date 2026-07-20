@@ -27,7 +27,7 @@ Protocol for creating a new experiment. Conventions canon: `../research-project-
 
 1. Checkpoint filenames? (no repo-wide default — per-case)
 2. Contents? Present trade-offs: full training state (model+optimizer+scheduler+RNG+step+config snapshot; exact resume) vs weights-only (small; cannot truly resume).
-3. Resume support in this script, yes/no? — decided NOW, before coding; sweep-rerun behavior later inherits this silently.
+3. Resume support in this script, yes/no? — decided NOW, before coding; sweep-rerun behavior later inherits this silently — **including unattended crash recovery**: after a machine crash/reboot the sweep machinery auto-relaunches interrupted runs, and resumable ones continue from checkpoint while non-resumable ones restart from scratch, so choose full training state for anything expensive.
 4. Which checkpoints to produce / retention?
 5. **Expected final artifact** — which file (final checkpoint and/or final eval output) proves the run truly finished? This is the **golden completion signal** monitors check first (`conventions.md`); record the choice in the experiment's EXPERIMENTS.md section header.
 

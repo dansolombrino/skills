@@ -91,7 +91,16 @@ then `.status.json`, then the log.
 3. **Run log** — the latest `logs/NNN_exp/<run_id path>/run-<YYYYmmdd-HHMMSS>.log`: the run's
    **entire stdout+stderr** (tee'd by `run.sh`, terminal-redirection style; timestamped per
    launch, history kept). Tracebacks/errors near the tail ⇒ failed; a stale heartbeat plus a
-   silent log ⇒ suspect a hang.
+   silent log ⇒ suspect a hang — after ruling out a machine fault (below).
+
+A `.status.json` frozen at `running` has three readings: **healthy** (heartbeat advancing),
+**process hang** (rig up, tmux session alive, heartbeat frozen — report, don't auto-kill), or
+**machine fault** (rig unreachable/rebooted — boot time via `uptime -s` postdates the
+heartbeat — or the sweep's tmux session is gone). A machine-fault run is **interrupted**, not
+failed-by-code, and is safe to relaunch: `launch_<rig>.sh` is **idempotent** (runs whose final
+artifact is present, or whose `.status.json` says `done`, are skipped), so re-running a slice
+never redoes finished work — interrupted runs re-execute, resuming or restarting per the
+experiment's design-time resume decision. Detection + recovery protocol: `sweep-dispatch`.
 
 - **EXPERIMENTS.md is single-writer: only ever edited on rig-4090** — and within a launch
   session, only by the orchestrator chat, never by monitoring subagents.

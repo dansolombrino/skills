@@ -107,16 +107,37 @@ class StatusWriter:
 
 ## launch_<rig>.sh — per-rig sequential slice
 
+Idempotent by construction: completed runs are skipped, so relaunching a slice (e.g. after a
+rig crash/reboot) never redoes finished work.
+
 ```bash
 #!/usr/bin/env bash
 # rig: <rig>   experiment: <NNN_exp>   sweep slice: <k> runs
 set -uo pipefail
 cd "$(dirname "$0")/../.."   # → project root
 
-bash "scripts/<NNN_exp>/<flat run_id 1>/run.sh"
-bash "scripts/<NNN_exp>/<flat run_id 2>/run.sh"
+run() {  # run <flat run_id> <run_id path> <expected final artifact>
+  if [ -e "$3" ]; then echo "[skip] $1 already done (artifact present)"; return 0; fi
+  if grep -q '"state": "done"' "evaluations/<NNN_exp>/$2/.status.json" 2>/dev/null; then
+    echo "[skip] $1 already done (.status.json)"; return 0
+  fi
+  bash "scripts/<NNN_exp>/$1/run.sh"
+}
+
+run "<flat run_id 1>" "<run_id path 1>" "<expected final artifact path 1>"
+run "<flat run_id 2>" "<run_id path 2>" "<expected final artifact path 2>"
 # ... sequential, one run at a time
 ```
+
+Notes:
+- The done-guard mirrors the signal hierarchy (conventions): the **expected final artifact**
+  (declared at experiment design time) is the primary check, `.status.json` `state == "done"`
+  the fallback. A run interrupted mid-flight matches neither, so it re-executes on relaunch —
+  resuming or restarting per its `run.sh` (design-time resume decision).
+- The status fallback is a shell `grep`, deliberately not python: after a reboot the relaunch
+  may run before any environment activation, and the guard must never silently degrade to
+  "not done". The exact string `"state": "done"` is safe to match — StatusWriter is the file's
+  single writer and always emits `json.dumps` with that formatting.
 
 ## Dispatch (from rig-4090, executed by each rig's subagent)
 
@@ -129,6 +150,27 @@ Before dispatching: make sure the generated scripts have reached the rig (rig-sy
 the user: watch with `ssh <rig>` → `tmux attach -t <NNN_exp>`. The subagent then monitors via
 the three signals (artifacts / `.status.json` / latest run log — see SKILL.md), e.g.
 `ssh <rig> "cat <project>/evaluations/<NNN_exp>/<run_id path>/.status.json; tail -n 30 \$(ls -t <project>/logs/<NNN_exp>/<run_id path>/run-*.log | head -1)"`.
+
+## Machine-fault check & recovery (rig crash/reboot — see SKILL.md state machine)
+
+One round-trip to diagnose a rig that stopped answering or whose heartbeat froze — session
+liveness + boot time + run status in a single ssh:
+
+```bash
+ssh <rig> "tmux has-session -t <NNN_exp> 2>/dev/null && echo SESSION=alive || echo SESSION=gone; echo BOOT=\$(uptime -s); cat <project>/evaluations/<NNN_exp>/<run_id path>/.status.json"
+```
+
+Interpretation: `BOOT` newer than the dispatch time ⇒ the rig rebooted (tmux never survives a
+reboot). `SESSION=gone` with `.status.json` stuck at `running` ⇒ interrupted runs (machine
+fault), not failed-by-code. `SESSION=alive` with the heartbeat advancing ⇒ network blip only —
+do nothing.
+
+Recovery — relaunch guarded against double-launch (the `||` makes it a no-op if a session
+already exists); the idempotent launcher then skips done runs and re-executes interrupted ones:
+
+```bash
+ssh <rig> "tmux has-session -t <NNN_exp> 2>/dev/null || tmux new-session -d -s <NNN_exp> 'cd <project path on rig> && bash scripts/<NNN_exp>/launch_<rig>.sh'"
+```
 
 ## Assignment math
 
