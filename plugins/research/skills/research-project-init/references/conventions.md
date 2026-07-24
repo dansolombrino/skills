@@ -56,6 +56,32 @@ The per-experiment **ordered** set of config params that uniquely identifies a r
   - **flat form** — e.g. `model=mlp,lr=1e-3,seed=0` → used for `scripts/` run-folder names,
     wandb run names, and log lines. Flat name ≡ EXPERIMENTS.md row ≡ wandb run, 1:1.
 
+### run_id schema evolution
+
+A run_id election is only valid for the config schema it was elected against. Any change that
+**adds, removes, or renames a behavior-affecting config param** (integration, refactor, new
+feature) invalidates the current election ⇒ **mandatory re-election check with the user before
+any new run launches**. A param may stay out of `RUN_ID_PARAMS` only if the user explicitly
+rules it non-identifying (e.g. a pure logging knob). Otherwise, new runs varying the new param
+would collide with old artifacts at the same `<run_id path>` — silently overwriting them, or
+worse, being skipped by the idempotent launcher as "already done".
+
+- **If the param joins `RUN_ID_PARAMS`** — a migration decision is required for existing
+  artifacts. Default proposal: **backfill-rename** — insert the new `param=<old implicit
+  value>` segment at its elected position in existing dirs under
+  `checkpoints/ evaluations/ plots/ logs/ scripts/`, and add the column to EXPERIMENTS.md rows
+  (wandb run names cannot be backfilled — note the schema change in JOURNAL.md instead).
+  Alternative (user's call): freeze the old tree and start a new sub-experiment for the new
+  code path.
+- **Runtime guard (canon)** — every run writes its **full resolved config snapshot** to
+  `evaluations/NNN_exp/<run_id path>/.run_config.json` via `guard_run_config` in
+  `code/common/run_id.py`, called before any artifact is written. If a snapshot already exists
+  and differs on any param while the run_id is identical ⇒ **hard error** naming the differing
+  params ("run_id collision — re-elect run_id or migrate"); never proceed. Same-config reruns
+  (resume/retry) pass.
+- Corollary: the launcher's "artifact present ⇒ skip" idempotency is only sound while the
+  snapshot matches — the guard is what keeps the skip logic honest.
+
 ## Rig fleet
 
 | canonical name       | sloppy names to recognize      | speed weight (vs 4090) | role |

@@ -28,6 +28,8 @@ run_id params: model, lr, seed   (mirrors RUN_ID_PARAMS in code/000_grokking/tra
 | transformer | 1e-4 | 1    | rig-3090ti         | inpr   | 07-19 14:05 |             |         |       |
 ```
 
+On a run_id re-election (a param joins `RUN_ID_PARAMS` — `experiment-design` skill, "run_id evolution"): update the section header **and** add the new column to existing rows, backfilled with the old implicit value — same turn as the artifact migration, so rows and on-disk paths never disagree.
+
 Statuses: `todo` → `inpr` → `done` | `failed`. Timing columns come from `.status.json`:
 `started`/`ended` as `MM-DD HH:MM` (year only if ambiguous), `elapsed` compact (`45m`, `1h45m`, `2d3h`) from `elapsed_s`. **Elapsed values are the project's reference runtimes** — use them to estimate wall-clock and split temporal budgets when planning future sweeps.
 

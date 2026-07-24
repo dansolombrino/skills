@@ -17,7 +17,16 @@ Protocol for creating a new experiment. Conventions canon: `../research-project-
 1. List the experiment's config params and propose which subset (and order) uniquely identifies a run, with reasoning.
 2. Iterate until the user approves. **Never proceed on your own choice.**
 3. Record it as `RUN_ID_PARAMS = [...]` in the experiment's `.py` — and make ALL artifact paths go through `code/common/run_id.py` helpers (`run_id_path` for checkpoints/evaluations/plots, `run_id_flat` for scripts/wandb). Agree with the user on the path-form segment formatting.
-4. Mirror the decision in the experiment's EXPERIMENTS.md section header (see the `experiments-tracking` skill).
+4. Wire `guard_run_config(cfg, RUN_ID_PARAMS, <eval run dir>)` into every training/eval script, **before the StatusWriter starts and before any artifact is written** — it snapshots the full config to `.run_config.json` and hard-fails on run_id collisions (same run_id, different config).
+5. Mirror the decision in the experiment's EXPERIMENTS.md section header (see the `experiments-tracking` skill).
+
+## 2b. run_id evolution — config changes to an EXISTING experiment
+
+Any change that adds/removes/renames a behavior-affecting config param (integration, new feature, refactor) **invalidates the election** — new runs would collide with old artifacts at the same `<run_id path>` (overwritten, or silently skipped as "done" by the idempotent launcher). Full rules: `conventions.md`, "run_id schema evolution". Protocol:
+
+1. **STOP before any new run launches** and re-run the election check with the user: does the new param join `RUN_ID_PARAMS`? It may stay out only if the user explicitly rules it non-identifying.
+2. If it joins: propose the **backfill-rename** migration (insert `param=<old implicit value>` into existing artifact dirs at its elected position) — the user may instead choose to freeze the old tree and start a new sub-experiment. Execute only on approval.
+3. Same turn: update the `RUN_ID_PARAMS` constant, the EXPERIMENTS.md section header + rows (`experiments-tracking` skill), and suggest a JOURNAL.md entry for the schema change.
 
 ## 3. Config
 

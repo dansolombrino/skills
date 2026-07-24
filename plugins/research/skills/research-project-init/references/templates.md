@@ -164,8 +164,15 @@ params that uniquely identify a run (elected WITH the user):
     RUN_ID_PARAMS = ["model", "lr", "seed"]
 
 and uses these helpers for ALL artifact paths and run names. Never hand-build them.
+
+Scripts must call guard_run_config() before writing ANY artifact (and before the
+StatusWriter starts): it hard-fails on run_id collisions — same run_id, different
+full config — which happen when a param was added to the config but not to
+RUN_ID_PARAMS (schema evolution rules: conventions.md). One guard at the
+evaluations/ run dir suffices: checkpoints/ and plots/ share the same run_id.
 """
 
+import json
 from pathlib import Path
 
 
@@ -189,4 +196,39 @@ def run_id_flat(cfg, params) -> str:
     Used for scripts/ run-folder names, wandb run names, EXPERIMENTS.md rows.
     """
     return ",".join(f"{p}={cfg[p]}" for p in params)
+
+
+def guard_run_config(cfg, params, run_dir: Path) -> None:
+    """Refuse to reuse a run dir whose config differs from the current one.
+
+    Writes the full resolved config to <run_dir>/.run_config.json on first run.
+    On later runs with the same run_id, hard-fails if ANY param differs — that is
+    a run_id collision: a param changed that is not in RUN_ID_PARAMS. Same-config
+    reruns (resume/retry) pass. Call BEFORE writing any artifact.
+    """
+    from omegaconf import OmegaConf  # hydra projects; plain-dict cfgs skip this
+
+    # json round-trip so comparison sees exactly what a stored snapshot stores
+    resolved = json.loads(json.dumps(OmegaConf.to_container(cfg, resolve=True),
+                                     sort_keys=True, default=str))
+    snapshot_file = run_dir / ".run_config.json"
+    if snapshot_file.exists():
+        snapshot = json.loads(snapshot_file.read_text())
+        diffs = {
+            k: (snapshot.get(k), resolved.get(k))
+            for k in sorted(set(snapshot) | set(resolved))
+            if snapshot.get(k) != resolved.get(k)
+        }
+        if diffs:
+            lines = "\n".join(f"  {k}: old={old!r} new={new!r}" for k, (old, new) in diffs.items())
+            raise RuntimeError(
+                f"run_id collision at {run_dir}: same run_id "
+                f"({run_id_flat(cfg, params)}) but the config differs:\n{lines}\n"
+                "Add the offending param(s) to RUN_ID_PARAMS (re-elect with the "
+                "user) or migrate existing artifacts. See conventions.md, "
+                "'run_id schema evolution'."
+            )
+    else:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        snapshot_file.write_text(json.dumps(resolved, indent=2, sort_keys=True, default=str))
 ```

@@ -7,10 +7,11 @@ description: Generate and launch experiment runs/sweeps across the GPU rigs (rig
 
 Launch machinery for runs and sweeps. Canon: `../research-project-init/references/conventions.md`. Templates: [references/templates.md](references/templates.md). Dispatch always happens **from rig-4090** (the hub); code reaches the rigs via rig-sync, launching via passwordless ssh.
 
-## Before anything launches — two mandatory gates
+## Before anything launches — three mandatory gates
 
-1. **Ask which rigs are currently free** — never assume availability.
-2. **Propose the assignment, get approval.** Weight by speed (`server-pro-6000-bw` 2.0, `rig-4090` 1.0, `rig-3090ti`/`rig-3080ti` 0.5 each) so each rig finishes its slice in roughly equal wall-clock. The user approves or amends before launch.
+1. **run_id coverage check** — every param varied in the sweep grid, AND every behavior-affecting config param added/changed since this experiment's last runs, must be in `RUN_ID_PARAMS`. If not, **halt** and route through the `experiment-design` skill's run_id evolution protocol (re-election + migration) before generating anything — otherwise new runs collide with old artifacts: overwritten, or silently skipped as "done". The idempotent skip below is only sound under this gate (a skipped run is only valid if its `.run_config.json` matches — the `guard_run_config` runtime check backstops this).
+2. **Ask which rigs are currently free** — never assume availability.
+3. **Propose the assignment, get approval.** Weight by speed (`server-pro-6000-bw` 2.0, `rig-4090` 1.0, `rig-3090ti`/`rig-3080ti` 0.5 each) so each rig finishes its slice in roughly equal wall-clock. The user approves or amends before launch.
 
 ## Generate
 
