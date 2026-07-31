@@ -25,8 +25,8 @@ run_id params: model, lr, seed   (mirrors RUN_ID_PARAMS in code/000_grokking/tra
 | model | lr   | seed | wave            | rig                | gpu     | status | started     | progress   | eta         | ended       | elapsed | notes |
 |-------|------|------|-----------------|--------------------|---------|--------|-------------|------------|-------------|-------------|---------|-------|
 | mlp   | 1e-3 | 0    | 20260731-162043 | rig-4090           | 0       | failed | 07-31 16:20 | epoch 3/10 |             | 07-31 16:58 | 38m     | OOM   |
-| mlp   | 1e-3 | 0    | 20260805-081200 | server-pro-6000-bw | 2       | inpr   | 08-05 08:12 | epoch 7/10 | 08-05 09:40 |             |         |       |
-| tr-xl | 1e-4 | 0    | 20260803-141000 | server-pro-6000-bw | 0,1,2,3 | done   | 08-03 14:10 | 10/10      |             | 08-03 18:02 | 3h52m   |       |
+| mlp   | 1e-3 | 0    | 20260805-081200 | behemoth           | 2       | inpr   | 08-05 08:12 | epoch 7/10 | 08-05 09:40 |             |         |       |
+| tr-xl | 1e-4 | 0    | 20260803-141000 | behemoth           | 0,1,2,3 | done   | 08-03 14:10 | 10/10      |             | 08-03 18:02 | 3h52m   |       |
 ```
 
 - `wave` — the dispatch this execution belonged to (`YYYYMMDD-HHMMSS`, canon). `gpu` — the GPU set it occupied, opaque identity. Both are read from `.status.json`; before the run starts they come from the generated script's path.

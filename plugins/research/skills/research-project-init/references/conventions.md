@@ -142,19 +142,25 @@ so there is no separate manifest to drift. Only `scripts/` and `logs/` are wave-
 keep a stable per-run path or both the launcher's done-guard and `guard_run_config` break.
 
 tmux session name: `<project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>` — e.g.
-`grokmod_000_grokking_20260731-162043_server-pro-6000-bw_gpu0`. The project prefix matters
+`grokmod_000_grokking_20260731-162043_behemoth_gpu0`. The project prefix matters
 because tmux sessions are global per rig across projects; the wave id lets successive waves
 coexist; the GPU field keeps parallel lanes apart. Generation, dispatch and recovery protocol:
 `sweep-dispatch`.
 
 ## Rig fleet
 
-| canonical name       | sloppy names to recognize      | GPUs     | per-GPU speed weight | role |
-|----------------------|--------------------------------|----------|----------------------|------|
-| `rig-4090`           | 4090                           | 1        | 1.0                  | main/hub: projects start here, dispatch + EXPERIMENTS.md writes happen here |
-| `rig-3090ti`         | 3090, 3090 ti                  | 1        | 0.5                  | support |
-| `rig-3080ti`         | 3080, 3080 ti                  | 1        | 0.5                  | support |
-| `server-pro-6000-bw` | pro 6000, 6000, bw, blackwell  | multiple | 2.0                  | support |
+**The canonical name is the ssh alias** — dispatch runs `ssh <rig>`, and the name also lands in
+script filenames and tmux session names, so it must be the string that actually resolves.
+
+| canonical name | sloppy names to recognize                                           | GPUs     | per-GPU speed weight | role |
+|----------------|---------------------------------------------------------------------|----------|----------------------|------|
+| `rig-4090`     | 4090                                                                | 1        | 1.0                  | main/hub: projects start here, dispatch + EXPERIMENTS.md writes happen here |
+| `rig-3090-ti`  | 3090, 3090 ti, `rig-3090ti`                                         | 1        | 0.5                  | support |
+| `rig-3080-ti`  | 3080, 3080 ti, `rig-3080ti`                                         | 1        | 0.5                  | support |
+| `behemoth`     | pro 6000, 6000, bw, blackwell, `rig-6000-pro-blackwell`, `server-pro-6000-bw` | multiple | 2.0      | support |
+
+**Not every GPU on a shared machine is ours.** `behemoth` has 8 cards but only some belong to
+this fleet — never assume an idle GPU is available. Ask which cards are usable, every time.
 
 The weight is **per GPU**, so a rig's capacity in the assignment math is
 `weight × (number of free GPUs)`. Never hardcode the server's card count — it can change, and

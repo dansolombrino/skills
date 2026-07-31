@@ -95,7 +95,7 @@ moving work to a freer rig, ...>
 
 This run: `model=mlp,lr=1e-3,seed=0` → rig-4090, gpu 0.
 
-Full wave: 5 runs — 3 on rig-4090 (gpu 0), 2 on server-pro-6000-bw (gpu 0, gpu 1).
+Full wave: 5 runs — 3 on rig-4090 (gpu 0), 2 on behemoth (gpu 0, gpu 1).
 ```
 
 ## StatusWriter — the python side of the signaling system
@@ -216,10 +216,12 @@ are unchanged.
 
 ## Assignment math
 
-`per-GPU weights = {server-pro-6000-bw: 2.0, rig-4090: 1.0, rig-3090ti: 0.5, rig-3080ti: 0.5}`.
+`per-GPU weights = {behemoth: 2.0, rig-4090: 1.0, rig-3090-ti: 0.5, rig-3080-ti: 0.5}`.
+Canonical names are the ssh aliases — they are what `ssh <rig>` must resolve.
 
-1. Ask the user **which rigs and which GPUs on them are free** — never assume, and never
-   hardcode the multi-GPU server's card count.
+1. Ask the user **which rigs and which GPUs on them are usable** — never assume, never hardcode
+   the multi-GPU server's card count, and never treat an idle GPU on the shared `behemoth` as
+   available; only some of its cards are ours. Check load with `nvidia-smi` as well as ownership.
 2. Capacity of a lane = the rig's per-GPU weight × the number of GPUs in that lane's set.
 3. Split the run list across lanes proportionally to capacity (≈ equal wall-clock per lane).
 4. Within one (wave, rig) the GPU sets must be **disjoint** — a run occupying every card makes

@@ -1,6 +1,6 @@
 ---
 name: sweep-dispatch
-description: Generate and launch experiment runs/sweeps across the GPU rigs (rig-4090, rig-3090ti, rig-3080ti, server-pro-6000-bw — also "4090", "3080 ti", "pro 6000", "bw", "blackwell"). Use when the user asks to run, launch, sweep, or dispatch experiments, monitor or babysit running experiments, split runs across machines or GPUs, rerun failed runs, or recover/resume a wave after a rig crash or reboot.
+description: Generate and launch experiment runs/sweeps across the GPU rigs (rig-4090, rig-3090-ti, rig-3080-ti, behemoth — also "4090", "3080 ti", "pro 6000", "bw", "blackwell", "server-pro-6000-bw"). Use when the user asks to run, launch, sweep, or dispatch experiments, monitor or babysit running experiments, split runs across machines or GPUs, rerun failed runs, or recover/resume a wave after a rig crash or reboot.
 ---
 
 # sweep-dispatch
@@ -12,8 +12,8 @@ Vocabulary (canon): a **wave** is one dispatch decision, identified by `YYYYMMDD
 ## Before anything launches — mandatory gates
 
 1. **run_id coverage check** — every param varied in the sweep grid, AND every behavior-affecting config param added/changed since this experiment's last runs, must be in `RUN_ID_PARAMS`. If not, **halt** and route through the `experiment-design` skill's run_id evolution protocol (re-election + migration) before generating anything — otherwise new runs collide with old artifacts: overwritten, or silently skipped as "done". The self-guard below is only sound under this gate (a skipped run is only valid if its `.run_config.json` matches — the `guard_run_config` runtime check backstops this).
-2. **Ask which rigs AND which GPUs on them are free** — never assume availability, never hardcode the multi-GPU server's card count.
-3. **Propose the assignment, get approval.** Capacity of a lane = the rig's **per-GPU** weight (`server-pro-6000-bw` 2.0, `rig-4090` 1.0, `rig-3090ti`/`rig-3080ti` 0.5) × the GPUs in that lane, so every lane finishes in roughly equal wall-clock. Within one (wave, rig) the GPU sets must be **disjoint**. Present run → rig, gpu; the user approves or amends.
+2. **Ask which rigs AND which GPUs on them are usable** — never assume availability, never hardcode the multi-GPU server's card count, and **never assume an idle GPU is ours**: `behemoth` is shared, and only some of its 8 cards belong to this fleet. Confirm current load with `nvidia-smi` too — a card at high utilization will steal SM time from whatever is already running and skew its `elapsed`, which the project relies on as a reference runtime.
+3. **Propose the assignment, get approval.** Capacity of a lane = the rig's **per-GPU** weight (`behemoth` 2.0, `rig-4090` 1.0, `rig-3090-ti`/`rig-3080-ti` 0.5) × the GPUs in that lane, so every lane finishes in roughly equal wall-clock. Within one (wave, rig) the GPU sets must be **disjoint**. Present run → rig, gpu; the user approves or amends.
 4. **Mint the wave id** the moment the assignment is approved: `date '+%Y%m%d-%H%M%S'` on rig-4090. One id for the whole dispatch, shared by every rig and lane — it goes into the paths, so it must exist before generation. Never a semantic slug; the wave README carries the meaning.
 
 ## Generate
