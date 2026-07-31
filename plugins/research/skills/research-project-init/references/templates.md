@@ -30,7 +30,8 @@ per experiment in its `.py` as `RUN_ID_PARAMS`).
 
 ## Tracking
 
-- **`EXPERIMENTS.md`** — state: which runs exist (todo/inpr/done/failed), where they ran.
+- **`EXPERIMENTS.md`** — state: which runs exist (todo/inpr/done/failed), in which wave, on
+  which rig and GPU.
 - **`JOURNAL.md`** — story: prose log of what was done, why, and what was learned.
 
 ## Setup
@@ -41,8 +42,9 @@ per experiment in its `.py` as `RUN_ID_PARAMS`).
 
 ## Running
 
-Single runs and sweeps are launched via `scripts/NNN_experiment_name/` (one folder per
-run, named by the flat run_id, each with a self-contained `run.sh`).
+Runs are launched in **waves** (one dispatch decision, id `YYYYMMDD-HHMMSS`) via
+`scripts/NNN_experiment_name/<flat run_id>/wave_<wave_id>/` — a `README.md` saying what the
+wave is, plus one self-contained `wave_<rig>_gpu<ids>.sh` per run. `logs/` mirrors that tree.
 ```
 
 ## CLAUDE.md
@@ -76,7 +78,8 @@ run, named by the flat run_id, each with a self-contained `run.sh`).
 # Experiments
 
 <!-- state only; the story lives in JOURNAL.md. One section per NNN_experiment.
-     Run tables: | <run_id params...> | rig | status | started | ended | elapsed | notes |
+     Run tables, one row per (run, wave):
+     | <run_id params...> | wave | rig | gpu | status | started | progress | eta | ended | elapsed | notes |
      (schema: experiments-tracking skill) -->
 ```
 
@@ -137,18 +140,21 @@ fi
 
 Install with: `chmod +x .githooks/pre-commit && git config core.hooksPath .githooks`
 
-## scripts/ run.sh (log-capture core)
+## scripts/ wave script (log-capture core)
 
-Canonical pattern every launch script follows (full self-contained template with the
-`.status.json` failed-fallback: sweep-dispatch skill, `references/templates.md`):
+Canonical pattern every launch script follows — the log path is the **mirror of the script's
+own path under `logs/`**. Full self-contained template with the self-guard, the
+`CUDA_VISIBLE_DEVICES`/`WAVE_ID` exports and the `.status.json` failed-fallback:
+sweep-dispatch skill, `references/templates.md`.
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")/../../.."            # to project root (depth varies with nesting)
-LOGDIR="logs/NNN_experiment/<run_id path>"
+cd "$(dirname "$0")/../../../.."         # to project root (depth varies with nesting)
+LOGDIR="logs/NNN_experiment/<run_id_flat>/wave_<wave_id>"
 mkdir -p "$LOGDIR"
-python code/NNN_experiment/script.py <overrides> 2>&1 | tee "$LOGDIR/run-$(date +%Y%m%d-%H%M%S).log"
+python code/NNN_experiment/script.py <overrides> 2>&1 \
+  | tee "$LOGDIR/wave_<rig>_gpu<ids>-$(date +%Y%m%d-%H%M%S).log"
 ```
 
 `pipefail` keeps python's exit code authoritative despite the `tee` pipe.
@@ -193,7 +199,7 @@ def run_id_path(cfg, params) -> Path:
 def run_id_flat(cfg, params) -> str:
     """Flat form, e.g. 'model=mlp,lr=0.001,seed=0'.
 
-    Used for scripts/ run-folder names, wandb run names, EXPERIMENTS.md rows.
+    Used for scripts/ and logs/ run-folder names, wandb run names, EXPERIMENTS.md rows.
     """
     return ",".join(f"{p}={cfg[p]}" for p in params)
 

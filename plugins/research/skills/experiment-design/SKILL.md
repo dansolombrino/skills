@@ -16,13 +16,13 @@ Protocol for creating a new experiment. Conventions canon: `../research-project-
 
 1. List the experiment's config params and propose which subset (and order) uniquely identifies a run, with reasoning.
 2. Iterate until the user approves. **Never proceed on your own choice.**
-3. Record it as `RUN_ID_PARAMS = [...]` in the experiment's `.py` — and make ALL artifact paths go through `code/common/run_id.py` helpers (`run_id_path` for checkpoints/evaluations/plots, `run_id_flat` for scripts/wandb). Agree with the user on the path-form segment formatting.
+3. Record it as `RUN_ID_PARAMS = [...]` in the experiment's `.py` — and make ALL artifact paths go through `code/common/run_id.py` helpers (`run_id_path` for checkpoints/evaluations/plots, `run_id_flat` for scripts/logs/wandb). Agree with the user on the path-form segment formatting.
 4. Wire `guard_run_config(cfg, RUN_ID_PARAMS, <eval run dir>)` into every training/eval script, **before the StatusWriter starts and before any artifact is written** — it snapshots the full config to `.run_config.json` and hard-fails on run_id collisions (same run_id, different config).
 5. Mirror the decision in the experiment's EXPERIMENTS.md section header (see the `experiments-tracking` skill).
 
 ## 2b. run_id evolution — config changes to an EXISTING experiment
 
-Any change that adds/removes/renames a behavior-affecting config param (integration, new feature, refactor) **invalidates the election** — new runs would collide with old artifacts at the same `<run_id path>` (overwritten, or silently skipped as "done" by the idempotent launcher). Full rules: `conventions.md`, "run_id schema evolution". Protocol:
+Any change that adds/removes/renames a behavior-affecting config param (integration, new feature, refactor) **invalidates the election** — new runs would collide with old artifacts at the same `<run_id path>` (overwritten, or silently skipped as "done" by a self-guarded wave script). Full rules: `conventions.md`, "run_id schema evolution". Protocol:
 
 1. **STOP before any new run launches** and re-run the election check with the user: does the new param join `RUN_ID_PARAMS`? It may stay out only if the user explicitly rules it non-identifying.
 2. If it joins: propose the **backfill-rename** migration (insert `param=<old implicit value>` into existing artifact dirs at its elected position) — the user may instead choose to freeze the old tree and start a new sub-experiment. Execute only on approval.
@@ -44,9 +44,9 @@ Any change that adds/removes/renames a behavior-affecting config param (integrat
 
 Every training/eval script wraps its work in the **StatusWriter** pattern (`code/common/status.py`; template in `sweep-dispatch` references/templates.md):
 
-- owns `evaluations/NNN_exp/<run_id path>/.status.json` (state running/done/failed, started, ended, elapsed_s, heartbeat, progress);
-- calls `heartbeat(progress=...)` at least once per epoch/major step;
-- prints start time, end time, and elapsed to stdout — `run.sh` tees all stdout+stderr to `logs/NNN_exp/<run_id path>/run-<timestamp>.log`, so scripts need no separate file logging, and the elapsed lands in EXPERIMENTS.md as the run's reference runtime.
+- owns `evaluations/NNN_exp/<run_id path>/.status.json` (state running/done/failed, started, ended, elapsed_s, heartbeat, progress) plus `wave_id` and `gpu`, read from the `WAVE_ID` / `CUDA_VISIBLE_DEVICES` env vars the wave script exports — env vars, never config params, so they stay out of the `guard_run_config` snapshot;
+- calls `heartbeat(progress=...)` at least once per epoch/major step — keep `progress` a simple `<done>/<total>` shape, EXPERIMENTS.md extrapolates its `eta` column from it;
+- prints start time, end time, and elapsed to stdout — the wave script tees all stdout+stderr to the mirror of its own path under `logs/` (`logs/NNN_exp/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-<timestamp>.log`), so scripts need no separate file logging, and the elapsed lands in EXPERIMENTS.md as the run's reference runtime.
 
 ## 5. wandb checklist (MUST ask)
 

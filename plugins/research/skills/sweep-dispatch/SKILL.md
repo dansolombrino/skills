@@ -1,61 +1,66 @@
 ---
 name: sweep-dispatch
-description: Generate and launch experiment runs/sweeps across the GPU rigs (rig-4090, rig-3090ti, rig-3080ti, server-pro-6000-bw — also "4090", "3080 ti", "pro 6000", "bw", "blackwell"). Use when the user asks to run, launch, sweep, or dispatch experiments, monitor or babysit running experiments, split runs across machines, rerun failed runs, or recover/resume a sweep after a rig crash or reboot.
+description: Generate and launch experiment runs/sweeps across the GPU rigs (rig-4090, rig-3090ti, rig-3080ti, server-pro-6000-bw — also "4090", "3080 ti", "pro 6000", "bw", "blackwell"). Use when the user asks to run, launch, sweep, or dispatch experiments, monitor or babysit running experiments, split runs across machines or GPUs, rerun failed runs, or recover/resume a wave after a rig crash or reboot.
 ---
 
 # sweep-dispatch
 
 Launch machinery for runs and sweeps. Canon: `../research-project-init/references/conventions.md`. Templates: [references/templates.md](references/templates.md). Dispatch always happens **from rig-4090** (the hub); code reaches the rigs via rig-sync, launching via passwordless ssh.
 
-## Before anything launches — three mandatory gates
+Vocabulary (canon): a **wave** is one dispatch decision, identified by `YYYYMMDD-HHMMSS`; a **slice** is the portion of a wave on one rig; a **lane** is the portion of a slice on one GPU set. Lanes run in parallel, runs within a lane run sequentially.
 
-1. **run_id coverage check** — every param varied in the sweep grid, AND every behavior-affecting config param added/changed since this experiment's last runs, must be in `RUN_ID_PARAMS`. If not, **halt** and route through the `experiment-design` skill's run_id evolution protocol (re-election + migration) before generating anything — otherwise new runs collide with old artifacts: overwritten, or silently skipped as "done". The idempotent skip below is only sound under this gate (a skipped run is only valid if its `.run_config.json` matches — the `guard_run_config` runtime check backstops this).
-2. **Ask which rigs are currently free** — never assume availability.
-3. **Propose the assignment, get approval.** Weight by speed (`server-pro-6000-bw` 2.0, `rig-4090` 1.0, `rig-3090ti`/`rig-3080ti` 0.5 each) so each rig finishes its slice in roughly equal wall-clock. The user approves or amends before launch.
+## Before anything launches — mandatory gates
+
+1. **run_id coverage check** — every param varied in the sweep grid, AND every behavior-affecting config param added/changed since this experiment's last runs, must be in `RUN_ID_PARAMS`. If not, **halt** and route through the `experiment-design` skill's run_id evolution protocol (re-election + migration) before generating anything — otherwise new runs collide with old artifacts: overwritten, or silently skipped as "done". The self-guard below is only sound under this gate (a skipped run is only valid if its `.run_config.json` matches — the `guard_run_config` runtime check backstops this).
+2. **Ask which rigs AND which GPUs on them are free** — never assume availability, never hardcode the multi-GPU server's card count.
+3. **Propose the assignment, get approval.** Capacity of a lane = the rig's **per-GPU** weight (`server-pro-6000-bw` 2.0, `rig-4090` 1.0, `rig-3090ti`/`rig-3080ti` 0.5) × the GPUs in that lane, so every lane finishes in roughly equal wall-clock. Within one (wave, rig) the GPU sets must be **disjoint**. Present run → rig, gpu; the user approves or amends.
+4. **Mint the wave id** the moment the assignment is approved: `date '+%Y%m%d-%H%M%S'` on rig-4090. One id for the whole dispatch, shared by every rig and lane — it goes into the paths, so it must exist before generation. Never a semantic slug; the wave README carries the meaning.
 
 ## Generate
 
-For each run in the sweep grid, materialize under `scripts/NNN_exp/`:
+One script kind. For each run in the wave, materialize:
 
 ```
-scripts/NNN_exp/<flat run_id>/run.sh     # one folder per run, named by run_id_flat
-scripts/NNN_exp/launch_<rig>.sh          # per-rig launcher: its slice, sequential + idempotent
+scripts/NNN_exp/<run_id_flat>/wave_<wave_id>/
+    README.md                     # what this wave is + this run's placement; written once, never updated
+    wave_<rig>_gpu<ids>.sh        # this run's invocation in this wave
 ```
 
-- `run.sh` is **self-contained**: the full python command with explicit hydra overrides, with a `failed` fallback for `.status.json` (template). The `.status.json` itself is written by the python script (StatusWriter pattern, `experiment-design` skill). Rerunning a failed run = rerunning its `run.sh` — whether that resumes or restarts was fixed at experiment design time (resume decision), never re-asked here.
-- `run.sh` **captures its own log**: the python invocation is piped through `tee` into `logs/NNN_exp/<run_id path>/run-<timestamp>.log` (conventions; pattern in the template). Timestamped per launch, history kept, never overwritten.
-- Folder names come from `run_id_flat` — identical strings to EXPERIMENTS.md rows and wandb run names.
-- `scripts/` contains shell only. **Never put yaml under scripts/** — the grid lives in the launcher generation conversation and in EXPERIMENTS.md rows.
+- The wave script is **self-contained** (full python command with explicit hydra overrides) and **self-guarded**: it exits early if its expected final artifact is present or its `.status.json` says `done`. That guard is what makes lane dispatch idempotent — there is no launcher file holding it. Whether a re-execution resumes or restarts was fixed at experiment design time, never re-asked here.
+- It **exports `CUDA_VISIBLE_DEVICES` and `WAVE_ID`**, and **captures its own log** into the mirror of its own path under `logs/`: `logs/NNN_exp/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-<timestamp>.log`. Timestamped per launch, history kept, never overwritten.
+- Folder names come from `run_id_flat` (via `code/common/run_id.py`) — identical strings to EXPERIMENTS.md rows and wandb run names. `ls scripts/NNN_exp/<run_id_flat>/` is that run's execution history.
+- **The filesystem encodes the assignment**: a run is on that rig and those GPUs precisely because `wave_<rig>_gpu<ids>.sh` exists in its wave folder. No separate manifest to drift.
+- Only `scripts/` and `logs/` are wave-scoped. `checkpoints/`, `evaluations/`, `plots/` stay run-scoped in path form — artifacts must keep a stable per-run path or the self-guard and `guard_run_config` both break.
+- `scripts/` contains shell only. **Never put yaml under scripts/** — the grid lives in the generation conversation, the wave README, and EXPERIMENTS.md rows.
 
 ## Launch & monitor — orchestrator + one subagent per rig
 
-The chat where the launch is requested is the **orchestrator**. It never launches or polls rigs itself — after the assignment is approved, it spawns **one subagent per assigned rig** (single message, parallel Agent calls, run in background), then collects their reports.
+The chat where the launch is requested is the **orchestrator**. It never launches or polls rigs itself — after the assignment is approved it spawns **one subagent per assigned rig** (single message, parallel Agent calls, run in background), then collects their reports. One subagent per *rig*, not per lane: it has a single ssh target and simply drives several sessions.
 
 Each rig subagent:
 
-1. **Dispatches** its rig's slice: one **named tmux session** (`NNN_exp`) running `launch_<rig>.sh`, which executes the slice **sequentially** (one run at a time):
-   `ssh <rig> "tmux new-session -d -s <NNN_exp> 'cd <project> && bash scripts/NNN_exp/launch_<rig>.sh'"`
-2. **Monitors** its queue to completion, judging each run by the three signals (hierarchy in `conventions.md` — artifacts are golden):
+1. **Dispatches each of its lanes** as its own named tmux session — `<project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>` — running a glob loop over that lane's wave scripts (exact one-liner in [references/templates.md](references/templates.md)). Sequencing is a dumb shell loop on purpose: it must survive subagent death, context compaction and multi-day queues.
+2. **Monitors** its queues to completion, judging each run by the three signals (hierarchy in `conventions.md` — artifacts are golden):
    - **expected final artifact** on disk (final checkpoint / final eval output) ⇒ truly done;
-   - **`.status.json`** (`state`, `heartbeat`, `progress`, timing);
-   - tail of the latest **`logs/NNN_exp/<run_id path>/run-<timestamp>.log`** — tracebacks/errors ⇒ failed; stale heartbeat + silent log ⇒ first rule out a machine fault (below), then suspect a hang and say so.
+   - **`.status.json`** (`state`, `heartbeat`, `progress`, timing, `wave_id`, `gpu`);
+   - tail of the latest **`logs/NNN_exp/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-<timestamp>.log`** — tracebacks/errors ⇒ failed; stale heartbeat + silent log ⇒ first rule out a machine fault (below), then suspect a hang and say so.
    Poll at intervals matched to expected run length (reference `elapsed` values in EXPERIMENTS.md help here) — don't hammer ssh.
-3. **Reports back** per run: outcome (`done`/`failed`/hung/`interrupted→relaunched`) plus `started`/`ended`/`elapsed` read from `.status.json`.
+3. **Reports back** per run: outcome (`done`/`failed`/hung/`interrupted→relaunched`), which lane it ran in, plus `started`/`progress`/`ended`/`elapsed` read from `.status.json`.
 
 **Single-writer rule: only the orchestrator edits EXPERIMENTS.md**, from the subagents' reports. Subagents never touch it.
 
-Tell the user how to watch manually too: `ssh <rig>` then `tmux attach -t <NNN_exp>`.
+Tell the user how to watch manually too: `ssh <rig>` then `tmux attach -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>`.
 
 ## Machine faults — reboot/crash detection & auto-resume
 
-Each rig subagent is also its rig's watchdog. A machine-level failure (crash, reboot, power loss) kills the tmux session and freezes every running run's `.status.json` at `running` — that is an **interrupted** run (machine fault), never a `failed` one (code error). Handle it with this state machine:
+Each rig subagent is also its rig's watchdog. A machine-level failure (crash, reboot, power loss) kills every tmux session on it and freezes each running run's `.status.json` at `running` — those are **interrupted** runs (machine fault), never `failed` ones (code error). Handle it with this state machine:
 
 - **Unreachable** — ssh fails/times out. One failed poll may be a network blip: declare the rig *down* only after 2–3 consecutive failures. Then keep probing reachability every 1–2 minutes (cheap `ssh <rig> true`) and report once to the orchestrator: "rig down since <time>". Never mark its runs failed while it's down.
-- **Back up — diagnose before acting** (one ssh round-trip; exact command in [references/templates.md](references/templates.md)): boot time (`uptime -s`) newer than the dispatch time ⇒ the rig rebooted (tmux never survives a reboot); `tmux has-session -t <NNN_exp>` fails ⇒ the session is gone even without a reboot; session alive and heartbeat advancing ⇒ it was only a network blip — resume normal polling, touch nothing.
-- **Recover** — reboot confirmed or session dead: re-run the same dispatch one-liner. This is safe because `launch_<rig>.sh` is **idempotent** (skips every run whose final artifact is present or whose `.status.json` says `done`): completed runs are never redone, interrupted ones re-execute — and whether a re-execution resumes from checkpoint or restarts from scratch was fixed at experiment design time (resume decision), never re-asked here.
-- **Never double-launch** — immediately before relaunching, check `tmux has-session -t <NNN_exp>` again; if a session exists, just monitor it.
-- **Old slices** — a `launch_<rig>.sh` generated before the idempotent template (no done-guard) would redo finished runs on relaunch: check it first, and regenerate it (or a resume launcher with only the incomplete runs) before recovering.
-- **Autonomous, not silent** — relaunching already-approved work is not a new dispatch decision: don't ask permission, recover and report — which runs were already done (skipped), which were interrupted and relaunched, and whether each resumes or restarts.
+- **Back up — diagnose before acting** (one ssh round-trip; exact command in [references/templates.md](references/templates.md)): boot time (`uptime -s`) newer than the dispatch time ⇒ the rig rebooted (tmux never survives a reboot); a lane's session missing from `tmux ls` ⇒ that lane is gone even without a reboot; session alive and heartbeat advancing ⇒ it was only a network blip — resume normal polling, touch nothing.
+- **Recover, lane by lane** — for each dead lane, re-issue that lane's dispatch one-liner **with the same wave id** (a relaunch is not a new dispatch: same paths, same session names). This is safe because every wave script is **self-guarded**: completed runs are skipped, interrupted ones re-execute — resuming or restarting per the design-time resume decision.
+- **Never double-launch** — immediately before relaunching a lane, check `tmux has-session -t <lane session>` again; if it exists, just monitor it.
+- **Legacy layouts** — a project still on the old `run.sh` + `launch_<rig>.sh` scheme has no per-run self-guard (and pre-idempotent launchers would redo finished runs on relaunch). Check before recovering, and offer to migrate the experiment to the wave layout — but **never migrate while runs are in flight**: renaming script and log trees under a live run breaks the paths it is writing into. If anything is `inpr`/`running`, say so and defer; recover the legacy slice as-is for now (`experiments-tracking`, migration rules).
+- **Autonomous, not silent** — relaunching already-approved work is not a new dispatch decision: don't ask permission, recover and report — which runs were already done (skipped), which were interrupted and relaunched, in which lanes, and whether each resumes or restarts.
 
 ## Status updates to the user
 
@@ -63,5 +68,6 @@ Every status update **opens with the current date and time** — run `date '+%Y-
 
 ## Tracking side-effects (same turn)
 
-- Append `todo` rows to EXPERIMENTS.md for every generated run; flip launched ones to `inpr` and fill `started`; on completion reports, flip to `done`/`failed` and fill `ended`/`elapsed` (format + single-writer rules: `experiments-tracking` skill).
-- Suggest a JOURNAL.md entry for the launch (`research-journal` skill).
+- Append `todo` rows to EXPERIMENTS.md for every generated run — **one row per (run, wave)**, carrying its wave id, rig and gpu. A run re-launched in a later wave gets a **new row**, never an in-place update.
+- Flip launched rows to `inpr` and fill `started`; on completion reports flip to `done`/`failed` and fill `ended`/`elapsed`; keep `progress`/`eta` fresh while runs are in flight (format + single-writer rules: `experiments-tracking` skill).
+- Suggest a JOURNAL.md entry for the launch, naming the wave id (`research-journal` skill).
