@@ -23,7 +23,7 @@ plugins/<plugin>/
 The repository is private, so the machine must have GitHub SSH access.
 
 ```bash
-codex plugin marketplace add dansolombrino/skills
+codex plugin marketplace add git@github.com:dansolombrino/skills.git
 codex plugin add research@dansolombrino-skills
 ```
 
