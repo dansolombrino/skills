@@ -20,7 +20,11 @@ Scaffold the standard research-project structure. The full canon (taxonomy, run_
    - `.gitignore` — ignores `.env`, `shitpads/*`, `references/*`, checkpoints/evaluations/plots content per template (keep `.gitkeep`s).
 4. **Install the journal commit guard**: `.githooks/pre-commit` from the template + `git config core.hooksPath .githooks`. It blocks commits touching `code/ config/ scripts/ evaluations/ visualizations/` without touching `JOURNAL.md`.
 5. **Create the shared helpers** `code/common/run_id.py` and `code/common/status.py` from the templates.
-6. **Verify the external `rig-sync` workflow is installed and configured** for cross-machine syncing (references/ synced; shitpads/ rig-local; checkpoints movement is rig-sync's job). It is a separate prerequisite, not bundled in this plugin. If unavailable, finish the local scaffold but report cross-rig execution as blocked; never invent ad-hoc sync.
+6. **Configure `$rig-sync`**: create `sync.toml` from its documented schema, prepare approved new
+   roots with `rigsync.py prepare`, then run `rigsync.py doctor` and verify every
+   intended peer before cross-machine work. Source staging,
+   references, and artifacts move only through that workflow; `shitpads/` and `logs/` remain
+   rig-local. If doctor fails, finish the local scaffold but report remote execution as blocked.
 7. Initialize git if needed; first commit only after the user approves the scaffold.
 
 Ask the user before deviating from the taxonomy in any way.

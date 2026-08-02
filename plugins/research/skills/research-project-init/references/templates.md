@@ -38,7 +38,8 @@ per experiment in its `.py` as `RUN_ID_PARAMS`).
 
 1. `cp .env.example .env` and fill in the secrets/paths.
 2. Create the project environment and record its exact setup command here once chosen.
-3. Cross-machine sync is handled by rig-sync.
+3. Configure `sync.toml`, then use the `$rig-sync` skill to prepare approved new roots and run its
+   bundled `python3 "$RIGSYNC_SCRIPT" doctor` check.
 
 ## Running
 
@@ -102,6 +103,8 @@ WANDB_API_KEY=
 
 ```gitignore
 .env
+.venv/
+.rigsync_cache/
 shitpads/*
 !shitpads/.gitkeep
 logs/*
@@ -121,6 +124,12 @@ outputs/          # hydra default run dir, if left enabled
 
 Adjust with the user: they may want evaluations/ (small jsons) or plots/ committed.
 `.status.json` markers live inside evaluations/ and follow whatever is decided for it.
+
+## sync.toml
+
+Create this from the `$rig-sync` skill's configuration reference. Declare the standard artifact groups and
+one absolute `repo_path` per intended rig; do not put SSH aliases, ports, users, or keys here.
+Run the bundled `python3 "$RIGSYNC_SCRIPT" doctor` before any remote dispatch.
 
 ## .githooks/pre-commit (journal guard)
 

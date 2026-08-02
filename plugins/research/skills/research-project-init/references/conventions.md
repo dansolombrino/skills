@@ -197,9 +197,10 @@ the number of GPUs actually free varies per dispatch: **ask the user which rigs 
 are free** before proposing an assignment (`sweep-dispatch`, pre-launch gates). For `behemoth`
 that math defaults to `2.0 × 1` (gpu0), and only a grant for this wave widens it.
 
-Passwordless ssh between all rigs. Cross-machine file movement (references/, checkpoints, code)
-is **rig-sync's job** — an external prerequisite that is not bundled in this plugin. Verify it is
-installed and configured before dispatch; if not, stop instead of inventing ad-hoc sync.
+Passwordless ssh between all rigs. Cross-machine source staging and artifact movement are
+**`$rig-sync`'s job**. Run its bundled doctor's checks before dispatch; if they fail, stop instead
+of inventing ad-hoc copying. The hub may be the current local host even when its SSH daemon is not
+listening: local work uses direct filesystem/tmux commands while peer work uses bounded SSH.
 
 ## Status ground truth — three signals, artifacts golden
 

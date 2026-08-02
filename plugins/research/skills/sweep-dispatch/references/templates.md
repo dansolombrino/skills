@@ -208,20 +208,34 @@ its wave scripts, walked sequentially by a shell loop. Lanes on the same rig run
 ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <project path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; done'"
 ```
 
+When `<rig>` is the current local hub, the hub subagent runs the inner command directly instead
+of self-SSH:
+
+```bash
+tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_rig-4090_gpu<ids> \
+  'cd <project path> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_rig-4090_gpu<ids>.sh; do bash "$s"; done'
+```
+
 - Glob expansion sorts lexicographically ⇒ deterministic ordering.
 - The glob **is** the assignment record: a run is in this lane precisely because
   `wave_<rig>_gpu<ids>.sh` exists in its wave folder. Nothing to keep in sync.
 - Because every wave script self-guards, re-issuing this exact command is the entire recovery
   procedure.
 
-Before dispatching: make sure the generated scripts have reached the rig (rig-sync), and remind
-the user how to watch: `ssh <rig>` → `tmux attach -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>`.
+Before dispatching: use the `$rig-sync` skill's bundled `rigsync.py push-source` command to stage
+the generated scripts on peers, and remind
+the user how to watch: for a peer, `ssh <rig>` →
+`tmux attach -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>`; for the current local hub, run the
+`tmux attach` command directly.
 
 Monitoring one run via the three signals (artifacts / `.status.json` / latest run log):
 
 ```bash
 ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "cat <project>/evaluations/<NNN_exp>/<run_id path>/.status.json; tail -n 30 \$(ls -t <project>/logs/<NNN_exp>/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-*.log | head -1)"
 ```
+
+For the current local hub, run the quoted `cat ...; tail ...` portion directly from the project
+root; do not self-SSH.
 
 ## Machine-fault check & recovery (rig crash/reboot — see SKILL.md state machine)
 
@@ -231,6 +245,9 @@ every lane on that rig + boot time + run status in a single ssh:
 ```bash
 ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux ls 2>/dev/null | grep <wave_id> || echo SESSIONS=gone; echo BOOT=\$(uptime -s); cat <project>/evaluations/<NNN_exp>/<run_id path>/.status.json"
 ```
+
+For the current local hub, run the quoted diagnostic portion directly. The same boot-time,
+session, heartbeat, and artifact rules apply.
 
 Interpretation: `BOOT` newer than the dispatch time ⇒ the rig rebooted (tmux never survives a
 reboot). A lane's session missing with its `.status.json` stuck at `running` ⇒ interrupted runs
@@ -244,6 +261,9 @@ interrupted ones:
 ```bash
 ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux has-session -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 2>/dev/null || tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <project path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; done'"
 ```
+
+For a local hub lane, run the same `tmux has-session ... || tmux new-session ...` command directly
+from the hub subagent; do not wrap it in SSH.
 
 Note it is the **same wave id** — a relaunch is not a new dispatch, so paths and session names
 are unchanged.

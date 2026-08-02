@@ -5,7 +5,7 @@ description: Generate and launch experiment runs/sweeps across the GPU rigs (rig
 
 # sweep-dispatch
 
-Launch machinery for runs and sweeps. Canon: `../research-project-init/references/conventions.md`. Templates: [references/templates.md](references/templates.md). Dispatch always happens **from rig-4090** (the hub); code reaches the rigs through the separately installed `rig-sync` workflow, then launches via passwordless ssh. If `rig-sync` is unavailable or not configured, stop before dispatch; never substitute ad-hoc copying.
+Launch machinery for runs and sweeps. Canon: `../research-project-init/references/conventions.md`. Templates: [references/templates.md](references/templates.md). Dispatch always happens **from rig-4090** (the hub); source reaches assigned peers through `$rig-sync`, then launches via passwordless ssh. Use the skill's bundled `rigsync.py doctor` and `push-source --dry-run` before dispatch. If either fails, stop; never substitute ad-hoc copying.
 
 Vocabulary (canon): a **wave** is one dispatch decision, identified by `YYYYMMDD-HHMMSS`; a **slice** is the portion of a wave on one rig; a **lane** is the portion of a slice on one GPU set. Lanes run in parallel, runs within a lane run sequentially.
 
@@ -36,7 +36,7 @@ scripts/NNN_exp/<run_id_flat>/wave_<wave_id>/
 
 ## Launch & monitor — orchestrator + one Codex subagent per rig
 
-The chat where the launch is requested is the **orchestrator**. It never launches or polls rigs itself. After the assignment is approved, use Codex's collaboration tools to spawn **one background subagent per assigned rig in parallel**, then collect their reports. One subagent per *rig*, not per lane: it has a single ssh target and simply drives several sessions. If collaboration tools are unavailable, stop before launch and tell the user; do not silently collapse monitoring into the orchestrator.
+The chat where the launch is requested is the **orchestrator**. It never launches or polls rigs itself. After the assignment is approved, use Codex's collaboration tools to spawn **one background subagent per assigned rig in parallel**, then collect their reports. One subagent per *rig*, not per lane. A peer subagent drives one SSH target; when the assigned rig is the current local hub, its subagent uses direct bounded commands and never requires self-SSH. If collaboration tools are unavailable, stop before launch and tell the user; do not silently collapse monitoring into the orchestrator.
 
 Each rig subagent:
 
@@ -50,7 +50,9 @@ Each rig subagent:
 
 **Single-writer rule: only the orchestrator edits EXPERIMENTS.md**, from the subagents' reports. Subagents never touch it.
 
-Tell the user how to watch manually too: `ssh <rig>` then `tmux attach -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>`.
+Tell the user how to watch manually too: for a peer, `ssh <rig>` then
+`tmux attach -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>`; for the current local hub, run the
+`tmux attach` command directly.
 
 ## Machine faults — reboot/crash detection & auto-resume
 

@@ -1,4 +1,4 @@
 interface:
   display_name: "Sweep Dispatch"
   short_description: "Dispatch and monitor GPU experiment waves safely"
-  default_prompt: "Use $sweep-dispatch to validate, approve, dispatch, monitor, and recover an experiment wave across available GPU rigs."
+  default_prompt: "Use $sweep-dispatch to sync, validate, dispatch, monitor, and recover an approved experiment wave across available GPU rigs."

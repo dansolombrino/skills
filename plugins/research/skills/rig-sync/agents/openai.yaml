@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rig Sync"
+  short_description: "Synchronize research projects and artifacts safely"
+  default_prompt: "Use $rig-sync to verify rig identity and safely inspect or synchronize a research project across configured GPU rigs."
