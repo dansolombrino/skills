@@ -1,0 +1,4 @@
+interface:
+  display_name: "Marketplace Skill Creator"
+  short_description: "Create Codex marketplace skills and plugins safely"
+  default_prompt: "Use $marketplace-skill-creator to add a skill to this marketplace and maintain all required metadata."

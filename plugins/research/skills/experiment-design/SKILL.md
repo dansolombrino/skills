@@ -16,7 +16,7 @@ Protocol for creating a new experiment. Conventions canon: `../research-project-
 
 1. List the experiment's config params and propose which subset (and order) uniquely identifies a run, with reasoning.
 2. Iterate until the user approves. **Never proceed on your own choice.**
-3. Record it as `RUN_ID_PARAMS = [...]` in the experiment's `.py` — and make ALL artifact paths go through `code/common/run_id.py` helpers (`run_id_path` for checkpoints/evaluations/plots, `run_id_flat` for scripts/logs/wandb). Agree with the user on the path-form segment formatting.
+3. Record it as `RUN_ID_PARAMS = [...]` in the experiment's `.py` — and make ALL artifact paths go through `code/common/run_id.py` helpers (`run_id_path` for checkpoints/evaluations/plots, `run_id_flat` for scripts/logs/wandb). The helpers percent-encode unsafe components by default. Agree with the user on any path-form formatting deviation.
 4. Wire `guard_run_config(cfg, RUN_ID_PARAMS, <eval run dir>)` into every training/eval script, **before the StatusWriter starts and before any artifact is written** — it snapshots the full config to `.run_config.json` and hard-fails on run_id collisions (same run_id, different config).
 5. Mirror the decision in the experiment's EXPERIMENTS.md section header (see the `experiments-tracking` skill).
 

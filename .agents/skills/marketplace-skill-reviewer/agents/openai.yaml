@@ -1,0 +1,4 @@
+interface:
+  display_name: "Marketplace Skill Reviewer"
+  short_description: "Audit Codex skills and plugin release readiness"
+  default_prompt: "Use $marketplace-skill-reviewer to audit this skill and report release-blocking findings."

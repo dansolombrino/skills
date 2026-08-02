@@ -1,0 +1,4 @@
+interface:
+  display_name: "Research Project Init"
+  short_description: "Scaffold the standard reproducible research layout"
+  default_prompt: "Use $research-project-init to scaffold a new structured research project."

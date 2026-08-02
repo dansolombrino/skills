@@ -7,7 +7,7 @@ invoked from the project root on the target rig. Layout and vocabulary (wave, la
 ## wave_<rig>_gpu<ids>.sh — one per (run, wave), self-contained and self-guarded
 
 Lives at `scripts/<NNN_exp>/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>.sh`. This is the
-**only** script kind — it replaced the old `run.sh` + `launch_<rig>.sh` pair. The done-guard
+**only** script kind — it replaced the old `run.sh` + `launch_<rig>.sh` pair. The artifact guard
 that used to sit in the per-rig launcher now travels with each run, which is what keeps lane
 dispatch idempotent.
 
@@ -16,19 +16,19 @@ dispatch idempotent.
 # run: <flat run_id>   experiment: <NNN_exp>
 # wave: <wave_id>   rig: <rig>   gpu: <ids>
 set -uo pipefail
-cd "$(dirname "$0")/../../../.."   # → project root (scripts/NNN_exp/<run_id_flat>/wave_<id>/ is 4 deep; adjust for sub-experiments)
+cd "$(dirname "$0")/../../../.." || exit 1  # → project root; adjust for sub-experiments
 
 RUN_ID_FLAT="<flat run_id>"
 EVAL_DIR="evaluations/<NNN_exp>/<run_id path>"
 LOG_DIR="logs/<NNN_exp>/$RUN_ID_FLAT/wave_<wave_id>"     # logs/ mirrors scripts/
 ARTIFACT="<expected final artifact path>"
 
-# self-guard (idempotency): artifact is golden, .status.json is the fallback
+# self-guard (idempotency): the expected final artifact is the only completion signal
 if [ -e "$ARTIFACT" ]; then
   echo "[skip] $RUN_ID_FLAT already done (artifact present)"; exit 0
 fi
 if grep -q '"state": "done"' "$EVAL_DIR/.status.json" 2>/dev/null; then
-  echo "[skip] $RUN_ID_FLAT already done (.status.json)"; exit 0
+  echo "[warn] status says done but expected artifact is missing; re-executing $RUN_ID_FLAT" >&2
 fi
 
 export CUDA_VISIBLE_DEVICES="<ids>"
@@ -45,22 +45,31 @@ done
 # ---- end behemoth block
 
 export WAVE_ID="<wave_id>"
-mkdir -p "$EVAL_DIR" "$LOG_DIR"
+mkdir -p "$EVAL_DIR" "$LOG_DIR" || exit 1
 
 # full terminal capture: everything the run writes to stdout/stderr lands in the run log
-python code/<NNN_exp>/<script>.py <param>=<value> <param>=<value> ... 2>&1 \
+HYDRA_ARGS=(<tokens produced by hydra_override_arg; one per override>)
+python code/<NNN_exp>/<script>.py "${HYDRA_ARGS[@]}" 2>&1 \
   | tee "$LOG_DIR/wave_<rig>_gpu<ids>-$(date +%Y%m%d-%H%M%S).log"
-rc=${PIPESTATUS[0]}
+pipeline_rc=("${PIPESTATUS[@]}")
+python_rc=${pipeline_rc[0]}
+tee_rc=${pipeline_rc[1]}
+rc=$python_rc
+if [ "$tee_rc" -ne 0 ]; then
+  echo "[error] tee failed with exit code $tee_rc; the required run log is incomplete" >&2
+  if [ "$rc" -eq 0 ]; then rc=$tee_rc; fi
+fi
 
 # fallback: if python died before StatusWriter could finalize, mark the run failed
-if [ $rc -ne 0 ]; then
+if [ $rc -ne 0 ] && [ ! -e "$ARTIFACT" ]; then
   python - "$EVAL_DIR/.status.json" <<'EOF'
 import json, sys, datetime, pathlib
 p = pathlib.Path(sys.argv[1])
 s = json.loads(p.read_text()) if p.exists() else {}
-if s.get("state") != "done":
-    s.update(state="failed", ended=datetime.datetime.now().isoformat(timespec="seconds"))
-    p.write_text(json.dumps(s))
+s.update(state="failed", ended=datetime.datetime.now().isoformat(timespec="seconds"))
+tmp = p.with_suffix(".json.tmp")
+tmp.write_text(json.dumps(s))
+tmp.replace(p)
 EOF
 fi
 exit $rc
@@ -68,20 +77,19 @@ exit $rc
 
 Notes:
 - The overrides list is the FULL run_id (and any non-default fixed params) — explicit, so the
-  script is meaningful standalone.
+  script is meaningful standalone. Produce each array token with
+  `code/common/run_id.py::hydra_override_arg`; never interpolate raw config values into shell.
 - `<run_id path>` / `<flat run_id>` must be produced with `code/common/run_id.py` at generation
   time — never hand-composed.
-- The done-guard runs **before** anything else, so re-issuing a lane's dispatch command after a
-  crash re-executes only interrupted runs — resuming or restarting per the experiment's
-  design-time resume decision. The status fallback is a shell `grep`, deliberately not python:
-  after a reboot the relaunch may run before any environment activation, and the guard must
-  never silently degrade to "not done". The exact string `"state": "done"` is safe to match —
-  StatusWriter is the file's single writer and always emits `json.dumps` with that formatting.
+- The artifact guard runs **before** anything else, so re-issuing a lane's dispatch command after
+  a crash re-executes only runs whose declared completion artifact is absent — resuming or
+  restarting per the experiment's design-time resume decision. `.status.json` is inspected only
+  to emit a useful inconsistency warning; it never overrides the golden artifact signal.
 - `CUDA_VISIBLE_DEVICES` and `WAVE_ID` are exported here and read by StatusWriter. They are env
   vars, **not** config params, so they never enter the `guard_run_config` snapshot — otherwise
   re-launching in a new wave or on a different card would trip the run_id-collision hard error.
 - The **behemoth GPU guard** is emitted on `behemoth` lanes only — the other rigs are ours
-  outright and get no such block. It sits *after* the done-guard (a finished run must still skip
+  outright and get no such block. It sits *after* the artifact guard (a finished run must still skip
   cleanly, not abort) and *before* python. `BEHEMOTH_AUTHORIZED_GPUS` is `0` by default and
   widened only by a user grant for that wave, which the `# GPU auth:` line records verbatim —
   so the wave folder is the audit trail of why a run was allowed on a given card. The guard
@@ -90,12 +98,13 @@ Notes:
   pre-launch approval gate (`sweep-dispatch`, gate 2) remains the primary control.
 - The `tee` target is the **mirror of this script's own path under `logs/`**, with a timestamp
   suffix (conventions): history is kept, logs are never overwritten, and a crash-recovery
-  relaunch inside the same wave never clobbers the earlier attempt. `${PIPESTATUS[0]}` keeps
-  python's exit code authoritative despite the pipe.
+  relaunch inside the same wave never clobbers the earlier attempt. Capture both `PIPESTATUS`
+  entries immediately: a Python failure remains authoritative, while a `tee` failure makes an
+  otherwise successful pipeline fail because a complete run log is required.
 - Hydra projects must have job file logging disabled (`- override hydra/job_logging: none`) or
   pointed inside `logs/` — no `.log` may land in the project root.
-- `.status.json` is owned by the python script (StatusWriter, below); the wave script only
-  writes the `failed` fallback when the process died before python could finalize it.
+- `.status.json` is owned by the python script (StatusWriter, below); the wave script only writes
+  the `failed` fallback, atomically, when the process died before python could finalize it.
 
 ## README.md — one per (run, wave), written once at launch
 
@@ -146,6 +155,7 @@ class StatusWriter:
         return datetime.datetime.now().isoformat(timespec="seconds")
 
     def _write(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".json.tmp")   # atomic: monitors never see partial json
         tmp.write_text(json.dumps(self.status))
         tmp.replace(self.path)
@@ -195,7 +205,7 @@ A **lane** is one GPU set on one rig. There is no launcher file: the lane's queu
 its wave scripts, walked sequentially by a shell loop. Lanes on the same rig run in parallel.
 
 ```bash
-ssh <rig> "tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <project path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; done'"
+ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <project path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; done'"
 ```
 
 - Glob expansion sorts lexicographically ⇒ deterministic ordering.
@@ -210,7 +220,7 @@ the user how to watch: `ssh <rig>` → `tmux attach -t <project>_<NNN_exp>_<wave
 Monitoring one run via the three signals (artifacts / `.status.json` / latest run log):
 
 ```bash
-ssh <rig> "cat <project>/evaluations/<NNN_exp>/<run_id path>/.status.json; tail -n 30 \$(ls -t <project>/logs/<NNN_exp>/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-*.log | head -1)"
+ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "cat <project>/evaluations/<NNN_exp>/<run_id path>/.status.json; tail -n 30 \$(ls -t <project>/logs/<NNN_exp>/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-*.log | head -1)"
 ```
 
 ## Machine-fault check & recovery (rig crash/reboot — see SKILL.md state machine)
@@ -219,7 +229,7 @@ One round-trip to diagnose a rig that stopped answering or whose heartbeat froze
 every lane on that rig + boot time + run status in a single ssh:
 
 ```bash
-ssh <rig> "tmux ls 2>/dev/null | grep <wave_id> || echo SESSIONS=gone; echo BOOT=\$(uptime -s); cat <project>/evaluations/<NNN_exp>/<run_id path>/.status.json"
+ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux ls 2>/dev/null | grep <wave_id> || echo SESSIONS=gone; echo BOOT=\$(uptime -s); cat <project>/evaluations/<NNN_exp>/<run_id path>/.status.json"
 ```
 
 Interpretation: `BOOT` newer than the dispatch time ⇒ the rig rebooted (tmux never survives a
@@ -232,7 +242,7 @@ session already exists); the self-guarded wave scripts then skip done runs and r
 interrupted ones:
 
 ```bash
-ssh <rig> "tmux has-session -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 2>/dev/null || tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <project path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; done'"
+ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux has-session -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 2>/dev/null || tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <project path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; done'"
 ```
 
 Note it is the **same wave id** — a relaunch is not a new dispatch, so paths and session names
@@ -240,18 +250,7 @@ are unchanged.
 
 ## Assignment math
 
-`per-GPU weights = {behemoth: 2.0, rig-4090: 1.0, rig-3090-ti: 0.5, rig-3080-ti: 0.5}`.
-Canonical names are the ssh aliases — they are what `ssh <rig>` must resolve.
-
-1. Ask the user **which rigs and which GPUs on them are usable** — never assume, never hardcode
-   the multi-GPU server's card count. On `behemoth` **only gpu0 is ours and only gpu0 may be
-   proposed**; every other card belongs to someone else, and an idle card is not an available
-   card (canon: `../../research-project-init/references/conventions.md` § Rig fleet). Wider use
-   needs an explicit user grant, good for that one wave only. Check load with `nvidia-smi` as
-   well as ownership.
-2. Capacity of a lane = the rig's per-GPU weight × the number of GPUs in that lane's set —
-   `behemoth` contributes `2.0 × 1` unless a grant for this wave says otherwise.
-3. Split the run list across lanes proportionally to capacity (≈ equal wall-clock per lane).
-4. Within one (wave, rig) the GPU sets must be **disjoint** — a run occupying every card makes
-   that rig a single lane for the wave.
-5. Present the split (run → rig, gpu), launch only after approval.
+Use the `sweep-dispatch` mandatory gates for the algorithm and
+`../../research-project-init/references/conventions.md` § Rig fleet for the canonical rig names,
+weights, ownership limits, and per-wave authorization rules. Do not duplicate those values in a
+generated artifact or another policy file.

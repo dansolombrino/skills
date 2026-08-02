@@ -1,0 +1,4 @@
+interface:
+  display_name: "Research Journal"
+  short_description: "Record research decisions, events, and findings"
+  default_prompt: "Use $research-journal to propose a concise journal entry for this research event."

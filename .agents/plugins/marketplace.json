@@ -1,0 +1,20 @@
+{
+  "name": "dansolombrino-skills",
+  "interface": {
+    "displayName": "Dan Solombrino's Skills"
+  },
+  "plugins": [
+    {
+      "name": "research",
+      "source": {
+        "source": "local",
+        "path": "./plugins/research"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

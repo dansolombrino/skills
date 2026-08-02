@@ -1,0 +1,4 @@
+interface:
+  display_name: "Research Visualizations"
+  short_description: "Create plots from experiment evaluation outputs"
+  default_prompt: "Use $visualizations to design a plot from this experiment evaluation outputs."

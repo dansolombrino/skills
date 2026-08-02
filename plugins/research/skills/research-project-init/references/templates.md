@@ -37,7 +37,7 @@ per experiment in its `.py` as `RUN_ID_PARAMS`).
 ## Setup
 
 1. `cp .env.example .env` and fill in the secrets/paths.
-2. Create the environment (see below).
+2. Create the project environment and record its exact setup command here once chosen.
 3. Cross-machine sync is handled by rig-sync.
 
 ## Running
@@ -47,10 +47,10 @@ Runs are launched in **waves** (one dispatch decision, id `YYYYMMDD-HHMMSS`) via
 wave is, plus one self-contained `wave_<rig>_gpu<ids>.sh` per run. `logs/` mirrors that tree.
 ```
 
-## CLAUDE.md
+## AGENTS.md
 
 ```markdown
-# {{PROJECT_NAME}} — project notes for Claude
+# {{PROJECT_NAME}} — project notes for Codex
 
 <!-- Thin by design: generic research conventions come from the installed `research`
      skill bundle. Only project-specific facts live here. -->
@@ -150,14 +150,16 @@ sweep-dispatch skill, `references/templates.md`.
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")/../../../.."         # to project root (depth varies with nesting)
+cd "$(dirname "$0")/../../../.." || exit 1  # to project root (depth varies with nesting)
 LOGDIR="logs/NNN_experiment/<run_id_flat>/wave_<wave_id>"
 mkdir -p "$LOGDIR"
-python code/NNN_experiment/script.py <overrides> 2>&1 \
+HYDRA_ARGS=(<tokens produced by hydra_override_arg; one per override>)
+python code/NNN_experiment/script.py "${HYDRA_ARGS[@]}" 2>&1 \
   | tee "$LOGDIR/wave_<rig>_gpu<ids>-$(date +%Y%m%d-%H%M%S).log"
 ```
 
-`pipefail` keeps python's exit code authoritative despite the `tee` pipe.
+`pipefail` makes either the Python process or `tee` failure visible. The full wave template also
+captures both pipeline statuses so Python remains authoritative when both fail.
 
 ## code/common/run_id.py
 
@@ -179,7 +181,16 @@ evaluations/ run dir suffices: checkpoints/ and plots/ share the same run_id.
 """
 
 import json
+import shlex
 from pathlib import Path
+from urllib.parse import quote
+
+
+def _run_id_component(value) -> str:
+    """Filesystem-safe, reversible rendering for a run_id key or value."""
+    if isinstance(value, (dict, list, tuple)):
+        value = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return quote(str(value), safe="-._~")
 
 
 def run_id_dict(cfg, params):
@@ -193,7 +204,7 @@ def run_id_path(cfg, params) -> Path:
     Used under checkpoints/, evaluations/, plots/. Segment formatting (e.g. bare
     values for some params) may be customized per experiment — with the user.
     """
-    return Path(*[f"{p}={cfg[p]}" for p in params])
+    return Path(*[f"{_run_id_component(p)}={_run_id_component(cfg[p])}" for p in params])
 
 
 def run_id_flat(cfg, params) -> str:
@@ -201,7 +212,14 @@ def run_id_flat(cfg, params) -> str:
 
     Used for scripts/ and logs/ run-folder names, wandb run names, EXPERIMENTS.md rows.
     """
-    return ",".join(f"{p}={cfg[p]}" for p in params)
+    return ",".join(
+        f"{_run_id_component(p)}={_run_id_component(cfg[p])}" for p in params
+    )
+
+
+def hydra_override_arg(param, value) -> str:
+    """One shell-safe `param=value` token for generated wave scripts."""
+    return shlex.quote(f"{param}={value}")
 
 
 def guard_run_config(cfg, params, run_dir: Path) -> None:
@@ -212,18 +230,23 @@ def guard_run_config(cfg, params, run_dir: Path) -> None:
     a run_id collision: a param changed that is not in RUN_ID_PARAMS. Same-config
     reruns (resume/retry) pass. Call BEFORE writing any artifact.
     """
-    from omegaconf import OmegaConf  # hydra projects; plain-dict cfgs skip this
+    from omegaconf import OmegaConf
 
     # json round-trip so comparison sees exactly what a stored snapshot stores
-    resolved = json.loads(json.dumps(OmegaConf.to_container(cfg, resolve=True),
+    raw = OmegaConf.to_container(cfg, resolve=True) if OmegaConf.is_config(cfg) else cfg
+    resolved = json.loads(json.dumps(raw,
                                      sort_keys=True, default=str))
     snapshot_file = run_dir / ".run_config.json"
     if snapshot_file.exists():
         snapshot = json.loads(snapshot_file.read_text())
+        missing = "<MISSING>"
         diffs = {
-            k: (snapshot.get(k), resolved.get(k))
+            k: (
+                snapshot[k] if k in snapshot else missing,
+                resolved[k] if k in resolved else missing,
+            )
             for k in sorted(set(snapshot) | set(resolved))
-            if snapshot.get(k) != resolved.get(k)
+            if k not in snapshot or k not in resolved or snapshot[k] != resolved[k]
         }
         if diffs:
             lines = "\n".join(f"  {k}: old={old!r} new={new!r}" for k, (old, new) in diffs.items())
@@ -237,4 +260,75 @@ def guard_run_config(cfg, params, run_dir: Path) -> None:
     else:
         run_dir.mkdir(parents=True, exist_ok=True)
         snapshot_file.write_text(json.dumps(resolved, indent=2, sort_keys=True, default=str))
+```
+
+## code/common/status.py
+
+```python
+"""Atomic per-run lifecycle and progress signaling."""
+
+import datetime
+import json
+import os
+import time
+from pathlib import Path
+
+
+class StatusWriter:
+    """Own evaluations/NNN_exp/<run_id path>/.status.json for one run."""
+
+    def __init__(self, eval_dir):
+        self.path = Path(eval_dir) / ".status.json"
+        self.t0 = None
+        self.status = {}
+
+    def _now(self):
+        return datetime.datetime.now().isoformat(timespec="seconds")
+
+    def _write(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(self.status))
+        tmp.replace(self.path)
+
+    def __enter__(self):
+        self.t0 = time.monotonic()
+        self.status = {
+            "state": "running",
+            "started": self._now(),
+            "ended": None,
+            "elapsed_s": None,
+            "heartbeat": self._now(),
+            "progress": None,
+            "wave_id": os.environ.get("WAVE_ID"),
+            "gpu": os.environ.get("CUDA_VISIBLE_DEVICES"),
+        }
+        self._write()
+        print(
+            f"[status] RUN START {self.status['started']} "
+            f"wave={self.status['wave_id']} gpu={self.status['gpu']}",
+            flush=True,
+        )
+        return self
+
+    def heartbeat(self, progress=None):
+        """Refresh liveness and optionally record simple <done>/<total> progress."""
+        self.status["heartbeat"] = self._now()
+        if progress is not None:
+            self.status["progress"] = progress
+        self._write()
+
+    def __exit__(self, exc_type, exc, tb):
+        self.status.update(
+            state="failed" if exc_type else "done",
+            ended=self._now(),
+            elapsed_s=round(time.monotonic() - self.t0, 1),
+        )
+        self._write()
+        print(
+            f"[status] RUN END {self.status['ended']} "
+            f"state={self.status['state']} elapsed={self.status['elapsed_s']}s",
+            flush=True,
+        )
+        return False
 ```

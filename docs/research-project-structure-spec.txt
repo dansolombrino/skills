@@ -1,3 +1,7 @@
+HISTORICAL NOTE: this is the original Claude-era design discussion. It is not the active
+Codex specification. The final Claude-native implementation is preserved at the Git tag
+`claude-final-v0.7.0`; the active canon lives in the Codex `research` plugin.
+
 this is the description of how the code of my research will be structured.
 
 "structured" covers multiple aspects of the code, so we will unpack those one by one.
@@ -189,5 +193,4 @@ for this reason, i need the following.
 
 claude will craft scripts under scripts/NNN_experiment_name/ to handle the split across machine
 not yet sure what run_id means in the run script, as those might sweep some values... i guess this is point 2) we have to brainstorm about
-
 

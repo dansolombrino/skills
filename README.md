@@ -1,64 +1,68 @@
 # skills
 
-Personal Claude Code skills, distributed as a private [plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces).
+Personal Codex skills distributed as a private plugin marketplace.
 
-Skills are organized as **domain bundles**: one plugin per domain, each containing multiple skills, installed as a unit. Current bundles:
-
-- **research** — skills for research work
+Skills are organized as domain plugins: one plugin per domain, each containing related skills
+installed as a unit. The current plugin is **research**.
 
 ## Layout
 
-```
-.claude-plugin/marketplace.json      # marketplace manifest — lists the bundles
-plugins/<bundle>/                    # one plugin per domain (e.g. research)
-├── .claude-plugin/plugin.json       #   bundle name, version, description
-└── skills/<skill>/SKILL.md          #   the skills in the bundle
-.claude/skills/                      # meta-skills, active only inside this repo
-├── skill-creator/                   #   scaffolds new skills/bundles
-└── skill-reviewer/                  #   audits a SKILL.md against best practices
+```text
+.agents/plugins/marketplace.json          # Codex marketplace catalog
+.agents/skills/                           # repo-local marketplace maintenance skills
+plugins/<plugin>/
+├── .codex-plugin/plugin.json             # plugin manifest and version
+└── skills/<skill>/
+    ├── SKILL.md                          # workflow instructions
+    ├── agents/openai.yaml                # Codex UI metadata
+    └── references/                       # detailed material loaded as needed
 ```
 
-## Setting up a new machine / rig
+## Install on a new machine
 
-The repo is private; installs clone it over SSH with your git credentials (make sure the
-rig's SSH key has GitHub access). Run once per machine:
+The repository is private, so the machine must have GitHub SSH access.
 
 ```bash
-claude plugin marketplace add dansolombrino/skills        # registers the marketplace in USER settings
-claude plugin install research@dansolombrino-skills       # user scope → every project on the machine
+codex plugin marketplace add dansolombrino/skills
+codex plugin add research@dansolombrino-skills
 ```
 
-User scope means all projects on that rig get every skill in the bundle; new Claude sessions
-pick them up automatically. Shortcut: just tell Claude *"add my marketplace dansolombrino/skills
-and install the research bundle"* and it will run these two commands for you.
+Start a new Codex CLI or desktop session after installation so the bundled skills are loaded.
+Cross-rig workflows additionally require the separately maintained `rig-sync` setup; the plugin
+stops before remote dispatch when that prerequisite is unavailable.
 
-To pull a new release later (auto-update is off by default for personal marketplaces; it can be
-enabled in the `/plugin` UI):
+## Update an installation
 
 ```bash
-claude plugin marketplace update dansolombrino-skills
-claude plugin update research
+codex plugin marketplace upgrade dansolombrino-skills
+codex plugin remove research@dansolombrino-skills
+codex plugin add research@dansolombrino-skills
 ```
 
-### Per-project alternative
+Restart the desktop app or start a new CLI session after updating.
 
-To install into a single project only, use the interactive commands from inside that project:
+## Develop skills in this repository
 
+- `$marketplace-skill-creator` adds skills or plugins while maintaining repository metadata.
+- `$marketplace-skill-reviewer` audits a skill without editing it.
+- `python3 scripts/validate_repo.py` validates the marketplace, plugin, and every skill.
+
+Any change to a distributed skill requires a version bump in
+`plugins/<plugin>/.codex-plugin/plugin.json`.
+
+## Release
+
+1. Run `python3 scripts/validate_repo.py` and test representative skill requests.
+2. Commit the changes.
+3. Create the release tag: `git tag -a <plugin>--v<version> -m "<summary>"`.
+4. Push the commit and tag.
+5. Refresh and reinstall the plugin on consuming machines using the update commands above.
+
+## Claude rollback point
+
+`claude-final-v0.7.0` is the final Claude-native marketplace state, at commit `3b3fdf1`.
+To resume Claude development without disturbing this Codex line, branch from it:
+
+```bash
+git switch -c claude-revival claude-final-v0.7.0
 ```
-/plugin marketplace add dansolombrino/skills
-/plugin install research@dansolombrino-skills
-```
-
-One install brings in every skill in the bundle. Browse all bundles interactively with `/plugin`.
-
-## Developing skills (in this repo)
-
-- `/skill-creator` — add a skill to a bundle, create a new bundle, or create a meta-skill.
-- `/skill-reviewer` — audit a SKILL.md for trigger quality, conciseness, and structure before publishing.
-
-## Release / update loop
-
-1. Edit skills; bump the **bundle's** `version` in `plugins/<bundle>/.claude-plugin/plugin.json` (any change to any skill in the bundle).
-2. Commit, then `claude plugin tag --push` from the bundle directory (creates the `<bundle>--v<version>` tag that version resolution uses) and `git push`.
-3. In consuming projects: `/plugin marketplace update` then `claude plugin update <bundle>`.
-   Auto-update is off by default for personal marketplaces; it can be enabled in the `/plugin` UI.
