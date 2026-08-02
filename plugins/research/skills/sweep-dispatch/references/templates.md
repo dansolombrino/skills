@@ -22,6 +22,7 @@ RUN_ID_FLAT="<flat run_id>"
 EVAL_DIR="evaluations/<NNN_exp>/<run_id path>"
 LOG_DIR="logs/<NNN_exp>/$RUN_ID_FLAT/wave_<wave_id>"     # logs/ mirrors scripts/
 ARTIFACT="<expected final artifact path>"
+export WAVE_ID="<wave_id>"
 
 # self-guard (idempotency): the expected final artifact is the only completion signal
 if [ -e "$ARTIFACT" ]; then
@@ -30,6 +31,27 @@ fi
 if grep -q '"state": "done"' "$EVAL_DIR/.status.json" 2>/dev/null; then
   echo "[warn] status says done but expected artifact is missing; re-executing $RUN_ID_FLAT" >&2
 fi
+
+# exact Git revision guard: source drift blocks this lane with reserved exit 86
+SOURCE_TAG="wave--$WAVE_ID"
+SOURCE_REVISION=$(git rev-parse "refs/tags/$SOURCE_TAG^{commit}" 2>/dev/null) || {
+  echo "[source-drift] missing $SOURCE_TAG" >&2; exit 86;
+}
+ACTUAL_REVISION=$(git rev-parse HEAD 2>/dev/null) || {
+  echo "[source-drift] project is not a Git working tree" >&2; exit 86;
+}
+if [ "$ACTUAL_REVISION" != "$SOURCE_REVISION" ]; then
+  echo "[source-drift] HEAD=$ACTUAL_REVISION expected=$SOURCE_REVISION ($SOURCE_TAG)" >&2
+  exit 86
+fi
+SOURCE_PATHS=(code config scripts pyproject.toml uv.lock poetry.lock setup.cfg setup.py Pipfile Pipfile.lock requirements*.txt environment*.yml environment*.yaml Dockerfile*)
+if ! git diff --quiet -- "${SOURCE_PATHS[@]}" || \
+   ! git diff --cached --quiet -- "${SOURCE_PATHS[@]}" || \
+   [ -n "$(git ls-files --others --exclude-standard -- "${SOURCE_PATHS[@]}")" ]; then
+  echo "[source-drift] execution files differ from $SOURCE_REVISION" >&2
+  exit 86
+fi
+export SOURCE_REVISION SOURCE_TAG
 
 export CUDA_VISIBLE_DEVICES="<ids>"
 
@@ -44,7 +66,6 @@ for d in ${CUDA_VISIBLE_DEVICES//,/ }; do
 done
 # ---- end behemoth block
 
-export WAVE_ID="<wave_id>"
 mkdir -p "$EVAL_DIR" "$LOG_DIR" || exit 1
 
 # full terminal capture: everything the run writes to stdout/stderr lands in the run log
@@ -63,10 +84,13 @@ fi
 # fallback: if python died before StatusWriter could finalize, mark the run failed
 if [ $rc -ne 0 ] && [ ! -e "$ARTIFACT" ]; then
   python - "$EVAL_DIR/.status.json" <<'EOF'
-import json, sys, datetime, pathlib
+import json, os, sys, datetime, pathlib
 p = pathlib.Path(sys.argv[1])
 s = json.loads(p.read_text()) if p.exists() else {}
-s.update(state="failed", ended=datetime.datetime.now().isoformat(timespec="seconds"))
+s.update(state="failed", ended=datetime.datetime.now().isoformat(timespec="seconds"),
+         wave_id=os.environ.get("WAVE_ID"), gpu=os.environ.get("CUDA_VISIBLE_DEVICES"),
+         source_revision=os.environ.get("SOURCE_REVISION"),
+         source_tag=os.environ.get("SOURCE_TAG"))
 tmp = p.with_suffix(".json.tmp")
 tmp.write_text(json.dumps(s))
 tmp.replace(p)
@@ -85,9 +109,13 @@ Notes:
   a crash re-executes only runs whose declared completion artifact is absent — resuming or
   restarting per the experiment's design-time resume decision. `.status.json` is inspected only
   to emit a useful inconsistency warning; it never overrides the golden artifact signal.
-- `CUDA_VISIBLE_DEVICES` and `WAVE_ID` are exported here and read by StatusWriter. They are env
-  vars, **not** config params, so they never enter the `guard_run_config` snapshot — otherwise
-  re-launching in a new wave or on a different card would trip the run_id-collision hard error.
+- The Git guard resolves `wave--<wave_id>`, requires it and `HEAD` to name the same commit, and
+  rejects tracked/staged/non-ignored-untracked execution drift before any status/log write.
+  Reserved exit `86` means deployment drift, not experiment failure; the lane loop stops on it.
+- `CUDA_VISIBLE_DEVICES`, `WAVE_ID`, `SOURCE_REVISION`, and `SOURCE_TAG` are exported here and read
+  by StatusWriter. They are env vars, **not** config params, so they never enter the
+  `guard_run_config` snapshot — otherwise relaunch placement/provenance would trip the collision
+  guard.
 - The **behemoth GPU guard** is emitted on `behemoth` lanes only — the other rigs are ours
   outright and get no such block. It sits *after* the artifact guard (a finished run must still skip
   cleanly, not abort) and *before* python. `BEHEMOTH_AUTHORIZED_GPUS` is `0` by default and
@@ -117,6 +145,9 @@ wave would accumulate N stale copies of them.
 # wave 20260731-162043 — <one-line purpose>
 
 Dispatched 2026-07-31 16:20 from rig-4090.
+
+Source tag: `wave--20260731-162043` (the annotated tag and configured branch must resolve to the
+same commit on every assigned rig).
 
 Why this wave: <the reason these runs are being launched now — first probe of the grid, scale-up
 after a promising probe, re-launch of what failed in <earlier wave id>, re-run after a code fix,
@@ -167,10 +198,13 @@ class StatusWriter:
                        # exported by the wave script; identifies WHICH dispatch this execution
                        # belongs to, so reconciliation can find the right EXPERIMENTS.md row
                        "wave_id": os.environ.get("WAVE_ID"),
-                       "gpu": os.environ.get("CUDA_VISIBLE_DEVICES")}
+                       "gpu": os.environ.get("CUDA_VISIBLE_DEVICES"),
+                       "source_revision": os.environ.get("SOURCE_REVISION"),
+                       "source_tag": os.environ.get("SOURCE_TAG")}
         self._write()
         print(f"[status] RUN START {self.status['started']} "
-              f"wave={self.status['wave_id']} gpu={self.status['gpu']}", flush=True)
+              f"wave={self.status['wave_id']} gpu={self.status['gpu']} "
+              f"source={self.status['source_revision']}", flush=True)
         return self
 
     def heartbeat(self, progress=None):
@@ -205,7 +239,7 @@ A **lane** is one GPU set on one rig. There is no launcher file: the lane's queu
 its wave scripts, walked sequentially by a shell loop. Lanes on the same rig run in parallel.
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <project path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; done'"
+ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <project path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; rc=\$?; [ \"\$rc\" -eq 86 ] && exit 86; done'"
 ```
 
 When `<rig>` is the current local hub, the hub subagent runs the inner command directly instead
@@ -213,7 +247,7 @@ of self-SSH:
 
 ```bash
 tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_rig-4090_gpu<ids> \
-  'cd <project path> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_rig-4090_gpu<ids>.sh; do bash "$s"; done'
+  'cd <project path> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_rig-4090_gpu<ids>.sh; do bash "$s"; rc=$?; [ "$rc" -eq 86 ] && exit 86; done'
 ```
 
 - Glob expansion sorts lexicographically ⇒ deterministic ordering.
@@ -222,8 +256,9 @@ tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_rig-4090_gpu<ids> \
 - Because every wave script self-guards, re-issuing this exact command is the entire recovery
   procedure.
 
-Before dispatching: use the `$rig-sync` skill's bundled `rigsync.py push-source` command to stage
-the generated scripts on peers, and remind
+Before dispatching: use `$rig-sync deploy-revision` then `verify-revision` for the approved wave
+commit across the complete assigned rig set. Each rig subagent repeats `verify-revision` for its
+target immediately before tmux. Then remind
 the user how to watch: for a peer, `ssh <rig>` →
 `tmux attach -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>`; for the current local hub, run the
 `tmux attach` command directly.
@@ -259,7 +294,7 @@ session already exists); the self-guarded wave scripts then skip done runs and r
 interrupted ones:
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux has-session -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 2>/dev/null || tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <project path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; done'"
+ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux has-session -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 2>/dev/null || tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <project path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; rc=\$?; [ \"\$rc\" -eq 86 ] && exit 86; done'"
 ```
 
 For a local hub lane, run the same `tmux has-session ... || tmux new-session ...` command directly

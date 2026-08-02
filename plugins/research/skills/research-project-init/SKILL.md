@@ -9,7 +9,9 @@ Scaffold the standard research-project structure. The full canon (taxonomy, run_
 
 ## Steps
 
-1. **Confirm the project name, location, and one-line description** with the user before creating anything. Also ask whether `evaluations/` and `plots/` should be committed; propose ignoring both, but the user decides.
+1. **Confirm the project name, location, one-line description, GitHub remote, and dispatch branch**
+   with the user before creating anything. Also ask whether `evaluations/` and `plots/` should be
+   committed; propose ignoring both, but the user decides.
 2. **Create the taxonomy** (empty dirs tracked with `.gitkeep`):
    `checkpoints/ code/ config/ evaluations/ logs/ plots/ scripts/ visualizations/ shitpads/ references/`
 3. **Create the root files** from the templates:
@@ -20,11 +22,14 @@ Scaffold the standard research-project structure. The full canon (taxonomy, run_
    - `.gitignore` — ignores `.env`, `shitpads/*`, `references/*`, checkpoints/evaluations/plots content per template (keep `.gitkeep`s).
 4. **Install the journal commit guard**: `.githooks/pre-commit` from the template + `git config core.hooksPath .githooks`. It blocks commits touching `code/ config/ scripts/ evaluations/ visualizations/` without touching `JOURNAL.md`.
 5. **Create the shared helpers** `code/common/run_id.py` and `code/common/status.py` from the templates.
-6. **Configure `$rig-sync`**: create `sync.toml` from its documented schema, prepare approved new
-   roots with `rigsync.py prepare`, then run `rigsync.py doctor` and verify every
-   intended peer before cross-machine work. Source staging,
-   references, and artifacts move only through that workflow; `shitpads/` and `logs/` remain
-   rig-local. If doctor fails, finish the local scaffold but report remote execution as blocked.
-7. Initialize git if needed; first commit only after the user approves the scaffold.
+6. Initialize Git if needed, configure the approved remote/branch, and create/push the first
+   commit only after the user approves the scaffold. Never force-push or overwrite an existing
+   remote history.
+7. **Configure `$rig-sync`**: create `sync.toml` with the same Git remote/branch, preview and
+   approve `rigsync.py prepare` to clone new empty rig paths, then run `doctor` for every intended
+   peer. Git distributes launch source; references and artifacts move only through `$rig-sync`;
+   `shitpads/` and `logs/` remain rig-local. Preserve non-empty non-Git peer paths and report them
+   blocked rather than converting them. If doctor fails, finish the local scaffold but report
+   remote execution as blocked.
 
 Ask the user before deviating from the taxonomy in any way.

@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Safe, additive research-project synchronization over rsync and SSH."""
+"""Deploy exact Git revisions and synchronize research artifacts over SSH."""
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import shlex
 import shutil
 import socket
 import subprocess
 import sys
-import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -30,10 +30,32 @@ class Machine:
 
 
 @dataclass(frozen=True)
+class GitSettings:
+    remote: str
+    branch: str
+
+
+@dataclass(frozen=True)
 class Config:
     root: Path
     artifacts: dict[str, dict]
     machines: dict[str, Machine]
+    git: GitSettings | None = None
+
+
+WAVE_RE = re.compile(r"^\d{8}-\d{6}$")
+REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
+DEPENDENCY_FILE_RE = re.compile(
+    r"^(?:pyproject\.toml|uv\.lock|poetry\.lock|setup\.cfg|setup\.py|"
+    r"Pipfile(?:\.lock)?|Dockerfile(?:\..+)?|requirements[^/]*\.txt|"
+    r"environment[^/]*\.ya?ml)$"
+)
+ALLOWED_IGNORED_PARTS = {
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+}
 
 
 def _load_toml(path: Path) -> dict:
@@ -55,6 +77,7 @@ def load_config(root: Path, config_path: Path, registry_path: Path) -> Config:
     project_machines = project.get("machines", {})
     registry_machines = registry.get("machines", {})
     artifacts = project.get("artifacts", {})
+    raw_git = project.get("git")
     if not isinstance(project_machines, dict) or not project_machines:
         raise RigSyncError(f"{config_path}: [machines] must be non-empty")
     if not isinstance(registry_machines, dict) or not registry_machines:
@@ -91,7 +114,18 @@ def load_config(root: Path, config_path: Path, registry_path: Path) -> Config:
         rel = PurePosixPath(entry["path"])
         if rel.is_absolute() or ".." in rel.parts:
             raise RigSyncError(f"{config_path}: artifacts.{group}.path must be repo-relative")
-    return Config(root=root, artifacts=artifacts, machines=machines)
+    git = None
+    if raw_git is not None:
+        if not isinstance(raw_git, dict):
+            raise RigSyncError(f"{config_path}: [git] must be a table")
+        remote_name = raw_git.get("remote")
+        branch = raw_git.get("branch")
+        if not isinstance(remote_name, str) or not remote_name:
+            raise RigSyncError(f"{config_path}: git.remote must be set")
+        if not isinstance(branch, str) or not branch:
+            raise RigSyncError(f"{config_path}: git.branch must be set")
+        git = GitSettings(remote_name, branch)
+    return Config(root=root, artifacts=artifacts, machines=machines, git=git)
 
 
 def selected_machines(config: Config, raw: str | None) -> list[Machine]:
@@ -131,6 +165,340 @@ def remote(machine: Machine, argv: list[str], *, check: bool = True) -> subproce
     return run(ssh_base(machine) + [shlex.join(argv)], check=check)
 
 
+def require_git(config: Config) -> GitSettings:
+    if config.git is None:
+        raise RigSyncError("sync.toml needs [git] with remote and branch for revision deployment")
+    return config.git
+
+
+def git_command(machine: Machine, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+    return remote(machine, ["git", "-C", str(machine.repo_path), *args], check=check)
+
+
+def canonical_remote_url(config: Config) -> str:
+    git = require_git(config)
+    result = run(["git", "-C", str(config.root), "remote", "get-url", git.remote])
+    url = result.stdout.decode(errors="replace").strip()
+    if not url:
+        raise RigSyncError(f"hub remote {git.remote!r} has no URL")
+    return url
+
+
+def validate_wave_revision(wave: str, revision: str) -> str:
+    if not WAVE_RE.fullmatch(wave):
+        raise RigSyncError(f"invalid wave id: {wave!r}")
+    if not REVISION_RE.fullmatch(revision):
+        raise RigSyncError("revision must be a full lowercase 40-character commit SHA")
+    return f"wave--{wave}"
+
+
+def verify_remote_revision(config: Config, tag: str, revision: str) -> None:
+    git = require_git(config)
+    branch_ref = f"refs/heads/{git.branch}"
+    tag_ref = f"refs/tags/{tag}^{{}}"
+    result = run(
+        [
+            "env",
+            "GIT_TERMINAL_PROMPT=0",
+            "GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=10",
+            "git",
+            "-C",
+            str(config.root),
+            "ls-remote",
+            "--exit-code",
+            git.remote,
+            branch_ref,
+            tag_ref,
+        ]
+    )
+    refs = {}
+    for line in result.stdout.decode(errors="replace").splitlines():
+        sha, separator, ref = line.partition("\t")
+        if separator:
+            refs[ref] = sha
+    problems = []
+    if refs.get(branch_ref) != revision:
+        problems.append(f"{branch_ref}={refs.get(branch_ref, 'missing')}")
+    if refs.get(tag_ref) != revision:
+        problems.append(f"{tag_ref}={refs.get(tag_ref, 'missing')}")
+    if problems:
+        raise RigSyncError(
+            f"Git remote does not expose approved revision {revision}: " + ", ".join(problems)
+        )
+
+
+def execution_pathspecs(config: Config, revision: str) -> list[str]:
+    result = run(
+        ["git", "-C", str(config.root), "ls-tree", "-r", "--name-only", revision]
+    )
+    root_files = []
+    for path in result.stdout.decode(errors="replace").splitlines():
+        if "/" not in path and DEPENDENCY_FILE_RE.fullmatch(path):
+            root_files.append(path)
+    return ["code", "config", "scripts", *sorted(root_files)]
+
+
+def ignored_runtime_path(path: str) -> bool:
+    clean = path.rstrip("/")
+    parts = PurePosixPath(clean).parts
+    return (
+        any(part in ALLOWED_IGNORED_PARTS for part in parts)
+        or clean.endswith(".pyc")
+        or clean.endswith(".pyo")
+    )
+
+
+def execution_drift(machine: Machine, pathspecs: list[str]) -> list[str]:
+    result = git_command(
+        machine,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--ignored=matching",
+        "--",
+        *pathspecs,
+    )
+    drift: list[str] = []
+    entries = [entry for entry in result.stdout.split(b"\0") if entry]
+    skip_rename_source = False
+    for raw in entries:
+        if skip_rename_source:
+            skip_rename_source = False
+            continue
+        text = raw.decode(errors="replace")
+        if len(text) < 4:
+            drift.append(text)
+            continue
+        status, path = text[:2], text[3:]
+        if "R" in status or "C" in status:
+            skip_rename_source = True
+        if status == "!!" and ignored_runtime_path(path):
+            continue
+        drift.append(f"{status} {path}")
+    return drift
+
+
+def project_activity(config: Config, machine: Machine) -> list[str]:
+    activity: list[str] = []
+    project_prefix = f"{config.root.name}_"
+    sessions = remote(
+        machine,
+        ["tmux", "list-sessions", "-F", "#{session_name}"],
+        check=False,
+    )
+    if sessions.returncode == 0:
+        activity.extend(
+            f"tmux:{name}"
+            for name in sessions.stdout.decode(errors="replace").splitlines()
+            if name.startswith(project_prefix)
+        )
+    elif sessions.returncode != 1:
+        stderr = sessions.stderr.decode(errors="replace").strip()
+        raise RigSyncError(
+            f"{machine.name}: cannot inspect tmux activity: {stderr or 'tmux failed'}"
+        )
+    evaluations = config.artifacts.get("evaluations", {}).get("path")
+    if evaluations:
+        status_root = machine.repo_path / evaluations
+        exists = remote(machine, ["test", "-d", str(status_root)], check=False)
+        if exists.returncode == 1:
+            return activity
+        if exists.returncode:
+            raise RigSyncError(f"{machine.name}: cannot inspect status root {status_root}")
+        running = remote(
+            machine,
+            [
+                "sh",
+                "-c",
+                "find \"$1\" -name .status.json -type f -exec "
+                "grep -l '\"state\"[[:space:]]*:[[:space:]]*\"running\"' {} + 2>/dev/null",
+                "sh",
+                str(status_root),
+            ],
+            check=False,
+        )
+        if running.returncode:
+            stderr = running.stderr.decode(errors="replace").strip()
+            raise RigSyncError(
+                f"{machine.name}: cannot inspect running statuses: {stderr or 'find failed'}"
+            )
+        activity.extend(
+            f"status:{path}"
+            for path in running.stdout.decode(errors="replace").splitlines()
+            if path
+        )
+    return activity
+
+
+def git_repo_facts(config: Config, machine: Machine) -> tuple[str, str, str]:
+    git = require_git(config)
+    inside = git_command(machine, "rev-parse", "--is-inside-work-tree", check=False)
+    if inside.returncode or inside.stdout.decode().strip() != "true":
+        raise RigSyncError(f"{machine.name}: {machine.repo_path} is not a Git working tree")
+    head = git_command(machine, "rev-parse", "HEAD").stdout.decode().strip()
+    branch = git_command(machine, "branch", "--show-current").stdout.decode().strip()
+    remote_url = git_command(machine, "remote", "get-url", git.remote).stdout.decode().strip()
+    return head, branch, remote_url
+
+
+def reject_unsupported_git_layout(machine: Machine) -> None:
+    submodules = git_command(machine, "cat-file", "-e", "HEAD:.gitmodules", check=False)
+    if submodules.returncode == 0:
+        raise RigSyncError(f"{machine.name}: Git submodules are not supported by revision deployment")
+    lfs = git_command(
+        machine,
+        "grep",
+        "-q",
+        "filter=lfs",
+        "HEAD",
+        "--",
+        ".gitattributes",
+        check=False,
+    )
+    if lfs.returncode == 0:
+        raise RigSyncError(f"{machine.name}: Git LFS needs an explicit checkout policy")
+
+
+def reject_unsupported_revision(config: Config, revision: str) -> None:
+    submodules = run(
+        ["git", "-C", str(config.root), "cat-file", "-e", f"{revision}:.gitmodules"],
+        check=False,
+    )
+    if submodules.returncode == 0:
+        raise RigSyncError("approved revision uses unsupported Git submodules")
+    lfs = run(
+        [
+            "git",
+            "-C",
+            str(config.root),
+            "grep",
+            "-q",
+            "filter=lfs",
+            revision,
+            "--",
+            ".gitattributes",
+        ],
+        check=False,
+    )
+    if lfs.returncode == 0:
+        raise RigSyncError("approved revision needs an explicit Git LFS checkout policy")
+
+
+def verify_revision(
+    config: Config,
+    machines: list[Machine],
+    wave: str,
+    revision: str,
+) -> None:
+    tag = validate_wave_revision(wave, revision)
+    verify_remote_revision(config, tag, revision)
+    reject_unsupported_revision(config, revision)
+    git = require_git(config)
+    expected_url = canonical_remote_url(config)
+    pathspecs = execution_pathspecs(config, revision)
+    failures: list[str] = []
+    for machine in machines:
+        try:
+            head, branch, remote_url = git_repo_facts(config, machine)
+            reject_unsupported_git_layout(machine)
+            tag_result = git_command(machine, "rev-parse", f"refs/tags/{tag}^{{commit}}", check=False)
+            tag_revision = tag_result.stdout.decode(errors="replace").strip()
+            drift = execution_drift(machine, pathspecs)
+            problems = []
+            if branch != git.branch:
+                problems.append(f"branch={branch or '(detached)'} expected={git.branch}")
+            if remote_url != expected_url:
+                problems.append(f"remote={remote_url!r} expected={expected_url!r}")
+            if head != revision:
+                problems.append(f"HEAD={head} expected={revision}")
+            if tag_result.returncode or tag_revision != revision:
+                problems.append(f"tag {tag} does not resolve to {revision}")
+            if drift:
+                problems.append("execution tree dirty: " + ", ".join(drift[:8]))
+            if problems:
+                failures.append(f"{machine.name}: " + "; ".join(problems))
+                print(f"FAIL {machine.name} revision: " + "; ".join(problems))
+            else:
+                print(f"OK {machine.name} revision: {revision} ({tag})")
+        except RigSyncError as exc:
+            failures.append(str(exc))
+            print(f"FAIL {machine.name} revision: {exc}")
+    if failures:
+        raise RigSyncError(f"revision verification failed on {len(failures)} machine(s)")
+
+
+def deploy_revision(
+    config: Config,
+    machines: list[Machine],
+    wave: str,
+    revision: str,
+    dry_run: bool,
+    confirmed: bool,
+) -> None:
+    require_confirmation(dry_run, confirmed)
+    tag = validate_wave_revision(wave, revision)
+    verify_remote_revision(config, tag, revision)
+    reject_unsupported_revision(config, revision)
+    git = require_git(config)
+    expected_url = canonical_remote_url(config)
+    pathspecs = execution_pathspecs(config, revision)
+    preflight: list[tuple[Machine, str]] = []
+    for machine in machines:
+        head, branch, remote_url = git_repo_facts(config, machine)
+        reject_unsupported_git_layout(machine)
+        problems = []
+        if branch != git.branch:
+            problems.append(f"branch={branch or '(detached)'} expected={git.branch}")
+        if remote_url != expected_url:
+            problems.append(f"remote={remote_url!r} expected={expected_url!r}")
+        drift = execution_drift(machine, pathspecs)
+        if drift:
+            problems.append("execution tree dirty: " + ", ".join(drift[:8]))
+        if head != revision:
+            activity = project_activity(config, machine)
+            if activity:
+                problems.append("active work blocks revision change: " + ", ".join(activity[:8]))
+        if problems:
+            raise RigSyncError(f"{machine.name}: " + "; ".join(problems))
+        preflight.append((machine, head))
+
+    for machine, head in preflight:
+        action = "verify/fetch tag" if head == revision else f"fast-forward {head} -> {revision}"
+        print(f"[{'dry-run' if dry_run else 'deploy-revision'}] {machine.name}: {action} ({tag})")
+        if dry_run:
+            continue
+        if machine.local and machine.repo_path.resolve() == config.root.resolve():
+            continue
+        git_command(machine, "fetch", "--no-tags", git.remote, git.branch)
+        fetched = git_command(machine, "rev-parse", "FETCH_HEAD").stdout.decode().strip()
+        if fetched != revision:
+            raise RigSyncError(
+                f"{machine.name}: fetched {git.remote}/{git.branch} at {fetched}, expected {revision}"
+            )
+        git_command(
+            machine,
+            "fetch",
+            "--no-tags",
+            git.remote,
+            f"refs/tags/{tag}:refs/tags/{tag}",
+        )
+        tag_revision = git_command(machine, "rev-parse", f"refs/tags/{tag}^{{commit}}").stdout.decode().strip()
+        if tag_revision != revision:
+            raise RigSyncError(f"{machine.name}: fetched tag {tag} resolves to {tag_revision}")
+        if head != revision:
+            fast_forward = git_command(
+                machine, "merge-base", "--is-ancestor", head, revision, check=False
+            )
+            if fast_forward.returncode:
+                raise RigSyncError(
+                    f"{machine.name}: {head} cannot fast-forward to approved revision {revision}"
+                )
+            git_command(machine, "merge", "--ff-only", revision)
+    if not dry_run:
+        verify_revision(config, machines, wave, revision)
+
+
 def source_manifest(root: Path) -> list[str]:
     result = run(
         ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"]
@@ -155,11 +523,49 @@ def require_confirmation(dry_run: bool, confirmed: bool) -> None:
         raise RigSyncError("refusing write without --confirm; run --dry-run and obtain approval first")
 
 
-def prepare(machine: Machine, dry_run: bool, confirmed: bool) -> None:
+def prepare(config: Config, machine: Machine, dry_run: bool, confirmed: bool) -> None:
     require_confirmation(dry_run, confirmed)
-    print(f"[{'dry-run' if dry_run else 'prepare'}] {machine.name}: mkdir -p {machine.repo_path}")
+    if config.git is None:
+        print(f"[{'dry-run' if dry_run else 'prepare'}] {machine.name}: mkdir -p {machine.repo_path}")
+        if not dry_run:
+            remote(machine, ["mkdir", "-p", str(machine.repo_path)])
+        return
+
+    existing_git = remote(machine, ["test", "-d", str(machine.repo_path / ".git")], check=False)
+    if existing_git.returncode == 0:
+        print(f"[existing] {machine.name}: Git working tree already exists at {machine.repo_path}")
+        return
+    existing_entries = remote(
+        machine,
+        ["find", str(machine.repo_path), "-mindepth", "1", "-maxdepth", "1", "-print", "-quit"],
+        check=False,
+    )
+    if existing_entries.returncode == 0 and existing_entries.stdout.strip():
+        raise RigSyncError(
+            f"{machine.name}: refusing to convert non-empty non-Git path {machine.repo_path}"
+        )
+    remote_url = canonical_remote_url(config)
+    print(
+        f"[{'dry-run' if dry_run else 'prepare'}] {machine.name}: "
+        f"git clone --branch {config.git.branch} {remote_url} {machine.repo_path}"
+    )
     if not dry_run:
-        remote(machine, ["mkdir", "-p", str(machine.repo_path)])
+        remote(machine, ["mkdir", "-p", str(machine.repo_path.parent)])
+        remote(
+            machine,
+            [
+                "env",
+                "GIT_TERMINAL_PROMPT=0",
+                "GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=10",
+                "git",
+                "clone",
+                "--branch",
+                config.git.branch,
+                "--single-branch",
+                remote_url,
+                str(machine.repo_path),
+            ],
+        )
 
 
 def push_source(config: Config, machine: Machine, dry_run: bool, confirmed: bool) -> None:
@@ -258,6 +664,13 @@ def doctor(config: Config, machines: list[Machine]) -> None:
         found = shutil.which(binary)
         print(f"{'OK' if found else 'FAIL'} local {binary}: {found or 'missing'}")
         failures += not bool(found)
+    expected_url = None
+    if config.git is not None:
+        try:
+            expected_url = canonical_remote_url(config)
+        except RigSyncError as exc:
+            print(f"FAIL hub Git remote: {exc}")
+            failures += 1
     for machine in machines:
         if machine.hostname is not None:
             hostname_result = remote(machine, ["hostname"], check=False)
@@ -271,10 +684,49 @@ def doctor(config: Config, machines: list[Machine]) -> None:
                     f"FAIL {machine.name} hostname: expected {machine.hostname}, got {actual}"
                 )
             failures += not hostname_ok
-        result = remote(machine, ["sh", "-c", f"command -v rsync >/dev/null && command -v find >/dev/null && test -d {shlex.quote(str(machine.repo_path))}"], check=False)
+        required = "command -v rsync >/dev/null && command -v find >/dev/null"
+        if config.git is not None:
+            required += " && command -v git >/dev/null && command -v tmux >/dev/null"
+        result = remote(
+            machine,
+            ["sh", "-c", f"{required} && test -d {shlex.quote(str(machine.repo_path))}"],
+            check=False,
+        )
         ok = result.returncode == 0
         print(f"{'OK' if ok else 'FAIL'} {machine.name}: {'local' if machine.local else machine.ssh} -> {machine.repo_path}")
         failures += not ok
+        if config.git is not None and ok and expected_url is not None:
+            try:
+                _head, branch, remote_url = git_repo_facts(config, machine)
+                reject_unsupported_git_layout(machine)
+                identity_ok = branch == config.git.branch and remote_url == expected_url
+                print(
+                    f"{'OK' if identity_ok else 'FAIL'} {machine.name} Git: "
+                    f"branch={branch or '(detached)'} remote={remote_url}"
+                )
+                failures += not identity_ok
+                auth = remote(
+                    machine,
+                    [
+                        "env",
+                        "GIT_TERMINAL_PROMPT=0",
+                        "GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=10",
+                        "git",
+                        "-C",
+                        str(machine.repo_path),
+                        "ls-remote",
+                        "--exit-code",
+                        config.git.remote,
+                        "HEAD",
+                    ],
+                    check=False,
+                )
+                auth_ok = auth.returncode == 0
+                print(f"{'OK' if auth_ok else 'FAIL'} {machine.name} Git remote access")
+                failures += not auth_ok
+            except RigSyncError as exc:
+                print(f"FAIL {machine.name} Git: {exc}")
+                failures += 1
     if failures:
         raise RigSyncError(f"doctor failed with {failures} check(s)")
 
@@ -294,6 +746,18 @@ def build_parser() -> argparse.ArgumentParser:
     source_p.add_argument("--to", required=True)
     source_p.add_argument("--dry-run", action="store_true")
     source_p.add_argument("--confirm", action="store_true")
+    deploy_p = sub.add_parser("deploy-revision")
+    deploy_p.add_argument("--wave", required=True)
+    deploy_p.add_argument("--revision", required=True)
+    deploy_p.add_argument("--branch", required=True)
+    deploy_p.add_argument("--machines", required=True)
+    deploy_p.add_argument("--dry-run", action="store_true")
+    deploy_p.add_argument("--confirm", action="store_true")
+    verify_p = sub.add_parser("verify-revision")
+    verify_p.add_argument("--wave", required=True)
+    verify_p.add_argument("--revision", required=True)
+    verify_p.add_argument("--branch", required=True)
+    verify_p.add_argument("--machines", required=True)
     prepare_p = sub.add_parser("prepare")
     prepare_p.add_argument("--machine", required=True)
     prepare_p.add_argument("--dry-run", action="store_true")
@@ -322,10 +786,28 @@ def main(argv: list[str] | None = None) -> int:
             if args.to not in config.machines:
                 raise RigSyncError(f"unknown machine: {args.to}")
             push_source(config, config.machines[args.to], args.dry_run, args.confirm)
+        elif args.command in {"deploy-revision", "verify-revision"}:
+            git = require_git(config)
+            if args.branch != git.branch:
+                raise RigSyncError(
+                    f"requested branch {args.branch!r} does not match sync.toml branch {git.branch!r}"
+                )
+            machines = selected_machines(config, args.machines)
+            if args.command == "deploy-revision":
+                deploy_revision(
+                    config,
+                    machines,
+                    args.wave,
+                    args.revision,
+                    args.dry_run,
+                    args.confirm,
+                )
+            else:
+                verify_revision(config, machines, args.wave, args.revision)
         elif args.command == "prepare":
             if args.machine not in config.machines:
                 raise RigSyncError(f"unknown machine: {args.machine}")
-            prepare(config.machines[args.machine], args.dry_run, args.confirm)
+            prepare(config, config.machines[args.machine], args.dry_run, args.confirm)
         else:
             if args.machine not in config.machines:
                 raise RigSyncError(f"unknown machine: {args.machine}")

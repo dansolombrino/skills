@@ -123,9 +123,8 @@ EXPERIMENTS.md rows.
 - **Reused verbatim on crash recovery.** A post-reboot relaunch is not a new dispatch: same id,
   same paths, same tmux session names. A new id is minted only for a new dispatch decision.
 - The id is a **pure timestamp — never a semantic slug.** It is replicated into `.status.json`,
-  EXPERIMENTS.md rows, tmux session names and one script path per run, so it must never need
-  renaming. Human meaning goes in the wave `README.md`, which is written once at generation as
-  an immutable launch-time intent record.
+  EXPERIMENTS.md rows, tmux session names, annotated Git tag `wave--<wave_id>`, and one script
+  path per run. Human meaning goes in the wave `README.md`, written once at generation.
 
 Two axes say where a run executed: the **rig** and the **GPU set** on it. A **lane** is the
 portion of a wave assigned to one GPU set on one rig.
@@ -162,6 +161,27 @@ because tmux sessions are global per rig across projects; the wave id lets succe
 coexist; the GPU field keeps parallel lanes apart. Generation, dispatch and recovery protocol:
 `sweep-dispatch`.
 
+### Tested Git revision gate
+
+Every current wave is one immutable Git deployment decision:
+
+- Generate its scripts and approved tracking/JOURNAL changes, stage the intended patch, and run
+  the experiment's recorded smoke command on rig-4090. Record the command and pass criterion in
+  the experiment's EXPERIMENTS.md section header.
+- If the smoke leaves the staged patch and execution worktree unchanged, commit it and create
+  annotated tag `wave--<wave_id>` at that commit. Push the configured branch and tag without
+  force; both must resolve to the same full SHA on GitHub.
+- `$rig-sync` may advance assigned rigs only by fast-forward to that SHA. Every rig must expose
+  the configured branch/remote, exact `HEAD` and tag, and clean tracked/staged/non-ignored
+  execution paths (`code/`, `config/`, `scripts/`, and root dependency manifests).
+- Verify the revision across the full rig set before any lane launches, per rig immediately
+  before tmux, inside every queued script before Python, and before crash recovery. Source drift
+  exits `86`, stops the lane, and is not an experiment failure.
+- Never change a rig to a different revision while that project's tmux lane or `running` status
+  remains active. Never reset, stash, clean, force-push, or merge non-fast-forward to make a rig
+  comply. Machine `.env`, datasets, artifacts, logs, and installed environments remain outside
+  the Git consistency claim.
+
 ## Rig fleet
 
 **The canonical name is the ssh alias** — dispatch runs `ssh <rig>`, and the name also lands in
@@ -197,15 +217,16 @@ the number of GPUs actually free varies per dispatch: **ask the user which rigs 
 are free** before proposing an assignment (`sweep-dispatch`, pre-launch gates). For `behemoth`
 that math defaults to `2.0 × 1` (gpu0), and only a grant for this wave widens it.
 
-Passwordless ssh between all rigs. Cross-machine source staging and artifact movement are
-**`$rig-sync`'s job**. Run its bundled doctor's checks before dispatch; if they fail, stop instead
-of inventing ad-hoc copying. The hub may be the current local host even when its SSH daemon is not
-listening: local work uses direct filesystem/tmux commands while peer work uses bounded SSH.
+Passwordless ssh between all rigs. Git/GitHub distributes launch source; selected artifact
+movement is **`$rig-sync`'s job**. Run its bundled doctor's checks before dispatch; if they fail,
+stop instead of inventing ad-hoc copying. The hub may be the current local host even when its SSH
+daemon is not listening: local work uses direct commands while peer work uses bounded SSH.
 
 ## Status ground truth — three signals, artifacts golden
 
-Every run leaves three on-disk signals. When they disagree, **artifacts win** (golden signal),
-then `.status.json`, then the log.
+Every run leaves three on-disk signals. First require a current wave's status revision/tag to
+match its Git tag; a mismatch is an integrity error and its outputs are not comparable. Once
+provenance is valid, disagreements resolve as **artifacts win**, then `.status.json`, then log.
 
 1. **Artifacts (golden)** — the run's expected final artifact (final checkpoint under
    `checkpoints/NNN_exp/<run_id path>/` and/or final eval output under
@@ -217,7 +238,8 @@ then `.status.json`, then the log.
    ```json
    {"state": "running|done|failed", "started": "<ISO>", "ended": "<ISO>|null",
     "elapsed_s": 1234.5, "heartbeat": "<ISO>", "progress": "epoch 3/10",
-    "wave_id": "20260731-162043", "gpu": "0"}
+    "wave_id": "20260731-162043", "gpu": "0",
+    "source_revision": "<40-char-sha>", "source_tag": "wave--20260731-162043"}
    ```
 
    Single writer during execution: the python script owns it; after a nonzero exit with no final
@@ -225,8 +247,10 @@ then `.status.json`, then the log.
    conflict-free by construction;
    deleting a run's outputs resets its status. `wave_id` is what lets reconciliation match the
    file to the right EXPERIMENTS.md row (rows are per (run, wave)); `gpu` rides along for
-   awareness. Both reach python as **environment variables** exported by the wave script
-   (`WAVE_ID`, `CUDA_VISIBLE_DEVICES`), deliberately **not** as config params — they must stay
+   awareness. Source fields prove which tested commit executed and must resolve through the wave
+   tag during reconciliation. All four reach python as **environment variables** exported by the
+   wave script (`WAVE_ID`, `CUDA_VISIBLE_DEVICES`, `SOURCE_REVISION`, `SOURCE_TAG`), deliberately
+   **not** as config params — they must stay
    out of the `guard_run_config` snapshot, or every re-launch in a new wave or on a different
    card would trip the run_id-collision hard error.
 3. **Run log** — the latest

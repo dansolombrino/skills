@@ -9,11 +9,11 @@ ROOT = Path(__file__).parents[1]
 
 
 class ResearchContractTests(unittest.TestCase):
-    def test_plugin_minor_version_and_new_skill(self) -> None:
+    def test_plugin_minor_version_and_git_revision_capability(self) -> None:
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "1.1.0")
+        self.assertEqual(manifest["version"], "1.2.0")
         self.assertTrue((ROOT / "plugins/research/skills/rig-sync/SKILL.md").is_file())
 
     def test_rig_sync_documents_canonical_3090_ti_hostname(self) -> None:
@@ -30,6 +30,9 @@ class ResearchContractTests(unittest.TestCase):
         ).read_text()
         self.assertIn("$rig-sync", skill)
         self.assertIn("current local hub", skill)
+        self.assertIn("deploy-revision", skill)
+        self.assertIn("verify-revision", skill)
+        self.assertNotIn("push-source` command to stage", templates)
         self.assertIn("When `<rig>` is the current local hub", templates)
 
     def test_behemoth_guard_precedes_python(self) -> None:
@@ -39,6 +42,30 @@ class ResearchContractTests(unittest.TestCase):
         guard = templates.index("BEHEMOTH_AUTHORIZED_GPUS")
         python = templates.index("python code/<NNN_exp>/<script>.py")
         self.assertLess(guard, python)
+
+    def test_git_revision_guard_precedes_python_and_records_provenance(self) -> None:
+        templates = (
+            ROOT / "plugins/research/skills/sweep-dispatch/references/templates.md"
+        ).read_text()
+        source_guard = templates.index("SOURCE_REVISION=$(git rev-parse")
+        python = templates.index("python code/<NNN_exp>/<script>.py")
+        self.assertLess(source_guard, python)
+        self.assertIn('"source_revision": os.environ.get("SOURCE_REVISION")', templates)
+        self.assertIn('"source_tag": os.environ.get("SOURCE_TAG")', templates)
+        self.assertIn('"$rc" -eq 86', templates)
+
+    def test_project_scaffold_and_design_require_git_and_smoke_contracts(self) -> None:
+        init_skill = (
+            ROOT / "plugins/research/skills/research-project-init/SKILL.md"
+        ).read_text()
+        design = (ROOT / "plugins/research/skills/experiment-design/SKILL.md").read_text()
+        configuration = (
+            ROOT / "plugins/research/skills/rig-sync/references/configuration.md"
+        ).read_text()
+        self.assertIn("GitHub remote", init_skill)
+        self.assertIn("Pre-dispatch smoke test", design)
+        self.assertIn("[git]", configuration)
+        self.assertIn("source_revision", design)
 
 
 if __name__ == "__main__":

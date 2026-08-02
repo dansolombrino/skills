@@ -1,6 +1,6 @@
 {
   "name": "research",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Design, synchronize, launch, track, and visualize reproducible research experiments across GPU rigs.",
   "author": {
     "name": "Dan Solombrino",
@@ -19,7 +19,7 @@
   "interface": {
     "displayName": "Research",
     "shortDescription": "Reproducible experiment operations across GPU rigs",
-    "longDescription": "Structure and synchronize research projects, design experiments, dispatch GPU sweeps, reconcile run state, maintain a research journal, and create result visualizations.",
+    "longDescription": "Structure research projects, design experiments, deploy exact tested Git revisions, dispatch GPU sweeps, reconcile run state, maintain a research journal, and create result visualizations.",
     "developerName": "Dan Solombrino",
     "category": "Developer Tools",
     "capabilities": [
@@ -29,7 +29,7 @@
     ],
     "defaultPrompt": [
       "Design a reproducible experiment and agree on its run identity.",
-      "Synchronize project source and artifacts across configured GPU rigs.",
+      "Deploy and verify an exact tested Git revision across configured GPU rigs.",
       "Plan and dispatch an approved sweep across available GPU rigs.",
       "Reconcile experiment status from artifacts, status files, and logs."
     ],

@@ -7,6 +7,10 @@ Keep artifact definitions and per-project locations in the project root:
 ```toml
 version = 1
 
+[git]
+remote = "origin"
+branch = "main"
+
 [artifacts.checkpoints]
 path = "checkpoints"
 depth = 2
@@ -34,6 +38,10 @@ repo_path = "/absolute/path/on/behemoth"
 ```
 
 `repo_path` must be absolute. Machine keys must match the canonical names used by dispatch.
+`git.remote` names the GitHub remote already configured on the hub; every rig must expose the
+same URL under that name. `git.branch` is the branch that dispatch commits are pushed to and that
+rigs may fast-forward. Revision deployment stops rather than switching branches or rewriting a
+working tree.
 
 ## User registry
 

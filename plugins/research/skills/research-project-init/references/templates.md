@@ -38,14 +38,16 @@ per experiment in its `.py` as `RUN_ID_PARAMS`).
 
 1. `cp .env.example .env` and fill in the secrets/paths.
 2. Create the project environment and record its exact setup command here once chosen.
-3. Configure `sync.toml`, then use the `$rig-sync` skill to prepare approved new roots and run its
-   bundled `python3 "$RIGSYNC_SCRIPT" doctor` check.
+3. Configure the approved GitHub remote/dispatch branch and `sync.toml`, then use `$rig-sync` to
+   clone approved new rig roots and run its bundled `python3 "$RIGSYNC_SCRIPT" doctor` check.
 
 ## Running
 
 Runs are launched in **waves** (one dispatch decision, id `YYYYMMDD-HHMMSS`) via
 `scripts/NNN_experiment_name/<flat run_id>/wave_<wave_id>/` — a `README.md` saying what the
-wave is, plus one self-contained `wave_<rig>_gpu<ids>.sh` per run. `logs/` mirrors that tree.
+wave is, plus one self-contained `wave_<rig>_gpu<ids>.sh` per run. Each wave is smoke-tested,
+committed, and tagged `wave--<wave_id>`; every rig verifies that exact commit before execution.
+`logs/` mirrors the scripts tree.
 ```
 
 ## AGENTS.md
@@ -127,8 +129,9 @@ Adjust with the user: they may want evaluations/ (small jsons) or plots/ committ
 
 ## sync.toml
 
-Create this from the `$rig-sync` skill's configuration reference. Declare the standard artifact groups and
-one absolute `repo_path` per intended rig; do not put SSH aliases, ports, users, or keys here.
+Create this from the `$rig-sync` skill's configuration reference. Declare `[git]` with the
+approved remote/branch, the standard artifact groups, and one absolute `repo_path` per intended
+rig; do not put SSH aliases, ports, users, or keys here.
 Run the bundled `python3 "$RIGSYNC_SCRIPT" doctor` before any remote dispatch.
 
 ## .githooks/pre-commit (journal guard)
@@ -311,11 +314,14 @@ class StatusWriter:
             "progress": None,
             "wave_id": os.environ.get("WAVE_ID"),
             "gpu": os.environ.get("CUDA_VISIBLE_DEVICES"),
+            "source_revision": os.environ.get("SOURCE_REVISION"),
+            "source_tag": os.environ.get("SOURCE_TAG"),
         }
         self._write()
         print(
             f"[status] RUN START {self.status['started']} "
-            f"wave={self.status['wave_id']} gpu={self.status['gpu']}",
+            f"wave={self.status['wave_id']} gpu={self.status['gpu']} "
+            f"source={self.status['source_revision']}",
             flush=True,
         )
         return self
