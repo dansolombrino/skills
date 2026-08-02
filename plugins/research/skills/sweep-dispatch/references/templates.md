@@ -32,6 +32,18 @@ if grep -q '"state": "done"' "$EVAL_DIR/.status.json" 2>/dev/null; then
 fi
 
 export CUDA_VISIBLE_DEVICES="<ids>"
+
+# ---- behemoth lanes ONLY: shared machine, only GPU 0 is ours. Omit this block on every other rig.
+# GPU auth: <"default (gpu0 only)" | "user-granted <YYYY-MM-DD> for wave <wave_id>: gpu <ids>">
+BEHEMOTH_AUTHORIZED_GPUS="<0 | the granted set>"
+for d in ${CUDA_VISIBLE_DEVICES//,/ }; do
+  case ",$BEHEMOTH_AUTHORIZED_GPUS," in
+    *",$d,"*) ;;
+    *) echo "[abort] gpu $d is not ours on behemoth (authorized: $BEHEMOTH_AUTHORIZED_GPUS)" >&2; exit 1 ;;
+  esac
+done
+# ---- end behemoth block
+
 export WAVE_ID="<wave_id>"
 mkdir -p "$EVAL_DIR" "$LOG_DIR"
 
@@ -68,6 +80,14 @@ Notes:
 - `CUDA_VISIBLE_DEVICES` and `WAVE_ID` are exported here and read by StatusWriter. They are env
   vars, **not** config params, so they never enter the `guard_run_config` snapshot — otherwise
   re-launching in a new wave or on a different card would trip the run_id-collision hard error.
+- The **behemoth GPU guard** is emitted on `behemoth` lanes only — the other rigs are ours
+  outright and get no such block. It sits *after* the done-guard (a finished run must still skip
+  cleanly, not abort) and *before* python. `BEHEMOTH_AUTHORIZED_GPUS` is `0` by default and
+  widened only by a user grant for that wave, which the `# GPU auth:` line records verbatim —
+  so the wave folder is the audit trail of why a run was allowed on a given card. The guard
+  replays the grant that existed at generation time: it catches drift *after* generation
+  (recovery relaunch, hand-edits, a copied script) but cannot validate the grant itself. The
+  pre-launch approval gate (`sweep-dispatch`, gate 2) remains the primary control.
 - The `tee` target is the **mirror of this script's own path under `logs/`**, with a timestamp
   suffix (conventions): history is kept, logs are never overwritten, and a crash-recovery
   relaunch inside the same wave never clobbers the earlier attempt. `${PIPESTATUS[0]}` keeps
@@ -95,8 +115,12 @@ moving work to a freer rig, ...>
 
 This run: `model=mlp,lr=1e-3,seed=0` → rig-4090, gpu 0.
 
-Full wave: 5 runs — 3 on rig-4090 (gpu 0), 2 on behemoth (gpu 0, gpu 1).
+Full wave: 4 runs — 3 on rig-4090 (gpu 0), 1 on behemoth (gpu 0).
 ```
+
+When the user has granted extra cards on `behemoth` for this wave, the README says so, in the
+same words as the script header — e.g. `Full wave: 6 runs — 3 on rig-4090 (gpu 0), 3 on
+behemoth (gpu 0, gpu 3; gpu 3 user-authorized 2026-08-02 for this wave only).`
 
 ## StatusWriter — the python side of the signaling system
 
@@ -220,9 +244,13 @@ are unchanged.
 Canonical names are the ssh aliases — they are what `ssh <rig>` must resolve.
 
 1. Ask the user **which rigs and which GPUs on them are usable** — never assume, never hardcode
-   the multi-GPU server's card count, and never treat an idle GPU on the shared `behemoth` as
-   available; only some of its cards are ours. Check load with `nvidia-smi` as well as ownership.
-2. Capacity of a lane = the rig's per-GPU weight × the number of GPUs in that lane's set.
+   the multi-GPU server's card count. On `behemoth` **only gpu0 is ours and only gpu0 may be
+   proposed**; every other card belongs to someone else, and an idle card is not an available
+   card (canon: `../../research-project-init/references/conventions.md` § Rig fleet). Wider use
+   needs an explicit user grant, good for that one wave only. Check load with `nvidia-smi` as
+   well as ownership.
+2. Capacity of a lane = the rig's per-GPU weight × the number of GPUs in that lane's set —
+   `behemoth` contributes `2.0 × 1` unless a grant for this wave says otherwise.
 3. Split the run list across lanes proportionally to capacity (≈ equal wall-clock per lane).
 4. Within one (wave, rig) the GPU sets must be **disjoint** — a run occupying every card makes
    that rig a single lane for the wave.

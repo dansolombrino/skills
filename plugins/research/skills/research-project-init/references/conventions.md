@@ -157,15 +157,30 @@ script filenames and tmux session names, so it must be the string that actually 
 | `rig-4090`     | 4090                                                                | 1        | 1.0                  | main/hub: projects start here, dispatch + EXPERIMENTS.md writes happen here |
 | `rig-3090-ti`  | 3090, 3090 ti, `rig-3090ti`                                         | 1        | 0.5                  | support |
 | `rig-3080-ti`  | 3080, 3080 ti, `rig-3080ti`                                         | 1        | 0.5                  | support |
-| `behemoth`     | pro 6000, 6000, bw, blackwell, `rig-6000-pro-blackwell`, `server-pro-6000-bw` | multiple | 2.0      | support |
+| `behemoth`     | pro 6000, 6000, bw, blackwell, `rig-6000-pro-blackwell`, `server-pro-6000-bw` | 8 (only GPU 0 is ours) | 2.0 | support |
 
-**Not every GPU on a shared machine is ours.** `behemoth` has 8 cards but only some belong to
-this fleet — never assume an idle GPU is available. Ask which cards are usable, every time.
+### behemoth is GPU-0-only
+
+`behemoth` is a **shared machine**. **GPU 0 is the only card that belongs to us.** Every other
+card is assigned to other people and is off-limits — an idle card is not an available card.
+
+Claude never proposes, generates, or launches on any behemoth GPU other than 0.
+
+The **only** exception: the user explicitly states they have obtained authorization for
+specific additional cards. That grant originates with the user and nowhere else — Claude never
+infers it from an idle `nvidia-smi`, never assumes it, never fishes for it with a leading
+question.
+
+A grant is **per-wave and never persisted**: no `.env` var, no config file. It covers the one
+dispatch it was given for; the next wave defaults back to GPU 0 and must be re-granted. Its
+only record is the `# GPU auth:` header baked into that wave's scripts (`sweep-dispatch`
+templates), which the scripts also enforce at runtime.
 
 The weight is **per GPU**, so a rig's capacity in the assignment math is
 `weight × (number of free GPUs)`. Never hardcode the server's card count — it can change, and
 the number of GPUs actually free varies per dispatch: **ask the user which rigs AND which GPUs
-are free** before proposing an assignment (`sweep-dispatch`, pre-launch gates).
+are free** before proposing an assignment (`sweep-dispatch`, pre-launch gates). For `behemoth`
+that math defaults to `2.0 × 1` (gpu0), and only a grant for this wave widens it.
 
 Passwordless ssh between all rigs. Cross-machine file movement (references/, checkpoints, code)
 is **rig-sync's job** — never invent ad-hoc sync.
