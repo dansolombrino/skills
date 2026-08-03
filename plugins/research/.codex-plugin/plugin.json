@@ -1,7 +1,7 @@
 {
   "name": "research",
-  "version": "1.3.0",
-  "description": "Design reproducible research software, integrate reference implementations, and synchronize, launch, track, and visualize experiments across GPU rigs.",
+  "version": "1.4.0",
+  "description": "Design reproducible research software, integrate references, enforce matching uv environments, and synchronize, launch, track, and visualize experiments across GPU rigs.",
   "author": {
     "name": "Dan Solombrino",
     "email": "dansolombrino@gmail.com",
@@ -14,14 +14,16 @@
     "gpu",
     "hydra",
     "reproducibility",
+    "environment-parity",
+    "uv",
     "reference-code",
     "adaptation"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Research",
-    "shortDescription": "Reproducible research and reference-code workflows",
-    "longDescription": "Structure research projects, design experiments, integrate reference implementations through explicit source-to-target deviation approval, deploy exact tested Git revisions, dispatch GPU sweeps, reconcile run state, maintain a research journal, and create result visualizations.",
+    "shortDescription": "Reproducible research across GPU rigs",
+    "longDescription": "Structure research projects, design experiments, integrate reference implementations through explicit source-to-target deviation approval, provision and verify exact uv environments, deploy tested Git revisions, dispatch GPU sweeps, reconcile run state, maintain a research journal, and create result visualizations.",
     "developerName": "Dan Solombrino",
     "category": "Developer Tools",
     "capabilities": [
@@ -31,6 +33,7 @@
     ],
     "defaultPrompt": [
       "Design a reproducible experiment and agree on its run identity.",
+      "Provision and verify one exact uv environment across configured GPU rigs.",
       "Integrate reference code and approve every source-to-target deviation before editing.",
       "Deploy, dispatch, and reconcile an approved experiment wave across GPU rigs."
     ],

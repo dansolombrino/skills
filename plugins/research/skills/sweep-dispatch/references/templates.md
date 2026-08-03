@@ -44,7 +44,7 @@ if [ "$ACTUAL_REVISION" != "$SOURCE_REVISION" ]; then
   echo "[source-drift] HEAD=$ACTUAL_REVISION expected=$SOURCE_REVISION ($SOURCE_TAG)" >&2
   exit 86
 fi
-SOURCE_PATHS=(code config scripts pyproject.toml uv.lock poetry.lock setup.cfg setup.py Pipfile Pipfile.lock requirements*.txt environment*.yml environment*.yaml Dockerfile*)
+SOURCE_PATHS=(code config scripts .python-version pyproject.toml uv.toml uv.lock sync.toml poetry.lock setup.cfg setup.py Pipfile Pipfile.lock requirements*.txt environment*.yml environment*.yaml Dockerfile*)
 if ! git diff --quiet -- "${SOURCE_PATHS[@]}" || \
    ! git diff --cached --quiet -- "${SOURCE_PATHS[@]}" || \
    [ -n "$(git ls-files --others --exclude-standard -- "${SOURCE_PATHS[@]}")" ]; then
@@ -66,11 +66,29 @@ for d in ${CUDA_VISIBLE_DEVICES//,/ }; do
 done
 # ---- end behemoth block
 
+# exact environment guard: runtime drift/incompatibility blocks this lane with reserved exit 87
+EXPECTED_ENVIRONMENT_FINGERPRINT="<64-char fingerprint verified on every assigned rig>"
+ACTUAL_ENVIRONMENT_FINGERPRINT=$(
+  .venv/bin/python code/common/environment.py fingerprint --lock uv.lock 2>/dev/null
+) || {
+  echo "[environment-drift] cannot fingerprint .venv" >&2; exit 87;
+}
+if [ "$ACTUAL_ENVIRONMENT_FINGERPRINT" != "$EXPECTED_ENVIRONMENT_FINGERPRINT" ]; then
+  echo "[environment-drift] actual=$ACTUAL_ENVIRONMENT_FINGERPRINT expected=$EXPECTED_ENVIRONMENT_FINGERPRINT" >&2
+  exit 87
+fi
+ENVIRONMENT_SMOKE=(<shell-quoted gpu_smoke tokens after the leading python>)
+if ! .venv/bin/python "${ENVIRONMENT_SMOKE[@]}"; then
+  echo "[environment-drift] GPU compatibility smoke failed on $CUDA_VISIBLE_DEVICES" >&2
+  exit 87
+fi
+export ENVIRONMENT_FINGERPRINT="$ACTUAL_ENVIRONMENT_FINGERPRINT"
+
 mkdir -p "$EVAL_DIR" "$LOG_DIR" || exit 1
 
 # full terminal capture: everything the run writes to stdout/stderr lands in the run log
 HYDRA_ARGS=(<tokens produced by hydra_override_arg; one per override>)
-python code/<NNN_exp>/<script>.py "${HYDRA_ARGS[@]}" 2>&1 \
+.venv/bin/python code/<NNN_exp>/<script>.py "${HYDRA_ARGS[@]}" 2>&1 \
   | tee "$LOG_DIR/wave_<rig>_gpu<ids>-$(date +%Y%m%d-%H%M%S).log"
 pipeline_rc=("${PIPESTATUS[@]}")
 python_rc=${pipeline_rc[0]}
@@ -83,14 +101,15 @@ fi
 
 # fallback: if python died before StatusWriter could finalize, mark the run failed
 if [ $rc -ne 0 ] && [ ! -e "$ARTIFACT" ]; then
-  python - "$EVAL_DIR/.status.json" <<'EOF'
+  .venv/bin/python - "$EVAL_DIR/.status.json" <<'EOF'
 import json, os, sys, datetime, pathlib
 p = pathlib.Path(sys.argv[1])
 s = json.loads(p.read_text()) if p.exists() else {}
 s.update(state="failed", ended=datetime.datetime.now().isoformat(timespec="seconds"),
          wave_id=os.environ.get("WAVE_ID"), gpu=os.environ.get("CUDA_VISIBLE_DEVICES"),
          source_revision=os.environ.get("SOURCE_REVISION"),
-         source_tag=os.environ.get("SOURCE_TAG"))
+         source_tag=os.environ.get("SOURCE_TAG"),
+         environment_fingerprint=os.environ.get("ENVIRONMENT_FINGERPRINT"))
 tmp = p.with_suffix(".json.tmp")
 tmp.write_text(json.dumps(s))
 tmp.replace(p)
@@ -112,10 +131,15 @@ Notes:
 - The Git guard resolves `wave--<wave_id>`, requires it and `HEAD` to name the same commit, and
   rejects tracked/staged/non-ignored-untracked execution drift before any status/log write.
   Reserved exit `86` means deployment drift, not experiment failure; the lane loop stops on it.
-- `CUDA_VISIBLE_DEVICES`, `WAVE_ID`, `SOURCE_REVISION`, and `SOURCE_TAG` are exported here and read
+- `CUDA_VISIBLE_DEVICES`, `WAVE_ID`, `SOURCE_REVISION`, `SOURCE_TAG`, and
+  `ENVIRONMENT_FINGERPRINT` are exported here and read
   by StatusWriter. They are env vars, **not** config params, so they never enter the
   `guard_run_config` snapshot — otherwise relaunch placement/provenance would trip the collision
   guard.
+- The environment guard uses `.venv/bin/python` and the tracked fingerprint helper; it never
+  invokes `uv sync`. Generate `ENVIRONMENT_SMOKE` from `sync.toml`'s argv after removing its
+  leading `python`. Exit `87` means runtime drift or GPU incompatibility, not an experiment
+  failure, and stops the lane.
 - The **behemoth GPU guard** is emitted on `behemoth` lanes only — the other rigs are ours
   outright and get no such block. It sits *after* the artifact guard (a finished run must still skip
   cleanly, not abort) and *before* python. `BEHEMOTH_AUTHORIZED_GPUS` is `0` by default and
@@ -148,6 +172,9 @@ Dispatched 2026-07-31 16:20 from rig-4090.
 
 Source tag: `wave--20260731-162043` (the annotated tag and configured branch must resolve to the
 same commit on every assigned rig).
+
+Environment fingerprint: `<64-char sha256>` (verified with the project GPU smoke on every
+assigned lane before launch).
 
 Why this wave: <the reason these runs are being launched now — first probe of the grid, scale-up
 after a promising probe, re-launch of what failed in <earlier wave id>, re-run after a code fix,
@@ -200,11 +227,13 @@ class StatusWriter:
                        "wave_id": os.environ.get("WAVE_ID"),
                        "gpu": os.environ.get("CUDA_VISIBLE_DEVICES"),
                        "source_revision": os.environ.get("SOURCE_REVISION"),
-                       "source_tag": os.environ.get("SOURCE_TAG")}
+                       "source_tag": os.environ.get("SOURCE_TAG"),
+                       "environment_fingerprint": os.environ.get("ENVIRONMENT_FINGERPRINT")}
         self._write()
         print(f"[status] RUN START {self.status['started']} "
               f"wave={self.status['wave_id']} gpu={self.status['gpu']} "
-              f"source={self.status['source_revision']}", flush=True)
+              f"source={self.status['source_revision']} "
+              f"environment={self.status['environment_fingerprint']}", flush=True)
         return self
 
     def heartbeat(self, progress=None):
@@ -239,7 +268,7 @@ A **lane** is one GPU set on one rig. There is no launcher file: the lane's queu
 its wave scripts, walked sequentially by a shell loop. Lanes on the same rig run in parallel.
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <project path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; rc=\$?; [ \"\$rc\" -eq 86 ] && exit 86; done'"
+ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <project path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; rc=\$?; { [ \"\$rc\" -eq 86 ] || [ \"\$rc\" -eq 87 ]; } && exit \"\$rc\"; done'"
 ```
 
 When `<rig>` is the current local hub, the hub subagent runs the inner command directly instead
@@ -247,7 +276,7 @@ of self-SSH:
 
 ```bash
 tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_rig-4090_gpu<ids> \
-  'cd <project path> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_rig-4090_gpu<ids>.sh; do bash "$s"; rc=$?; [ "$rc" -eq 86 ] && exit 86; done'
+  'cd <project path> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_rig-4090_gpu<ids>.sh; do bash "$s"; rc=$?; { [ "$rc" -eq 86 ] || [ "$rc" -eq 87 ]; } && exit "$rc"; done'
 ```
 
 - Glob expansion sorts lexicographically ⇒ deterministic ordering.
@@ -257,8 +286,9 @@ tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_rig-4090_gpu<ids> \
   procedure.
 
 Before dispatching: use `$rig-sync deploy-revision` then `verify-revision` for the approved wave
-commit across the complete assigned rig set. Each rig subagent repeats `verify-revision` for its
-target immediately before tmux. Then remind
+commit across the complete assigned rig set; run approved `$environment-sync provision` as
+needed, then verify the full set and every lane. Each rig subagent repeats both read-only gates
+for its target immediately before tmux. Then remind
 the user how to watch: for a peer, `ssh <rig>` →
 `tmux attach -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>`; for the current local hub, run the
 `tmux attach` command directly.
@@ -294,7 +324,7 @@ session already exists); the self-guarded wave scripts then skip done runs and r
 interrupted ones:
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux has-session -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 2>/dev/null || tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <project path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; rc=\$?; [ \"\$rc\" -eq 86 ] && exit 86; done'"
+ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux has-session -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 2>/dev/null || tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <project path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; rc=\$?; { [ \"\$rc\" -eq 86 ] || [ \"\$rc\" -eq 87 ]; } && exit \"\$rc\"; done'"
 ```
 
 For a local hub lane, run the same `tmux has-session ... || tmux new-session ...` command directly

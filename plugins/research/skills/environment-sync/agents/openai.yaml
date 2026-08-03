@@ -1,0 +1,4 @@
+interface:
+  display_name: "Environment Sync"
+  short_description: "Provision and verify matching rig environments"
+  default_prompt: "Use $environment-sync to provision and verify an exact uv environment across configured research rigs."

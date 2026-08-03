@@ -345,6 +345,10 @@ class RigSyncTests(unittest.TestCase):
             drift = rigsync.execution_drift(machine, ["code"])
             self.assertTrue(any("local_only.py" in entry for entry in drift))
 
+    def test_environment_contract_files_are_revision_guarded(self) -> None:
+        for path in (".python-version", "pyproject.toml", "uv.toml", "uv.lock", "sync.toml"):
+            self.assertIsNotNone(rigsync.DEPENDENCY_FILE_RE.fullmatch(path), path)
+
 
 if __name__ == "__main__":
     unittest.main()

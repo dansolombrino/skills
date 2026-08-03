@@ -46,7 +46,8 @@ class Config:
 WAVE_RE = re.compile(r"^\d{8}-\d{6}$")
 REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
 DEPENDENCY_FILE_RE = re.compile(
-    r"^(?:pyproject\.toml|uv\.lock|poetry\.lock|setup\.cfg|setup\.py|"
+    r"^(?:pyproject\.toml|uv\.toml|uv\.lock|\.python-version|sync\.toml|"
+    r"poetry\.lock|setup\.cfg|setup\.py|"
     r"Pipfile(?:\.lock)?|Dockerfile(?:\..+)?|requirements[^/]*\.txt|"
     r"environment[^/]*\.ya?ml)$"
 )

@@ -1,4 +1,4 @@
 interface:
   display_name: "Rig Sync"
   short_description: "Deploy exact revisions and synchronize artifacts"
-  default_prompt: "Use $rig-sync to deploy and verify an exact Git revision across configured GPU rigs or safely synchronize selected artifacts."
+  default_prompt: "Use $rig-sync to deploy and verify an exact Git revision or synchronize artifacts, then pair launch work with $environment-sync."

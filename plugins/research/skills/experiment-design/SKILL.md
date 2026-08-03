@@ -44,7 +44,7 @@ Any change that adds/removes/renames a behavior-affecting config param (integrat
 
 Every training/eval script wraps its work in the **StatusWriter** pattern (`code/common/status.py`; template in `sweep-dispatch` references/templates.md):
 
-- owns `evaluations/NNN_exp/<run_id path>/.status.json` (state running/done/failed, started, ended, elapsed_s, heartbeat, progress) plus `wave_id`, `gpu`, `source_revision`, and `source_tag`, read from environment exported by the revision-verified wave script — env vars, never config params, so they stay out of the `guard_run_config` snapshot;
+- owns `evaluations/NNN_exp/<run_id path>/.status.json` (state running/done/failed, started, ended, elapsed_s, heartbeat, progress) plus `wave_id`, `gpu`, `source_revision`, `source_tag`, and `environment_fingerprint`, read from environment exported by the source/environment-verified wave script — env vars, never config params, so they stay out of the `guard_run_config` snapshot;
 - calls `heartbeat(progress=...)` at least once per epoch/major step — keep `progress` a simple `<done>/<total>` shape, EXPERIMENTS.md extrapolates its `eta` column from it;
 - prints start time, end time, and elapsed to stdout — the wave script tees all stdout+stderr to the mirror of its own path under `logs/` (`logs/NNN_exp/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-<timestamp>.log`), so scripts need no separate file logging, and the elapsed lands in EXPERIMENTS.md as the run's reference runtime.
 

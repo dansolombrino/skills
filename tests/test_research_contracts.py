@@ -13,10 +13,13 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "1.3.0")
+        self.assertEqual(manifest["version"], "1.4.0")
         self.assertTrue((ROOT / "plugins/research/skills/rig-sync/SKILL.md").is_file())
         self.assertTrue(
             (ROOT / "plugins/research/skills/integrate-reference-code/SKILL.md").is_file()
+        )
+        self.assertTrue(
+            (ROOT / "plugins/research/skills/environment-sync/SKILL.md").is_file()
         )
 
     def test_reference_code_integration_requires_informed_delta_approval(self) -> None:
@@ -53,12 +56,29 @@ class ResearchContractTests(unittest.TestCase):
         self.assertNotIn("push-source` command to stage", templates)
         self.assertIn("When `<rig>` is the current local hub", templates)
 
+    def test_dispatch_requires_environment_parity_and_provenance(self) -> None:
+        skill = (ROOT / "plugins/research/skills/sweep-dispatch/SKILL.md").read_text()
+        templates = (
+            ROOT / "plugins/research/skills/sweep-dispatch/references/templates.md"
+        ).read_text()
+        self.assertIn("$environment-sync", skill)
+        self.assertIn("EXPECTED_ENVIRONMENT_FINGERPRINT", templates)
+        self.assertIn("ENVIRONMENT_FINGERPRINT", templates)
+        self.assertIn(
+            '"environment_fingerprint": os.environ.get("ENVIRONMENT_FINGERPRINT")',
+            templates,
+        )
+        environment_guard = templates.index("EXPECTED_ENVIRONMENT_FINGERPRINT")
+        python = templates.index(".venv/bin/python code/<NNN_exp>/<script>.py")
+        self.assertLess(environment_guard, python)
+        self.assertIn('"$rc" -eq 87', templates)
+
     def test_behemoth_guard_precedes_python(self) -> None:
         templates = (
             ROOT / "plugins/research/skills/sweep-dispatch/references/templates.md"
         ).read_text()
         guard = templates.index("BEHEMOTH_AUTHORIZED_GPUS")
-        python = templates.index("python code/<NNN_exp>/<script>.py")
+        python = templates.index(".venv/bin/python code/<NNN_exp>/<script>.py")
         self.assertLess(guard, python)
 
     def test_git_revision_guard_precedes_python_and_records_provenance(self) -> None:
@@ -66,7 +86,7 @@ class ResearchContractTests(unittest.TestCase):
             ROOT / "plugins/research/skills/sweep-dispatch/references/templates.md"
         ).read_text()
         source_guard = templates.index("SOURCE_REVISION=$(git rev-parse")
-        python = templates.index("python code/<NNN_exp>/<script>.py")
+        python = templates.index(".venv/bin/python code/<NNN_exp>/<script>.py")
         self.assertLess(source_guard, python)
         self.assertIn('"source_revision": os.environ.get("SOURCE_REVISION")', templates)
         self.assertIn('"source_tag": os.environ.get("SOURCE_TAG")', templates)

@@ -1,6 +1,6 @@
 ---
 name: rig-sync
-description: Deploy exact tested Git revisions and synchronize selected research artifacts across configured GPU rigs. Use when Codex needs to prepare a rig clone, verify GitHub access and rig identity, fast-forward machines to an approved wave commit, check cross-rig revision consistency, or inspect and transfer selected artifacts. Do not use for continuous mirroring, destructive Git recovery, deletion, or unapproved remote writes.
+description: Deploy exact tested Git revisions and synchronize selected research artifacts across configured GPU rigs. Use when Codex needs to prepare a rig clone, verify GitHub access and rig identity, fast-forward machines to an approved wave commit, check cross-rig revision consistency, or inspect and transfer selected artifacts. Pair with environment-sync for installed runtime parity. Do not use for environment provisioning, continuous mirroring, destructive Git recovery, deletion, or unapproved remote writes.
 ---
 
 # rig-sync
@@ -12,7 +12,8 @@ or the user registry. Git/GitHub distributes launch source; rsync moves selected
 ## Safety contract
 
 - Run `doctor` before dispatch, `verify-revision` before every initial/recovery launch, and
-  `status` before artifact movement.
+  `status` before artifact movement. Run `$environment-sync verify` separately after revision
+  deployment; Git consistency does not prove installed-environment consistency.
 - Show a `--dry-run` before every remote write, then get user approval for the named source,
   destination, and selector. An approved assignment may explicitly authorize its commit, tag,
   push, and fast-forward deployment to the named rigs.
@@ -48,9 +49,10 @@ python3 "$RIGSYNC_SCRIPT" pull evaluations/000_exp --from rig-3090-ti --confirm
 
 `deploy-revision` fetches the configured branch and annotated `wave--<wave_id>` tag, requires both
 to resolve to the approved SHA, and advances only with `git merge --ff-only`. It verifies exact
-`HEAD`, branch, remote URL, tag, and clean `code/`, `config/`, `scripts/`, and dependency manifests
-afterward. `$sweep-dispatch` uses this gate; `push-source` remains available only for legacy or
-non-launch staging and never establishes launch consistency.
+`HEAD`, branch, remote URL, tag, and clean `code/`, `config/`, `scripts/`, dependency manifests,
+Python/uv pins, and `sync.toml` afterward. `$sweep-dispatch` combines this gate with
+`$environment-sync`; `push-source` remains available only for legacy or non-launch staging and
+never establishes launch consistency.
 
 Artifact selectors are `<group>` or `<group>/<relative/path>`, where `<group>` is declared under
 `[artifacts]` in `sync.toml`. `pull` means peer → current rig; `push` means current rig → peer.

@@ -18,7 +18,7 @@ Plotting code conventions. Canon: `../research-project-init/references/conventio
 Plotting is too dynamic to standardize into configs. Each script takes CLI args via argparse, with argument names matching **1:1** the producer experiment's param names (run_id/config params), plus extra viz-specific args as needed:
 
 ```bash
-python visualizations/000_grokking/plot_loss.py --model mlp --lr 1e-3 --seed 0
+.venv/bin/python visualizations/000_grokking/plot_loss.py --model mlp --lr 1e-3 --seed 0
 ```
 
 ## Output paths — per-script subfolder + partial run_id rule (default; user has final choice per case)

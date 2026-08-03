@@ -1,4 +1,4 @@
 interface:
   display_name: "Experiment Tracking"
   short_description: "Reconcile experiment state from on-disk signals"
-  default_prompt: "Use $experiments-tracking to reconcile EXPERIMENTS.md from artifacts, status files, and logs."
+  default_prompt: "Use $experiments-tracking to reconcile EXPERIMENTS.md from provenance-checked artifacts, status files, and logs."

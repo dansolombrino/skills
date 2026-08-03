@@ -37,9 +37,10 @@ per experiment in its `.py` as `RUN_ID_PARAMS`).
 ## Setup
 
 1. `cp .env.example .env` and fill in the secrets/paths.
-2. Create the project environment and record its exact setup command here once chosen.
-3. Configure the approved GitHub remote/dispatch branch and `sync.toml`, then use `$rig-sync` to
-   clone approved new rig roots and run its bundled `python3 "$RIGSYNC_SCRIPT" doctor` check.
+2. Use `$environment-sync` to provision the exact `uv.lock` + `.python-version` environment and
+   run the project GPU smoke.
+3. Configure the approved GitHub remote/dispatch branch and `sync.toml`, then use `$rig-sync` and
+   `$environment-sync` to prepare and verify approved rig roots.
 
 ## Running
 
@@ -47,7 +48,8 @@ Runs are launched in **waves** (one dispatch decision, id `YYYYMMDD-HHMMSS`) via
 `scripts/NNN_experiment_name/<flat run_id>/wave_<wave_id>/` — a `README.md` saying what the
 wave is, plus one self-contained `wave_<rig>_gpu<ids>.sh` per run. Each wave is smoke-tested,
 committed, and tagged `wave--<wave_id>`; every rig verifies that exact commit before execution.
-`logs/` mirrors the scripts tree.
+Every run also verifies and records the wave's approved environment fingerprint. `logs/` mirrors
+the scripts tree.
 ```
 
 ## AGENTS.md
@@ -131,8 +133,17 @@ Adjust with the user: they may want evaluations/ (small jsons) or plots/ committ
 
 Create this from the `$rig-sync` skill's configuration reference. Declare `[git]` with the
 approved remote/branch, the standard artifact groups, and one absolute `repo_path` per intended
-rig; do not put SSH aliases, ports, users, or keys here.
-Run the bundled `python3 "$RIGSYNC_SCRIPT" doctor` before any remote dispatch.
+rig; do not put SSH aliases, ports, users, or keys here. Add `[environment]` from
+`$environment-sync` with `manager = "uv"` and the approved tokenized GPU smoke command. Run both
+skills' doctor checks before remote dispatch.
+
+## Python environment
+
+Create `pyproject.toml` with the project metadata, dependencies, exact
+`[tool.uv].required-version = "==X.Y.Z"`, and `python-preference = "managed"`. Commit an exact
+`X.Y.Z` `.python-version` and the generated `uv.lock`. Copy
+`$environment-sync/assets/environment.py` to `code/common/environment.py`; do not rewrite its
+fingerprint algorithm per project. Keep `.venv/` and `.rigsync_cache/` ignored.
 
 ## .githooks/pre-commit (journal guard)
 
@@ -166,7 +177,7 @@ cd "$(dirname "$0")/../../../.." || exit 1  # to project root (depth varies with
 LOGDIR="logs/NNN_experiment/<run_id_flat>/wave_<wave_id>"
 mkdir -p "$LOGDIR"
 HYDRA_ARGS=(<tokens produced by hydra_override_arg; one per override>)
-python code/NNN_experiment/script.py "${HYDRA_ARGS[@]}" 2>&1 \
+.venv/bin/python code/NNN_experiment/script.py "${HYDRA_ARGS[@]}" 2>&1 \
   | tee "$LOGDIR/wave_<rig>_gpu<ids>-$(date +%Y%m%d-%H%M%S).log"
 ```
 
@@ -316,12 +327,14 @@ class StatusWriter:
             "gpu": os.environ.get("CUDA_VISIBLE_DEVICES"),
             "source_revision": os.environ.get("SOURCE_REVISION"),
             "source_tag": os.environ.get("SOURCE_TAG"),
+            "environment_fingerprint": os.environ.get("ENVIRONMENT_FINGERPRINT"),
         }
         self._write()
         print(
             f"[status] RUN START {self.status['started']} "
             f"wave={self.status['wave_id']} gpu={self.status['gpu']} "
-            f"source={self.status['source_revision']}",
+            f"source={self.status['source_revision']} "
+            f"environment={self.status['environment_fingerprint']}",
             flush=True,
         )
         return self

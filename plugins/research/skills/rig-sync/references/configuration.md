@@ -11,6 +11,10 @@ version = 1
 remote = "origin"
 branch = "main"
 
+[environment]
+manager = "uv"
+gpu_smoke = ["python", "code/common/environment_smoke.py"]
+
 [artifacts.checkpoints]
 path = "checkpoints"
 depth = 2
@@ -42,6 +46,9 @@ repo_path = "/absolute/path/on/behemoth"
 same URL under that name. `git.branch` is the branch that dispatch commits are pushed to and that
 rigs may fast-forward. Revision deployment stops rather than switching branches or rewriting a
 working tree.
+
+`[environment]` is owned by `$environment-sync`; it lives here so the same project and machine
+selection drive both revision and runtime parity. `rigsync.py` preserves but does not execute it.
 
 ## User registry
 

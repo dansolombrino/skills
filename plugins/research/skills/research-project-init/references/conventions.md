@@ -11,6 +11,7 @@ assignment, checkpoint choices, wandb layout, journal entries. Never decide thes
 ├── checkpoints/     # checkpoints from trainings/finetunings
 ├── code/            # experiment code (hydra-configured python)
 │   └── common/
+│       ├── environment.py # stable installed-environment fingerprint
 │       ├── run_id.py      # shared run identity + collision guard
 │       └── status.py      # atomic run lifecycle + progress signaling
 ├── config/          # hydra yaml configs for code/
@@ -23,6 +24,10 @@ assignment, checkpoint choices, wandb layout, journal entries. Never decide thes
 ├── references/      # papers/codebases to reference; gitignored, dir tracked, rig-synced
 ├── .env             # secrets + machine-varying paths ONLY (gitignored)
 ├── .env.example     # committed mirror of .env keys with placeholders
+├── .python-version  # exact Python patch used on every rig
+├── pyproject.toml   # dependencies + exact required uv version
+├── uv.lock          # exact cross-rig dependency resolution
+├── sync.toml        # Git/artifact/machine paths + environment smoke contract
 ├── README.md        # static scaffold (structure, setup, how-to)
 ├── AGENTS.md        # thin: project specifics + light awareness map
 ├── JOURNAL.md       # story: prose log of what/why/learned (append-only)
@@ -180,7 +185,26 @@ Every current wave is one immutable Git deployment decision:
 - Never change a rig to a different revision while that project's tmux lane or `running` status
   remains active. Never reset, stash, clean, force-push, or merge non-fast-forward to make a rig
   comply. Machine `.env`, datasets, artifacts, logs, and installed environments remain outside
-  the Git consistency claim.
+  the Git consistency claim and require the separate parity gate below.
+
+### Verified environment parity gate
+
+Every wave also carries one immutable user-space environment identity:
+
+- The project commits `pyproject.toml`, `uv.lock`, an exact `.python-version`,
+  `code/common/environment.py`, and `[environment]` in `sync.toml`. Use only uv's configured
+  default dependency groups; never add per-rig extras or manual packages.
+- `$environment-sync` installs the exact required uv and Python without `sudo`, materializes each
+  machine's ignored `.venv` with `uv sync --frozen --exact`, and refuses mutation while project
+  lanes or `running` statuses exist.
+- The fingerprint hashes the lock, exact interpreter, and canonical installed package
+  names/versions. It must match the hub on every assigned rig. OS/architecture must be compatible;
+  GPU/driver differences are allowed only when the project smoke passes under the assigned GPU set.
+- Verify the full set after revision deployment, per rig immediately before tmux, inside every
+  queued script before experiment Python, and before recovery. Environment drift exits `87`,
+  stops the lane, and is not an experiment failure. Launch scripts verify only; they never sync.
+- Export `ENVIRONMENT_FINGERPRINT` into the run and record it in `.status.json`. Outputs whose
+  source or environment provenance differs from the wave are not comparable.
 
 ## Rig fleet
 
@@ -239,7 +263,8 @@ provenance is valid, disagreements resolve as **artifacts win**, then `.status.j
    {"state": "running|done|failed", "started": "<ISO>", "ended": "<ISO>|null",
     "elapsed_s": 1234.5, "heartbeat": "<ISO>", "progress": "epoch 3/10",
     "wave_id": "20260731-162043", "gpu": "0",
-    "source_revision": "<40-char-sha>", "source_tag": "wave--20260731-162043"}
+    "source_revision": "<40-char-sha>", "source_tag": "wave--20260731-162043",
+    "environment_fingerprint": "<64-char-sha256>"}
    ```
 
    Single writer during execution: the python script owns it; after a nonzero exit with no final
@@ -248,8 +273,9 @@ provenance is valid, disagreements resolve as **artifacts win**, then `.status.j
    deleting a run's outputs resets its status. `wave_id` is what lets reconciliation match the
    file to the right EXPERIMENTS.md row (rows are per (run, wave)); `gpu` rides along for
    awareness. Source fields prove which tested commit executed and must resolve through the wave
-   tag during reconciliation. All four reach python as **environment variables** exported by the
-   wave script (`WAVE_ID`, `CUDA_VISIBLE_DEVICES`, `SOURCE_REVISION`, `SOURCE_TAG`), deliberately
+   tag during reconciliation. The placement/source fields and environment fingerprint reach
+   Python as **environment variables** exported by the wave script (`WAVE_ID`,
+   `CUDA_VISIBLE_DEVICES`, `SOURCE_REVISION`, `SOURCE_TAG`, `ENVIRONMENT_FINGERPRINT`), deliberately
    **not** as config params — they must stay
    out of the `guard_run_config` snapshot, or every re-launch in a new wave or on a different
    card would trip the run_id-collision hard error.

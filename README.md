@@ -28,8 +28,9 @@ codex plugin add research@dansolombrino-skills
 ```
 
 Start a new Codex CLI or desktop session after installation so the bundled skills are loaded.
-Cross-rig workflows require the bundled `rig-sync` configuration plus GitHub access on every rig;
-the plugin stops before remote dispatch when either prerequisite is unavailable.
+Cross-rig workflows require the bundled `rig-sync` and `environment-sync` contracts plus GitHub
+access on every rig; the plugin stops before remote dispatch when source or runtime parity cannot
+be proven.
 
 ## Update an installation
 
