@@ -1,6 +1,6 @@
 ---
 name: experiments-tracking
-description: Keep EXPERIMENTS.md true — run tables, wave/rig/gpu placement, status lifecycle (todo/inpr/done/failed), run timing (started/progress/eta/ended/elapsed), reconciliation from .status.json markers + artifacts. Use in any session in a structured research project when runs are generated, launched, checked, or discussed, when the user asks about experiment status, or at session start to reconcile stale statuses.
+description: Keep EXPERIMENTS.md true and derive active-run, lane, and wave ETAs — run tables, wave/rig/gpu placement, status lifecycle (todo/inpr/done/failed), run timing (started/progress/eta/ended/elapsed), and reconciliation from .status.json markers plus artifacts. Use in any structured research session when runs are generated, launched, checked, reported, or discussed, when the user asks about experiment status or ETA, or at session start to reconcile stale statuses.
 ---
 
 # experiments-tracking
@@ -12,7 +12,11 @@ EXPERIMENTS.md is the project's **state** (the story lives in JOURNAL.md). Canon
 - **Single-writer: EXPERIMENTS.md is only ever edited on rig-4090.** On any other rig, report statuses verbally but never edit the file. During a launch session, only the orchestrator chat writes it — monitoring subagents never do.
 - Ground truth is NOT the md — it is the three on-disk signals (hierarchy in `conventions.md`): the per-run status first proves the current wave's Git revision/tag and environment fingerprint; after that, the **expected final artifact** is golden for completion, followed by `.status.json` state/timing/progress and the latest run log. A missing `.status.json`/dir means the run never started (or its outputs were deleted ⇒ it is no longer done).
 - **One (run, wave) = one table row = one line.** A run re-launched in a later wave gets a **new row**, never an in-place update — the table itself carries the execution history. One line per row keeps parallel-session git merges clean.
-- **Every status report to the user opens with the current date and time** — run `date '+%Y-%m-%d %H:%M'` and lead with it ("Status as of 2026-07-20 16:45 — ...").
+- **Every status report to the user opens with its message-written time** — obtain a local
+  timezone-bearing timestamp immediately before sending (for example
+  `date '+%Y-%m-%dT%H:%M:%S%:z'`) and lead exactly with
+  `Status written <timestamp> —`. Never substitute the status heartbeat/observation time; report
+  heartbeat age separately.
 
 ## Format
 
@@ -35,8 +39,38 @@ smoke pass: exit 0 and evaluations/000_grokking/smoke/result.json says one step 
   Git tag is `wave--<wave>`. `gpu` — the GPU set it occupied, opaque identity. Both are read from
   `.status.json`; before the run starts they come from the generated script's path.
 - Statuses: `todo` → `inpr` → `done` | `failed`. `started`/`ended` as `MM-DD HH:MM` (year only if ambiguous), `elapsed` compact (`45m`, `1h45m`, `2d3h`) from `elapsed_s`. **Elapsed values are the project's reference runtimes** — use them to estimate wall-clock and split temporal budgets when planning future waves.
-- `progress` — copied verbatim from `.status.json`.
-- `eta` — the **only computed column**: extrapolate linearly from `progress` plus elapsed-so-far; when `progress` is unavailable, fall back to the reference runtimes of prior completed runs in the same experiment. Recompute it on **every** reconciliation pass, and leave it blank for `todo`/`done`/`failed` rows and whenever there is no basis to estimate. Never present it as measured fact — say "estimated" when reporting it.
+- `progress` — render schema-v2
+  `progress_unit progress_completed/progress_total`; use the legacy display-only `progress` value
+  only for historical statuses.
+- `eta` — the **only computed column**. Recompute it on **every** reconciliation pass, and leave
+  it blank for `todo`/`done`/`failed` rows and whenever there is no sound basis. Never write ETA
+  into `.status.json` or present it as measured fact — say `estimated` and state the basis when
+  reporting it.
+
+## ETA calculation and wave roll-up
+
+Use this deterministic hierarchy:
+
+1. For an active schema-v2 run with `0 < progress_completed < progress_total`, calculate
+   `remaining_s = elapsed_s * (progress_total - progress_completed) / progress_completed`.
+   Its estimated completion is the observation time plus `remaining_s`; label the basis
+   `structured progress`.
+2. At zero/missing structured progress, use the median `elapsed_s` of prior `done` rows with the
+   same run_id, minus current elapsed, floored at zero (`exact-run history`). If none exist, use
+   the median of all provenance-valid `done` rows in the same experiment (`experiment median`).
+3. Legacy display progress may be parsed only when it contains one unambiguous numeric
+   `<completed>/<total>` pair; apply the same linear formula and label it `legacy progress`.
+   Otherwise continue through the history fallbacks.
+4. A schema-v2 heartbeat older than three minutes, invalid numeric bounds, integrity mismatch,
+   or unreachable rig makes the active ETA unavailable until resolved. State the reason.
+
+For a lane, add its active run's remaining estimate to the estimated full runtimes of queued runs
+in deterministic script/glob order, using the same exact-run then experiment-median hierarchy.
+If any required term lacks a basis, report that lane ETA as unavailable. The wave ETA is the
+latest available lane completion only when every nonterminal lane is estimable; otherwise report
+the wave ETA as unavailable and name the blocking lane(s). Do not put queued-run estimates into
+their `eta` table cells: lane/wave roll-ups belong in chat reports, while the table's `eta` stays
+an active-run field.
 
 On a run_id re-election (a param joins `RUN_ID_PARAMS` — `experiment-design` skill, "run_id evolution"): update the section header **and** add the new column to existing rows, backfilled with the old implicit value — same turn as the artifact migration, so rows and on-disk paths never disagree.
 
@@ -44,7 +78,8 @@ On a run_id re-election (a param joins `RUN_ID_PARAMS` — `experiment-design` s
 
 - Wave generation ⇒ append `todo` rows (one per generated run), pre-filled with `wave`, `rig`, `gpu` from the generated script paths.
 - Launching ⇒ flip those rows to `inpr`, fill `started` (from `.status.json` once the run actually starts).
-- Observing progress ⇒ refresh `progress` and recompute `eta`.
+- Observing progress ⇒ refresh `progress` and recompute `eta`; during a launch chat do this before
+  every fixed ten-minute report as well as on urgent transitions.
 - Observing completion ⇒ flip to `done`/`failed` per the signals, fill `ended` + `elapsed`, clear `eta`.
 
 ## Reconciliation (mandatory)

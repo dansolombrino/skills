@@ -105,7 +105,9 @@ if [ $rc -ne 0 ] && [ ! -e "$ARTIFACT" ]; then
 import json, os, sys, datetime, pathlib
 p = pathlib.Path(sys.argv[1])
 s = json.loads(p.read_text()) if p.exists() else {}
-s.update(state="failed", ended=datetime.datetime.now().isoformat(timespec="seconds"),
+s.setdefault("schema_version", 2)
+ended = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+s.update(state="failed", ended=ended, heartbeat=ended,
          wave_id=os.environ.get("WAVE_ID"), gpu=os.environ.get("CUDA_VISIBLE_DEVICES"),
          source_revision=os.environ.get("SOURCE_REVISION"),
          source_tag=os.environ.get("SOURCE_TAG"),
@@ -155,8 +157,9 @@ Notes:
   otherwise successful pipeline fail because a complete run log is required.
 - Hydra projects must have job file logging disabled (`- override hydra/job_logging: none`) or
   pointed inside `logs/` — no `.log` may land in the project root.
-- `.status.json` is owned by the python script (StatusWriter, below); the wave script only writes
-  the `failed` fallback, atomically, when the process died before python could finalize it.
+- `.status.json` is owned by the python script (the canonical StatusWriter linked below); the
+  wave script only writes the `failed` fallback, atomically, when the process died before python
+  could finalize it.
 
 ## README.md — one per (run, wave), written once at launch
 
@@ -191,76 +194,12 @@ behemoth (gpu 0, gpu 3; gpu 3 user-authorized 2026-08-02 for this wave only).`
 
 ## StatusWriter — the python side of the signaling system
 
-Every training/eval script wraps its work in this pattern (stdlib-only; put it in
-`code/common/status.py` and import it). It owns `.status.json` and prints start/end/elapsed to
-stdout — which the wave script's tee lands in the run log, and which EXPERIMENTS.md records as
-the run's reference runtime.
-
-```python
-import json, os, time, datetime
-from pathlib import Path
-
-
-class StatusWriter:
-    """Owns evaluations/NNN_exp/<run_id path>/.status.json for one run."""
-
-    def __init__(self, eval_dir):
-        self.path = Path(eval_dir) / ".status.json"
-        self.t0 = None
-        self.status = {}
-
-    def _now(self):
-        return datetime.datetime.now().isoformat(timespec="seconds")
-
-    def _write(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".json.tmp")   # atomic: monitors never see partial json
-        tmp.write_text(json.dumps(self.status))
-        tmp.replace(self.path)
-
-    def __enter__(self):
-        self.t0 = time.monotonic()
-        self.status = {"state": "running", "started": self._now(), "ended": None,
-                       "elapsed_s": None, "heartbeat": self._now(), "progress": None,
-                       # exported by the wave script; identifies WHICH dispatch this execution
-                       # belongs to, so reconciliation can find the right EXPERIMENTS.md row
-                       "wave_id": os.environ.get("WAVE_ID"),
-                       "gpu": os.environ.get("CUDA_VISIBLE_DEVICES"),
-                       "source_revision": os.environ.get("SOURCE_REVISION"),
-                       "source_tag": os.environ.get("SOURCE_TAG"),
-                       "environment_fingerprint": os.environ.get("ENVIRONMENT_FINGERPRINT")}
-        self._write()
-        print(f"[status] RUN START {self.status['started']} "
-              f"wave={self.status['wave_id']} gpu={self.status['gpu']} "
-              f"source={self.status['source_revision']} "
-              f"environment={self.status['environment_fingerprint']}", flush=True)
-        return self
-
-    def heartbeat(self, progress=None):
-        """Call periodically (e.g. once per epoch/eval step)."""
-        self.status["heartbeat"] = self._now()
-        if progress is not None:
-            self.status["progress"] = progress
-        self._write()
-
-    def __exit__(self, exc_type, exc, tb):
-        self.status.update(state="failed" if exc_type else "done", ended=self._now(),
-                           elapsed_s=round(time.monotonic() - self.t0, 1))
-        self._write()
-        print(f"[status] RUN END {self.status['ended']} "
-              f"state={self.status['state']} elapsed={self.status['elapsed_s']}s", flush=True)
-        return False   # never swallow the exception
-
-
-# usage in the experiment script:
-#   with StatusWriter(eval_dir) as sw:
-#       for epoch in range(cfg.epochs):
-#           ...train...
-#           sw.heartbeat(progress=f"epoch {epoch + 1}/{cfg.epochs}")
-```
-
-`progress` is what EXPERIMENTS.md's `progress` column shows and what its `eta` column is
-extrapolated from — keep it a simple `<done>/<total>` shape so it can be parsed.
+Use the single canonical `code/common/status.py` implementation in
+[research-project-init templates](../../research-project-init/references/templates.md#codecommonstatuspy).
+It writes schema-v2 numeric progress, timezone-aware timestamps, live elapsed time, and an
+automatic 60-second heartbeat. Experiment code calls
+`heartbeat(completed=<done>, total=<total>, unit=<label>)`; monitors compute ETA from those facts
+and never persist ETA in `.status.json`. Do not copy a second implementation into this skill.
 
 ## Dispatch — one tmux session per lane (executed by each rig's subagent)
 

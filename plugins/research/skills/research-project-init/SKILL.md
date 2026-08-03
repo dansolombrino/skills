@@ -25,7 +25,9 @@ Scaffold the standard research-project structure. The full canon (taxonomy, run_
    - `.gitignore` — ignores `.env`, `shitpads/*`, `references/*`, checkpoints/evaluations/plots content per template (keep `.gitkeep`s).
 4. **Install the journal commit guard**: `.githooks/pre-commit` from the template + `git config core.hooksPath .githooks`. It blocks commits touching `code/ config/ scripts/ evaluations/ visualizations/` without touching `JOURNAL.md`.
 5. **Create the shared helpers** `code/common/run_id.py` and `code/common/status.py` from the
-   templates, and copy `$environment-sync`'s `assets/environment.py` to
+   templates. The status helper emits schema-v2 numeric progress, timezone-aware lifecycle
+   timestamps, live elapsed time, and an automatic 60-second heartbeat for launch-chat
+   monitoring. Copy `$environment-sync`'s `assets/environment.py` to
    `code/common/environment.py`.
 6. Initialize Git if needed, configure the approved remote/branch, and create/push the first
    commit only after the user approves the scaffold. Never force-push or overwrite an existing

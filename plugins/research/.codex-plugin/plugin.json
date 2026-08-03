@@ -1,6 +1,6 @@
 {
   "name": "research",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Design reproducible research software, integrate references, enforce matching uv environments, and synchronize, launch, track, and visualize experiments across GPU rigs.",
   "author": {
     "name": "Dan Solombrino",
@@ -23,7 +23,7 @@
   "interface": {
     "displayName": "Research",
     "shortDescription": "Reproducible research across GPU rigs",
-    "longDescription": "Structure research projects, design experiments, integrate reference implementations through explicit source-to-target deviation approval, provision and verify exact uv environments, deploy tested Git revisions, dispatch GPU sweeps, reconcile run state, maintain a research journal, and create result visualizations.",
+    "longDescription": "Structure research projects, design experiments, integrate reference implementations through explicit source-to-target deviation approval, provision and verify exact uv environments, deploy tested Git revisions, dispatch GPU sweeps with timestamped ten-minute status and ETA reporting, reconcile run state, maintain a research journal, and create result visualizations.",
     "developerName": "Dan Solombrino",
     "category": "Developer Tools",
     "capabilities": [
@@ -35,7 +35,7 @@
       "Design a reproducible experiment and agree on its run identity.",
       "Provision and verify one exact uv environment across configured GPU rigs.",
       "Integrate reference code and approve every source-to-target deviation before editing.",
-      "Deploy, dispatch, and reconcile an approved experiment wave across GPU rigs."
+      "Deploy, dispatch, and continuously monitor an approved experiment wave with timestamped status and ETA updates."
     ],
     "screenshots": []
   }

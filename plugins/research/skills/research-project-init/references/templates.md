@@ -293,43 +293,78 @@ def guard_run_config(cfg, params, run_dir: Path) -> None:
 import datetime
 import json
 import os
+import threading
 import time
+from numbers import Real
 from pathlib import Path
 
 
 class StatusWriter:
     """Own evaluations/NNN_exp/<run_id path>/.status.json for one run."""
 
-    def __init__(self, eval_dir):
+    def __init__(self, eval_dir, heartbeat_interval_s=60):
+        if heartbeat_interval_s <= 0:
+            raise ValueError("heartbeat_interval_s must be positive")
         self.path = Path(eval_dir) / ".status.json"
+        self.heartbeat_interval_s = heartbeat_interval_s
         self.t0 = None
         self.status = {}
+        self._lock = threading.RLock()
+        self._stop = threading.Event()
+        self._thread = None
 
     def _now(self):
-        return datetime.datetime.now().isoformat(timespec="seconds")
+        return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
-    def _write(self):
+    def _elapsed(self):
+        return round(time.monotonic() - self.t0, 1)
+
+    def _write_locked(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(self.status))
         tmp.replace(self.path)
 
+    def _refresh_liveness_locked(self):
+        self.status["heartbeat"] = self._now()
+        self.status["elapsed_s"] = self._elapsed()
+        self._write_locked()
+
+    def _heartbeat_loop(self):
+        while not self._stop.wait(self.heartbeat_interval_s):
+            with self._lock:
+                if self.status.get("state") != "running":
+                    return
+                self._refresh_liveness_locked()
+
     def __enter__(self):
         self.t0 = time.monotonic()
-        self.status = {
-            "state": "running",
-            "started": self._now(),
-            "ended": None,
-            "elapsed_s": None,
-            "heartbeat": self._now(),
-            "progress": None,
-            "wave_id": os.environ.get("WAVE_ID"),
-            "gpu": os.environ.get("CUDA_VISIBLE_DEVICES"),
-            "source_revision": os.environ.get("SOURCE_REVISION"),
-            "source_tag": os.environ.get("SOURCE_TAG"),
-            "environment_fingerprint": os.environ.get("ENVIRONMENT_FINGERPRINT"),
-        }
-        self._write()
+        started = self._now()
+        with self._lock:
+            self.status = {
+                "schema_version": 2,
+                "state": "running",
+                "started": started,
+                "ended": None,
+                "elapsed_s": 0.0,
+                "heartbeat": started,
+                "progress": None,
+                "progress_completed": None,
+                "progress_total": None,
+                "progress_unit": None,
+                "wave_id": os.environ.get("WAVE_ID"),
+                "gpu": os.environ.get("CUDA_VISIBLE_DEVICES"),
+                "source_revision": os.environ.get("SOURCE_REVISION"),
+                "source_tag": os.environ.get("SOURCE_TAG"),
+                "environment_fingerprint": os.environ.get("ENVIRONMENT_FINGERPRINT"),
+            }
+            self._write_locked()
+        self._thread = threading.Thread(
+            target=self._heartbeat_loop,
+            name="run-status-heartbeat",
+            daemon=True,
+        )
+        self._thread.start()
         print(
             f"[status] RUN START {self.status['started']} "
             f"wave={self.status['wave_id']} gpu={self.status['gpu']} "
@@ -339,20 +374,51 @@ class StatusWriter:
         )
         return self
 
-    def heartbeat(self, progress=None):
-        """Refresh liveness and optionally record simple <done>/<total> progress."""
-        self.status["heartbeat"] = self._now()
-        if progress is not None:
-            self.status["progress"] = progress
-        self._write()
+    def heartbeat(self, progress=None, *, completed=None, total=None, unit=None):
+        """Refresh liveness and optionally record machine-readable progress."""
+        structured = completed is not None or total is not None or unit is not None
+        if structured:
+            if progress is not None:
+                raise ValueError("use progress or completed/total/unit, not both")
+            if not isinstance(completed, Real) or isinstance(completed, bool):
+                raise ValueError("completed must be numeric")
+            if not isinstance(total, Real) or isinstance(total, bool) or total <= 0:
+                raise ValueError("total must be a positive number")
+            if completed < 0 or completed > total:
+                raise ValueError("completed must be between zero and total")
+            if not isinstance(unit, str) or not unit.strip():
+                raise ValueError("unit must be a non-empty string")
+
+        with self._lock:
+            if structured:
+                self.status.update(
+                    progress=f"{unit} {completed:g}/{total:g}",
+                    progress_completed=completed,
+                    progress_total=total,
+                    progress_unit=unit,
+                )
+            elif progress is not None:  # legacy display-only API
+                self.status.update(
+                    progress=str(progress),
+                    progress_completed=None,
+                    progress_total=None,
+                    progress_unit=None,
+                )
+            self._refresh_liveness_locked()
 
     def __exit__(self, exc_type, exc, tb):
-        self.status.update(
-            state="failed" if exc_type else "done",
-            ended=self._now(),
-            elapsed_s=round(time.monotonic() - self.t0, 1),
-        )
-        self._write()
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join()
+        with self._lock:
+            ended = self._now()
+            self.status.update(
+                state="failed" if exc_type else "done",
+                ended=ended,
+                heartbeat=ended,
+                elapsed_s=self._elapsed(),
+            )
+            self._write_locked()
         print(
             f"[status] RUN END {self.status['ended']} "
             f"state={self.status['state']} elapsed={self.status['elapsed_s']}s",
@@ -360,3 +426,9 @@ class StatusWriter:
         )
         return False
 ```
+
+Call `heartbeat(completed=<done>, total=<total>, unit=<label>)` after every completed training or
+evaluation unit. The helper also refreshes liveness and live elapsed time every 60 seconds in a
+daemon thread, so a unit that lasts longer than the launch chat's reporting cadence is still
+distinguishable from a dead process. Keep the legacy `heartbeat(progress=...)` path only while
+migrating an existing experiment; it cannot provide the preferred structured ETA basis.

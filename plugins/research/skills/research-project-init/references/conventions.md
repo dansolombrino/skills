@@ -257,11 +257,14 @@ provenance is valid, disagreements resolve as **artifacts win**, then `.status.j
    `evaluations/NNN_exp/<run_id path>/`), declared at experiment design time. Present ⇒ the
    run really finished; absent ⇒ not done, whatever the status file says.
 2. **`.status.json`** — `evaluations/NNN_exp/<run_id path>/.status.json`, written by the
-   python script itself (via the StatusWriter pattern — see `sweep-dispatch` templates):
+   python script itself (via the StatusWriter pattern in
+   [templates.md](templates.md#codecommonstatuspy)):
 
    ```json
-   {"state": "running|done|failed", "started": "<ISO>", "ended": "<ISO>|null",
-    "elapsed_s": 1234.5, "heartbeat": "<ISO>", "progress": "epoch 3/10",
+   {"schema_version": 2, "state": "running|done|failed", "started": "<ISO>",
+    "ended": "<ISO>|null", "elapsed_s": 1234.5, "heartbeat": "<ISO>",
+    "progress": "epoch 3/10", "progress_completed": 3, "progress_total": 10,
+    "progress_unit": "epoch",
     "wave_id": "20260731-162043", "gpu": "0",
     "source_revision": "<40-char-sha>", "source_tag": "wave--20260731-162043",
     "environment_fingerprint": "<64-char-sha256>"}
@@ -278,7 +281,12 @@ provenance is valid, disagreements resolve as **artifacts win**, then `.status.j
    `CUDA_VISIBLE_DEVICES`, `SOURCE_REVISION`, `SOURCE_TAG`, `ENVIRONMENT_FINGERPRINT`), deliberately
    **not** as config params — they must stay
    out of the `guard_run_config` snapshot, or every re-launch in a new wave or on a different
-   card would trip the run_id-collision hard error.
+   card would trip the run_id-collision hard error. `StatusWriter` refreshes `heartbeat` and
+   live `elapsed_s` atomically every 60 seconds even when a training unit is still running.
+   Experiment code reports numeric progress with
+   `heartbeat(completed=<n>, total=<n>, unit=<label>)`; the display-only `progress` string and
+   legacy `heartbeat(progress=...)` call remain compatible. ETA is deliberately absent: it is
+   derived by the monitoring/tracking layer, never persisted as if it were measured fact.
 3. **Run log** — the latest
    `logs/NNN_exp/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-<YYYYmmdd-HHMMSS>.log`
    (the mirror of the wave script's own path): the run's **entire stdout+stderr** (tee'd by the
@@ -298,6 +306,28 @@ protocol: `sweep-dispatch`.
 
 - **EXPERIMENTS.md is single-writer: only ever edited on rig-4090** — and within a launch
   session, only by the orchestrator chat, never by monitoring subagents.
+
+## Launch-chat reporting contract
+
+The chat that launches a wave remains active until all of that wave's runs are terminal or the
+user explicitly asks it to stop monitoring. Before launch, require collaboration plus a
+recurring wait/monitor capability; if either is unavailable, stop rather than promise updates
+the chat cannot deliver. Never implement the cadence with a blocking shell `sleep`.
+
+- Anchor a fixed ten-minute schedule to the confirmed launch time. At every tick, reconcile
+  EXPERIMENTS.md on rig-4090 and emit an update even when nothing changed. Urgent completion,
+  failure, hang, rig-down, and recovery messages happen immediately and never reset the fixed
+  schedule. When the wave becomes terminal, report immediately and stop; do not wait for a tick.
+- Every message opens with `Status written <timestamp> —`, where `<timestamp>` is generated
+  immediately before sending as an ISO-compatible local timestamp with seconds and UTC offset.
+  Report each status observation's heartbeat age too, so message time and data freshness cannot
+  be confused.
+- Show done/running/queued/failed counts, every active run's progress and estimated completion,
+  each lane's queued count and estimated completion, and the estimated completion of the wave.
+  Label estimates and their basis; say `ETA unavailable` when no sound basis exists.
+- Treat a schema-v2 heartbeat older than three minutes as stale. Diagnose rig/session/process
+  health before trusting its ETA or declaring a hang. Legacy statuses remain readable, but a
+  future launch must first upgrade target experiment code to schema-v2 structured telemetry.
 
 ## Root-file duties
 

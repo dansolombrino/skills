@@ -1,6 +1,6 @@
 ---
 name: sweep-dispatch
-description: Generate and launch experiment runs/sweeps across the GPU rigs (rig-4090, rig-3090-ti, rig-3080-ti, behemoth — also "4090", "3080 ti", "pro 6000", "bw", "blackwell", "server-pro-6000-bw"). Use when the user asks to run, launch, sweep, or dispatch experiments, monitor or babysit running experiments, split runs across machines or GPUs, rerun failed runs, or recover/resume a wave after a rig crash or reboot.
+description: Generate, launch, and continuously monitor experiment runs/sweeps across the GPU rigs (rig-4090, rig-3090-ti, rig-3080-ti, behemoth — also "4090", "3080 ti", "pro 6000", "bw", "blackwell", "server-pro-6000-bw"). Use when the user asks to run, launch, sweep, or dispatch experiments, receive timestamped ten-minute status/ETA updates, monitor or babysit running experiments, split runs across machines or GPUs, rerun failed runs, or recover/resume a wave after a rig crash or reboot.
 ---
 
 # sweep-dispatch
@@ -17,6 +17,13 @@ Vocabulary (canon): a **wave** is one dispatch decision, identified by `YYYYMMDD
 `code/common/environment.py`, and the project GPU smoke. Use `$environment-sync` to verify the hub
 fingerprint before the experiment smoke. Dependency-contract changes must be committed and
 verified before wave generation; never let a launch-time command repair or relock `.venv`.
+1d. **telemetry contract check** — require schema-v2 `code/common/status.py` from
+`research-project-init` and structured progress call sites in every target training/eval entrypoint.
+The helper must provide timezone-aware timestamps, live elapsed time, and its automatic
+60-second heartbeat; entrypoints call
+`heartbeat(completed=<done>, total=<total>, unit=<label>)`. If an existing experiment is still on
+display-only progress, stop and route the compatible telemetry upgrade through
+`$experiment-design` before wave generation. Telemetry does not join `RUN_ID_PARAMS`.
 2. **Ask which rigs AND which GPUs on them are usable** — never assume availability, never hardcode the multi-GPU server's card count. **On `behemoth`, gpu0 is the only answer you may propose**: it is a shared machine and GPU 0 is the only card that is ours (canon: conventions.md § Rig fleet). Anything wider requires the user to explicitly state they got authorization for named cards — never inferred from an idle `nvidia-smi`, never fished for; and that grant covers this wave only, is never persisted, and must be re-given next time. Confirm current load with `nvidia-smi` too — a card at high utilization will steal SM time from whatever is already running and skew its `elapsed`, which the project relies on as a reference runtime.
 3. **Propose the assignment, get approval.** Capacity of a lane = the rig's **per-GPU** weight (`behemoth` 2.0, `rig-4090` 1.0, `rig-3090-ti`/`rig-3080-ti` 0.5) × the GPUs in that lane, so every lane finishes in roughly equal wall-clock. `behemoth` contributes `2.0 × 1` unless a grant for this wave widens it. Within one (wave, rig) the GPU sets must be **disjoint**. Present run → rig, gpu; the user approves or amends. Include the exact smoke command, staged-file summary, proposed JOURNAL entry, configured branch/remote, environment fingerprint, `$environment-sync provision --dry-run` summary, and authorization to provision environments, commit, create/push the wave tag, and fast-forward the named rigs. If a grant is in play, restate it verbatim in the proposal ("using gpu 0,3 on behemoth per your authorization of <date>") so it is re-confirmed at approval time.
 4. **Mint the wave id** the moment the assignment is approved: `date '+%Y%m%d-%H%M%S'` on rig-4090. One id for the whole dispatch, shared by every rig and lane — it goes into the paths, so it must exist before generation. Never a semantic slug; the wave README carries the meaning.
@@ -72,6 +79,12 @@ wave is active there.
 
 The chat where the launch is requested is the **orchestrator**. It performs the all-rig Git deployment gate but never launches or polls rigs itself. Only after that gate passes, use Codex's collaboration tools to spawn **one background subagent per assigned rig in parallel**, then collect their reports. One subagent per *rig*, not per lane. A peer subagent drives one SSH target; when the assigned rig is the current local hub, its subagent uses direct bounded commands and never requires self-SSH. If collaboration tools are unavailable, stop before launch and tell the user; do not silently collapse monitoring into the orchestrator.
 
+Before launch, also require a recurring wait/monitor primitive that lets the orchestrator remain
+active and responsive for the full wave. If it is unavailable, stop before launch. The
+orchestrator must not send its final response while any run remains queued or running unless the
+user explicitly asks it to stop monitoring. Use the recurring wait primitive between events;
+never implement monitoring with shell `sleep`.
+
 Each rig subagent:
 
 1. Runs `$rig-sync verify-revision` and read-only `$environment-sync verify` for its rig/lane
@@ -81,13 +94,17 @@ Each rig subagent:
    [references/templates.md](references/templates.md)). Each queued script repeats the Git guard
    before Python. Source-drift `86` or environment-drift `87` stops the lane; ordinary run failures continue the queue.
    Sequencing remains a shell loop so it survives subagent death, compaction, and multi-day queues.
-2. **Monitors** its queues to completion, judging each run by the three signals (hierarchy in `conventions.md` — artifacts are golden):
+2. **Monitors** its queues to completion, judging each run by the three signals (hierarchy in `conventions.md` — artifacts are golden). Batch all lanes/status files for that rig into bounded probes; in normal operation obtain at least one fresh snapshot every five minutes so a scheduled chat update never depends on an arbitrarily old poll:
    - **expected final artifact** on disk (final checkpoint / final eval output) ⇒ truly done;
-   - **`.status.json`** (`state`, `heartbeat`, `progress`, timing, `wave_id`, `gpu`, source tag/SHA,
-    environment fingerprint);
+   - **`.status.json`** (`schema_version`, `state`, `heartbeat`, display + numeric progress,
+    timing, `wave_id`, `gpu`, source tag/SHA, environment fingerprint);
    - tail of the latest **`logs/NNN_exp/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-<timestamp>.log`** — tracebacks/errors ⇒ failed; stale heartbeat + silent log ⇒ first rule out a machine fault (below), then suspect a hang and say so.
-   Poll at intervals matched to expected run length (reference `elapsed` values in EXPERIMENTS.md help here) — don't hammer ssh.
-3. **Reports back** per run: outcome (`done`/`failed`/hung/`interrupted→relaunched`), which lane it ran in, plus `started`/`progress`/`ended`/`elapsed` read from `.status.json`.
+   Within the five-minute freshness cap, match poll intervals to expected run length (reference
+   `elapsed` values in EXPERIMENTS.md help here) — don't hammer ssh.
+3. **Reports back** snapshots with an observation timestamp and heartbeat age, per-run outcome
+   (`queued`/`running`/`done`/`failed`/hung/`interrupted→relaunched`), lane, structured progress,
+   timing, and queued order. Push terminal/fault/recovery transitions immediately; the
+   orchestrator requests or uses the newest complete snapshot for each scheduled report.
 
 **Single-writer rule: only the orchestrator edits EXPERIMENTS.md**, from the subagents' reports. Subagents never touch it.
 
@@ -111,9 +128,31 @@ Each rig subagent is also its rig's watchdog. A machine-level failure (crash, re
 - **Legacy layouts** — a project still on the old `run.sh` + `launch_<rig>.sh` scheme has no per-run self-guard (and pre-idempotent launchers would redo finished runs on relaunch). Check before recovering, and offer to migrate the experiment to the wave layout — but **never migrate while runs are in flight**: renaming script and log trees under a live run breaks the paths it is writing into. If anything is `inpr`/`running`, say so and defer; recover the legacy slice as-is for now (`experiments-tracking`, migration rules).
 - **Autonomous, not silent** — relaunching already-approved work is not a new dispatch decision: don't ask permission, recover and report — which runs were already done (skipped), which were interrupted and relaunched, in which lanes, and whether each resumes or restarts.
 
-## Status updates to the user
+## Ten-minute status and ETA updates to the user
 
-Every status update **opens with the current date and time** — run `date '+%Y-%m-%d %H:%M'` first and lead with it ("Status as of 2026-07-20 16:45 — ..."). Applies to interim reports, subagent-relay summaries, and the final wrap-up.
+Anchor `next_update` to the confirmed launch time and advance it in exact 600-second increments;
+collection or message latency must not drift later ticks. At every tick, even if nothing changed,
+the orchestrator reconciles EXPERIMENTS.md from the newest per-rig snapshots and posts one compact
+aggregate update. A completion, failure, suspected hang, rig outage, or recovery is reported as
+soon as observed and does not reset `next_update`. When every run is terminal, post the final
+summary immediately and stop the schedule.
+
+Immediately before every scheduled, urgent, and final message, obtain a timezone-bearing local
+timestamp (for example `date '+%Y-%m-%dT%H:%M:%S%:z'`) and open exactly with
+`Status written <timestamp> —`. Do not reuse a status-file timestamp as the message-written time.
+Include:
+
+- wave counts: `done`, `running`, `queued`, `failed`, plus the estimated wave completion;
+- one line per lane: active run, display progress, heartbeat age, estimated active-run
+  completion, queued count/next run, and estimated lane completion;
+- failures, stale telemetry, unreachable rigs, interruptions, and recovery actions;
+- the basis for each estimate (`structured progress`, `exact-run history`, or
+  `experiment median`), or `ETA unavailable: <reason>`.
+
+All ETAs are estimates. Use `$experiments-tracking` for the calculation hierarchy. A schema-v2
+heartbeat older than three minutes is stale: diagnose rig/session/process health and mark its ETA
+unavailable until liveness is resolved. Keep legacy statuses readable for historical
+reconciliation, but never launch new work on them without the telemetry-contract upgrade.
 
 ## Tracking side-effects (same turn)
 

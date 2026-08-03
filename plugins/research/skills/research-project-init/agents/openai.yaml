@@ -1,4 +1,4 @@
 interface:
   display_name: "Research Project Init"
   short_description: "Scaffold the standard reproducible research layout"
-  default_prompt: "Use $research-project-init to scaffold a structured research project with exact $environment-sync and $rig-sync contracts."
+  default_prompt: "Use $research-project-init to scaffold a structured research project with exact environment, rig-sync, and live status telemetry contracts."

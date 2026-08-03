@@ -1,6 +1,6 @@
 ---
 name: experiment-design
-description: Design a new experiment in a structured research project — NNN naming, run_id election, checkpoint and wandb checklists. Use when creating a new experiment or sub-experiment, writing new training/finetuning/eval code under code/NNN_..., or adding hydra configs for a new experiment.
+description: Design a new experiment in a structured research project — NNN naming, run_id election, checkpoints, structured status/ETA telemetry, and wandb checklists. Use when creating a new experiment or sub-experiment, writing or telemetry-upgrading training/finetuning/eval code under code/NNN_..., or adding hydra configs for a new experiment.
 ---
 
 # experiment-design
@@ -42,11 +42,24 @@ Any change that adds/removes/renames a behavior-affecting config param (integrat
 
 ## 4b. Run signaling & timing (mandatory, no user decision needed)
 
-Every training/eval script wraps its work in the **StatusWriter** pattern (`code/common/status.py`; template in `sweep-dispatch` references/templates.md):
+Every training/eval script wraps its work in the **StatusWriter** pattern
+(`code/common/status.py`; canonical implementation in
+`research-project-init` references/templates.md):
 
-- owns `evaluations/NNN_exp/<run_id path>/.status.json` (state running/done/failed, started, ended, elapsed_s, heartbeat, progress) plus `wave_id`, `gpu`, `source_revision`, `source_tag`, and `environment_fingerprint`, read from environment exported by the source/environment-verified wave script — env vars, never config params, so they stay out of the `guard_run_config` snapshot;
-- calls `heartbeat(progress=...)` at least once per epoch/major step — keep `progress` a simple `<done>/<total>` shape, EXPERIMENTS.md extrapolates its `eta` column from it;
+- owns `evaluations/NNN_exp/<run_id path>/.status.json` schema v2: state, timezone-aware
+  lifecycle timestamps, live `elapsed_s`, automatic 60-second heartbeat, display progress, and
+  numeric `progress_completed`/`progress_total`/`progress_unit`, plus `wave_id`, `gpu`,
+  `source_revision`, `source_tag`, and `environment_fingerprint`, read from environment exported
+  by the source/environment-verified wave script — env vars, never config params, so they stay
+  out of the `guard_run_config` snapshot;
+- calls `heartbeat(completed=<done>, total=<total>, unit=<label>)` after every completed
+  epoch/major step. The helper supplies liveness between calls; experiment code supplies the
+  facts needed for ETA. Do not write an ETA into `.status.json`;
 - prints start time, end time, and elapsed to stdout — the wave script tees all stdout+stderr to the mirror of its own path under `logs/` (`logs/NNN_exp/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-<timestamp>.log`), so scripts need no separate file logging, and the elapsed lands in EXPERIMENTS.md as the run's reference runtime.
+
+Before dispatching an existing experiment, inspect its helper and call sites. If they still emit
+legacy display-only progress, upgrade them compatibly to schema v2 before launch; telemetry is a
+non-behavioral execution concern and does not join `RUN_ID_PARAMS`.
 
 ## 4c. Pre-dispatch smoke test (MUST decide)
 
