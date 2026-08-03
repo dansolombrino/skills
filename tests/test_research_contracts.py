@@ -9,12 +9,30 @@ ROOT = Path(__file__).parents[1]
 
 
 class ResearchContractTests(unittest.TestCase):
-    def test_plugin_minor_version_and_git_revision_capability(self) -> None:
+    def test_plugin_minor_version_and_distributed_capabilities(self) -> None:
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "1.2.0")
+        self.assertEqual(manifest["version"], "1.3.0")
         self.assertTrue((ROOT / "plugins/research/skills/rig-sync/SKILL.md").is_file())
+        self.assertTrue(
+            (ROOT / "plugins/research/skills/integrate-reference-code/SKILL.md").is_file()
+        )
+
+    def test_reference_code_integration_requires_informed_delta_approval(self) -> None:
+        skill_root = ROOT / "plugins/research/skills/integrate-reference-code"
+        skill = (skill_root / "SKILL.md").read_text()
+        metadata = (skill_root / "agents/openai.yaml").read_text()
+
+        self.assertIn("Keep this phase read-only", skill)
+        self.assertIn("Enumerate every concrete", skill)
+        self.assertIn("Use all seven columns", skill)
+        self.assertIn("mark each initial approval as", skill)
+        self.assertIn("Stop and wait for the user to approve", skill)
+        self.assertIn("general permission", skill)
+        self.assertIn("If a new deviation becomes necessary, stop before applying it", skill)
+        self.assertIn("any unapproved deviation remains", skill)
+        self.assertIn("$integrate-reference-code", metadata)
 
     def test_rig_sync_documents_canonical_3090_ti_hostname(self) -> None:
         configuration = (
