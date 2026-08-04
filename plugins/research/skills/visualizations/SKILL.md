@@ -1,11 +1,16 @@
 ---
 name: visualizations
-description: Create or update plots/figures from experiment evaluation outputs in a structured research project. Use when the user asks to plot, visualize, chart, or make figures from results, or to add/modify scripts under visualizations/.
+description: Create or update Research 2.0 plots and figures from provenance-valid experiment evaluation outputs while preserving the standard artifact taxonomy and active engineering mode. Use when the user asks to plot, visualize, chart, make figures from results, or add or modify scripts under visualizations/; do not use to recompute missing evaluation data.
 ---
 
 # visualizations
 
 Plotting code conventions. Canon: `../research-project-init/references/conventions.md`.
+
+Require the Research 2.0 scaffold and read the active execution agreement. Plot representation,
+placement, and execution follow `engineering_mode`: manual mode proposes and waits; auto mode may
+choose inside the approved envelope. Scientific interpretation and claim changes remain owned by
+the scientific layer.
 
 ## Placement
 
@@ -21,7 +26,7 @@ Plotting is too dynamic to standardize into configs. Each script takes CLI args 
 .venv/bin/python visualizations/000_grokking/plot_loss.py --model mlp --lr 1e-3 --seed 0
 ```
 
-## Output paths — per-script subfolder + partial run_id rule (default; user has final choice per case)
+## Output paths — per-script subfolder + partial run_id rule
 
 Each script writes only under `plots/NNN_exp/<script_stem>/` (e.g. `plot_loss.py` → `plots/000_grokking/plot_loss/`). Inside that subfolder, the partial run_id rule applies: a plot sits at the path of the run_id params it holds **fixed**; params it aggregates over are elided:
 
@@ -31,10 +36,12 @@ plots/000_grokking/plot_acc_vs_lr/model=mlp/acc_vs_lr.pdf              # fixed m
 plots/000_grokking/plot_acc_vs_lr/acc_vs_lr_by_model.pdf               # aggregated over everything
 ```
 
-Propose the placement for each new plot; the user decides.
+Resolve placement with the applicable engineering-mode owner and record nonstandard choices.
 
 ## Design & execution
 
-- **No checklist**: visualizations are designed conversationally, per case — ask what the user wants to see, iterate.
+- **No fixed plot checklist**: manual mode asks what the user wants; auto mode chooses the smallest
+  visualization that answers the approved scientific handoff.
 - Run plainly on **rig-4090** (where evaluations converge) — no dispatch/tmux machinery.
-- New plots produced ⇒ suggest a JOURNAL.md entry if they revealed something (`research-journal` skill).
+- New plots produced ⇒ apply `$research-journal` according to the event-owning layer's mode when
+  they reveal something.

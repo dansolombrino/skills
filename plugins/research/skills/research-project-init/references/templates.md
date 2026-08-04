@@ -1,6 +1,8 @@
 # Scaffold templates
 
 Substitute `{{PROJECT_NAME}}` / `{{PROJECT_DESCRIPTION}}` and adjust with the user.
+Create `.gitkeep` in each otherwise-empty taxonomy directory before the initial
+commit; the `.gitignore` exceptions below preserve placeholders in ignored trees.
 
 ## README.md
 
@@ -23,6 +25,8 @@ Substitute `{{PROJECT_NAME}}` / `{{PROJECT_DESCRIPTION}}` and adjust with the us
 | `visualizations/` | plotting code (argparse), reads `evaluations/`, writes `plots/` |
 | `shitpads/` | temp scratch space (gitignored, rig-local) |
 | `references/` | papers/codebases for reference (gitignored, rig-synced) |
+| `program/` | scientific agreement, decision history, and phase reports |
+| `orchestration/` | ignored local control events and subagent traces |
 
 Experiments are named `NNN_experiment_name` and mirrored across the folders above.
 Each run is identified by its **run_id** (an ordered subset of config params, declared
@@ -30,9 +34,13 @@ per experiment in its `.py` as `RUN_ID_PARAMS`).
 
 ## Tracking
 
+- **`program.md`** — current scientific question, phase, next decision, and record links.
+- **`program/00-execution-agreement.md`** — explicit scientific/engineering modes, scope,
+  envelope, destinations, and protected choices.
 - **`EXPERIMENTS.md`** — state: which runs exist (todo/inpr/done/failed), in which wave, on
   which rig and GPU.
 - **`JOURNAL.md`** — story: prose log of what was done, why, and what was learned.
+- **Flywheel / `index.md`** — authoritative curated scientific lineage and its local mirror.
 
 ## Setup
 
@@ -41,6 +49,7 @@ per experiment in its `.py` as `RUN_ID_PARAMS`).
    run the project GPU smoke.
 3. Configure the approved GitHub remote/dispatch branch and `sync.toml`, then use `$rig-sync` and
    `$environment-sync` to prepare and verify approved rig roots.
+4. Configure one canonical Flywheel root in `.flywheel.json` or `.env` before publishing nodes.
 
 ## Running
 
@@ -68,6 +77,11 @@ the scripts tree.
 
 - `EXPERIMENTS.md` — run tracking (state). Read it to know what exists/ran.
 - `JOURNAL.md` — prose history (story). Read it to know why things were done.
+- `program.md` — one-screen current scientific state and links.
+- `program/00-execution-agreement.md` — authoritative manual/auto modes and approval envelope.
+- `program/decision-register.md` — tracked material scientific decisions.
+- `index.md` — local Flywheel mirror; Flywheel remains authoritative.
+- `orchestration/` — ignored local traces; never stage or treat them as scientific results.
 - `README.md` — structure + setup.
 - Deepen further by reading `config/NNN_*/` and the experiment's `.py` (its
   `RUN_ID_PARAMS` is the authoritative run identity).
@@ -96,12 +110,115 @@ the scripts tree.
 <!-- append-only prose, chronological; entries under `## YYYY-MM-DD, HH:MM — title` -->
 ```
 
+## program.md (initial)
+
+```markdown
+# Research Program
+
+Active request: <not set>
+Current phase: setup
+Agreement: a1, approved: no (`program/00-execution-agreement.md`)
+Scientific mode: <manual|auto — required>
+Engineering mode: <manual|auto — required>
+Scientific question: <not set>
+Next decision: approve the initial agreement
+Engineering handoff: none
+Subagent plan: none
+Flywheel disposition: setup incomplete
+
+## Checklist
+
+- [ ] Execution agreement approved
+- [ ] Scientific question and decision criterion recorded
+- [ ] Engineering envelope and protected choices recorded
+- [ ] Required evidence or engineering handoff identified
+- [ ] Flywheel disposition recorded
+
+Decision register: `program/decision-register.md`
+Run state: `EXPERIMENTS.md`
+Narrative: `JOURNAL.md`
+Flywheel mirror: `index.md`
+```
+
+## program/00-execution-agreement.md (initial)
+
+```markdown
+# Execution Agreement
+
+agreement_version: a1
+approved: no
+scientific_mode: <manual|auto — required>
+engineering_mode: <manual|auto — required>
+
+## Scientific contract
+
+- Active request:
+- Question / claim / hypothesis:
+- Live alternatives:
+- Evidence stage: exploratory
+- Decisive evidence and decision criterion:
+- Evaluation boundary and stop rule:
+- Included and excluded scientific scope:
+
+## Engineering envelope
+
+- Repository / branch / approved remotes:
+- Rigs / GPUs:
+- Compute / time / monetary ceilings:
+- Approved tracking and publication destinations:
+- Canonical Flywheel root id / title:
+
+## Decision ownership
+
+- Hard constraints:
+- Soft preferences:
+- Delegable fields:
+- Protected choices:
+
+## Approval
+
+- Owner:
+- Approved scope:
+- Latest material revision:
+```
+
+## program/decision-register.md (initial)
+
+```markdown
+# Decision Register
+
+<!-- Append material scientific/control decisions. Keep factual run state in EXPERIMENTS.md. -->
+```
+
+## index.md (initial)
+
+```markdown
+# Flywheel Node Index — {{PROJECT_NAME}}
+
+Local mirror of the Flywheel graph. The authoritative record lives in Flywheel.
+```
+
 ## .env.example (seed)
 
 ```bash
 WANDB_API_KEY=
+FLYWHEEL_ROOT_NODE_ID=
+FLYWHEEL_ROOT_NODE_SLUG=
+FLYWHEEL_ROOT_NODE_TITLE=
 # machine-varying paths (data roots etc.) — add per project; mirror every new key here
 ```
+
+## .flywheel.json (only after root verification)
+
+```json
+{
+  "rootNodeId": "{{VERIFIED_FLYWHEEL_ROOT_NODE_ID}}",
+  "rootNodeTitle": "{{VERIFIED_FLYWHEEL_ROOT_NODE_TITLE}}"
+}
+```
+
+Do not create this file with placeholders. If no root is verified, leave it absent and keep the
+Flywheel disposition as setup-incomplete.
 
 ## .gitignore
 
@@ -109,6 +226,7 @@ WANDB_API_KEY=
 .env
 .venv/
 .rigsync_cache/
+orchestration/
 shitpads/*
 !shitpads/.gitkeep
 logs/*
@@ -190,7 +308,7 @@ captures both pipeline statuses so Python remains authoritative when both fail.
 """Shared run_id helpers.
 
 Each experiment declares, in its own .py, the authoritative ordered list of config
-params that uniquely identify a run (elected WITH the user):
+params that uniquely identify a run (elected by the active engineering-mode owner):
 
     RUN_ID_PARAMS = ["model", "lr", "seed"]
 
@@ -225,7 +343,7 @@ def run_id_path(cfg, params) -> Path:
     """Nested path form, e.g. model=mlp/lr=0.001/seed=0.
 
     Used under checkpoints/, evaluations/, plots/. Segment formatting (e.g. bare
-    values for some params) may be customized per experiment — with the user.
+    values for some params) may be customized per experiment under the active engineering mode.
     """
     return Path(*[f"{_run_id_component(p)}={_run_id_component(cfg[p])}" for p in params])
 
@@ -276,8 +394,8 @@ def guard_run_config(cfg, params, run_dir: Path) -> None:
             raise RuntimeError(
                 f"run_id collision at {run_dir}: same run_id "
                 f"({run_id_flat(cfg, params)}) but the config differs:\n{lines}\n"
-                "Add the offending param(s) to RUN_ID_PARAMS (re-elect with the "
-                "user) or migrate existing artifacts. See conventions.md, "
+                "Add the offending param(s) to RUN_ID_PARAMS (re-elect under the "
+                "active engineering mode) or migrate supported-project artifacts. See conventions.md, "
                 "'run_id schema evolution'."
             )
     else:
@@ -374,12 +492,10 @@ class StatusWriter:
         )
         return self
 
-    def heartbeat(self, progress=None, *, completed=None, total=None, unit=None):
+    def heartbeat(self, *, completed=None, total=None, unit=None):
         """Refresh liveness and optionally record machine-readable progress."""
         structured = completed is not None or total is not None or unit is not None
         if structured:
-            if progress is not None:
-                raise ValueError("use progress or completed/total/unit, not both")
             if not isinstance(completed, Real) or isinstance(completed, bool):
                 raise ValueError("completed must be numeric")
             if not isinstance(total, Real) or isinstance(total, bool) or total <= 0:
@@ -396,13 +512,6 @@ class StatusWriter:
                     progress_completed=completed,
                     progress_total=total,
                     progress_unit=unit,
-                )
-            elif progress is not None:  # legacy display-only API
-                self.status.update(
-                    progress=str(progress),
-                    progress_completed=None,
-                    progress_total=None,
-                    progress_unit=None,
                 )
             self._refresh_liveness_locked()
 
@@ -430,5 +539,4 @@ class StatusWriter:
 Call `heartbeat(completed=<done>, total=<total>, unit=<label>)` after every completed training or
 evaluation unit. The helper also refreshes liveness and live elapsed time every 60 seconds in a
 daemon thread, so a unit that lasts longer than the launch chat's reporting cadence is still
-distinguishable from a dead process. Keep the legacy `heartbeat(progress=...)` path only while
-migrating an existing experiment; it cannot provide the preferred structured ETA basis.
+distinguishable from a dead process. Display-only progress is unsupported.

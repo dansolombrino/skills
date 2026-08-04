@@ -1,8 +1,28 @@
 # Research-project conventions (shared canon)
 
 The single source of truth for the conventions all `research` bundle skills enforce.
-**Overarching invariant: Codex proposes, the user has final say** — on run_id election, rig
-assignment, checkpoint choices, wandb layout, journal entries. Never decide these alone.
+
+During initial scaffolding, place `.gitkeep` in every otherwise-empty taxonomy
+directory so Git preserves the complete tree. Remove a placeholder only after the
+directory contains another tracked file.
+
+## Research 2.0 admission and modes
+
+Support only repositories scaffolded with the Research 2.0 surfaces in the taxonomy below. If a
+required surface is missing, or legacy status/scripts are detected, stop as unsupported. Do not
+offer compatibility, migration, or opportunistic upgrades.
+
+Read `program/00-execution-agreement.md` before a material scientific or engineering action. It
+must explicitly set `scientific_mode: manual|auto` and `engineering_mode: manual|auto`; never infer
+either. Manual mode reserves that layer's choices for the user. Auto mode delegates that layer's
+choices only inside its approved scientific scope or engineering envelope. Integrity gates never
+become optional.
+
+Always return to the user for destructive operations, history rewrites, deletion of material data,
+overwriting user changes, new repositories/remotes/accounts/destinations, secrets/authentication
+changes, scope/budget/rig expansion, shared-GPU exceptions, ambiguous Flywheel roots, or a
+source-to-target deviation governed by `$integrate-reference-code`. System permission prompts are
+independent and always apply.
 
 ## Taxonomy
 
@@ -22,6 +42,8 @@ assignment, checkpoint choices, wandb layout, journal entries. Never decide thes
 ├── visualizations/  # plotting code (argparse python), sibling of code/
 ├── shitpads/        # temp space; gitignored, dir tracked, rig-local, never synced
 ├── references/      # papers/codebases to reference; gitignored, dir tracked, rig-synced
+├── program/         # tracked scientific agreement, decisions, and phase reports
+├── orchestration/   # local-only append-only control/subagent traces; gitignored
 ├── .env             # secrets + machine-varying paths ONLY (gitignored)
 ├── .env.example     # committed mirror of .env keys with placeholders
 ├── .python-version  # exact Python patch used on every rig
@@ -30,6 +52,8 @@ assignment, checkpoint choices, wandb layout, journal entries. Never decide thes
 ├── sync.toml        # Git/artifact/machine paths + environment smoke contract
 ├── README.md        # static scaffold (structure, setup, how-to)
 ├── AGENTS.md        # thin: project specifics + light awareness map
+├── program.md       # one-screen current scientific index
+├── index.md         # local mirror of the authoritative Flywheel graph
 ├── JOURNAL.md       # story: prose log of what/why/learned (append-only)
 └── EXPERIMENTS.md   # state: run tracking tables
 ```
@@ -62,7 +86,9 @@ Experiments are named `NNN_[experiment_name]` (three-digit zero-padded), optiona
 
 The per-experiment **ordered** set of config params that uniquely identifies a run.
 
-- **Elected WITH the user. Codex NEVER decides it alone — the user always has the final say.**
+- **Election owner follows `engineering_mode`.** In manual mode, propose and wait for the user.
+  In auto mode, elect and record the smallest ordered identity that prevents collisions inside the
+  approved engineering envelope.
 - Authoritative record: a constant in the experiment's `.py` (e.g. `RUN_ID_PARAMS`) that the
   path-building code actually uses; mirrored in the experiment's EXPERIMENTS.md section header.
 - Config yamls stay pure hydra params — **no run_id metadata in yaml**.
@@ -71,25 +97,19 @@ The per-experiment **ordered** set of config params that uniquely identifies a r
     `checkpoints/`, `evaluations/`, `plots/`. `param=value` segments are the default; keys and
     values are percent-encoded by the shared helper so `/`, spaces, commas, shell metacharacters,
     and structured values cannot alter the hierarchy. Any shortening (e.g. bare `mlp/`) is a
-    per-experiment deviation decided with the user.
+    per-experiment deviation decided by the applicable engineering-mode owner.
   - **flat form** — e.g. `model=mlp,lr=1e-3,seed=0` → uses the same percent-encoded components
     and is used for `scripts/` and `logs/`
     run-folder names, wandb run names, and log lines. Flat name ≡ wandb run, 1:1; it maps to
     one EXPERIMENTS.md row **per wave** the run took part in (see below).
 
-Projects created before research plugin 1.0 may have raw renderers. Before replacing one, inspect
-every existing run_id component. Unreserved components render identically and permit an in-place
-helper upgrade. A component containing `/`, whitespace, `%`, comma, `=`, a shell metacharacter, or
-a structured value requires an explicit user decision: migrate every corresponding artifact,
-script, and log path to the encoded form, or freeze the old experiment and start a new
-sub-experiment. Never let a helper upgrade silently rename run identity.
-
 ### run_id schema evolution
 
 A run_id election is only valid for the config schema it was elected against. Any change that
 **adds, removes, or renames a behavior-affecting config param** (integration, refactor, new
-feature) invalidates the current election ⇒ **mandatory re-election check with the user before
-any new run launches**. A param may stay out of `RUN_ID_PARAMS` only if the user explicitly
+feature) invalidates the current election ⇒ **mandatory re-election before any new run launches**.
+In engineering-manual mode the user decides; in engineering-auto mode the agent decides inside the
+approved envelope and records its reasoning. A param may stay out only when the applicable owner
 rules it non-identifying (e.g. a pure logging knob). Otherwise, new runs varying the new param
 would collide with old artifacts at the same `<run_id path>` — silently overwriting them, or
 worse, being skipped by an artifact-guarded wave script as "already done".
@@ -100,8 +120,8 @@ worse, being skipped by an artifact-guarded wave script as "already done".
   `checkpoints/ evaluations/ plots/` (path form) and `logs/ scripts/` (flat form), and add the
   column to EXPERIMENTS.md rows
   (wandb run names cannot be backfilled — note the schema change in JOURNAL.md instead).
-  Alternative (user's call): freeze the old tree and start a new sub-experiment for the new
-  code path.
+  Alternative: freeze the old tree and start a new sub-experiment for the new code path. The
+  applicable engineering-mode owner chooses and records the option.
 - **Runtime guard (canon)** — every run writes its **full resolved config snapshot** to
   `evaluations/NNN_exp/<run_id path>/.run_config.json` via `guard_run_config` in
   `code/common/run_id.py`, called before any artifact is written. If a snapshot already exists
@@ -122,7 +142,7 @@ of those is its own wave. Waves are the unit of launch, of on-disk execution his
 EXPERIMENTS.md rows.
 
 - **wave id** — `YYYYMMDD-HHMMSS` (e.g. `20260731-162043`). Minted **once per dispatch**, on
-  rig-4090 in local time, at the moment the assignment is approved (the id is in the paths, so
+  rig-4090 in local time, at the moment the assignment is authorized under the active mode (the id is in the paths, so
   it must exist before generation). **Shared by every rig and lane in that dispatch** — one
   decision, one id — which is what makes `grep -r <wave_id> scripts/` return the whole dispatch.
 - **Reused verbatim on crash recovery.** A post-reboot relaunch is not a new dispatch: same id,
@@ -145,7 +165,7 @@ portion of a wave assigned to one GPU set on one rig.
   would fight over a card. A run occupying every GPU therefore makes that rig a single lane for
   that wave.
 
-Layout — one script kind, self-guarded, replacing the old `run.sh` + `launch_<rig>.sh` pair:
+Canonical layout — one self-guarded script kind:
 
 ```
 scripts/NNN_exp/<run_id_flat>/wave_<wave_id>/
@@ -284,8 +304,7 @@ provenance is valid, disagreements resolve as **artifacts win**, then `.status.j
    card would trip the run_id-collision hard error. `StatusWriter` refreshes `heartbeat` and
    live `elapsed_s` atomically every 60 seconds even when a training unit is still running.
    Experiment code reports numeric progress with
-   `heartbeat(completed=<n>, total=<n>, unit=<label>)`; the display-only `progress` string and
-   legacy `heartbeat(progress=...)` call remain compatible. ETA is deliberately absent: it is
+   `heartbeat(completed=<n>, total=<n>, unit=<label>)`. ETA is deliberately absent: it is
    derived by the monitoring/tracking layer, never persisted as if it were measured fact.
 3. **Run log** — the latest
    `logs/NNN_exp/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-<YYYYmmdd-HHMMSS>.log`

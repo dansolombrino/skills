@@ -1,0 +1,12 @@
+interface:
+  display_name: "Flywheel Index"
+  short_description: "Mirror a Flywheel graph into local index.md"
+  default_prompt: "Use $flywheel-index to incrementally refresh or rebuild the local Flywheel graph index."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "flywheel"
+      description: "Flywheel MCP server"
+      transport: "streamable_http"
+      url: "https://flywheel.paradigma.inc/mcp-server"

@@ -1,7 +1,7 @@
 {
   "name": "research",
-  "version": "1.5.0",
-  "description": "Design reproducible research software, integrate references, enforce matching uv environments, and synchronize, launch, track, and visualize experiments across GPU rigs.",
+  "version": "2.0.0",
+  "description": "Orchestrate scientific research, publish curated Flywheel lineage, and materialize reproducible experiments across verified GPU rigs.",
   "author": {
     "name": "Dan Solombrino",
     "email": "dansolombrino@gmail.com",
@@ -17,13 +17,17 @@
     "environment-parity",
     "uv",
     "reference-code",
-    "adaptation"
+    "adaptation",
+    "scientific-orchestration",
+    "literature-review",
+    "flywheel",
+    "research-lineage"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Research",
-    "shortDescription": "Reproducible research across GPU rigs",
-    "longDescription": "Structure research projects, design experiments, integrate reference implementations through explicit source-to-target deviation approval, provision and verify exact uv environments, deploy tested Git revisions, dispatch GPU sweeps with timestamped ten-minute status and ETA reporting, reconcile run state, maintain a research journal, and create result visualizations.",
+    "shortDescription": "Scientific orchestration and reproducible GPU research",
+    "longDescription": "Scaffold fresh Research 2.0 projects, coordinate manual or autonomous scientific and engineering loops, synthesize literature, challenge assumptions, audit decisive evidence, publish curated Flywheel lineage, integrate reference implementations through protected deviation approval, provision exact uv environments, deploy tested revisions, dispatch and monitor GPU waves, reconcile run state, maintain a narrative journal, and create result visualizations.",
     "developerName": "Dan Solombrino",
     "category": "Developer Tools",
     "capabilities": [
@@ -32,10 +36,10 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Design a reproducible experiment and agree on its run identity.",
-      "Provision and verify one exact uv environment across configured GPU rigs.",
-      "Integrate reference code and approve every source-to-target deviation before editing.",
-      "Deploy, dispatch, and continuously monitor an approved experiment wave with timestamped status and ETA updates."
+      "Run a scientific research loop with explicit scientific and engineering modes.",
+      "Scaffold a fresh Research 2.0 project with program, journal, Flywheel, environment, and rig contracts.",
+      "Publish a completed experiment or scientific insight to the canonical Flywheel graph.",
+      "Compile an approved research step into a reproducible experiment and monitor its GPU wave through completion."
     ],
     "screenshots": []
   }

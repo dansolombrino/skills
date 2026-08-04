@@ -1,0 +1,4 @@
+interface:
+  display_name: "Science Literature Plan"
+  short_description: "Synthesize literature into decision-ready evidence"
+  default_prompt: "Use $science-literature-plan to investigate a scientific uncertainty with bounded parallel source review."

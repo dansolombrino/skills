@@ -1,4 +1,4 @@
 interface:
   display_name: "Research Project Init"
-  short_description: "Scaffold the standard reproducible research layout"
-  default_prompt: "Use $research-project-init to scaffold a structured research project with exact environment, rig-sync, and live status telemetry contracts."
+  short_description: "Scaffold a fresh Research 2.0 repository"
+  default_prompt: "Use $research-project-init to scaffold a fresh Research 2.0 project with explicit modes, scientific records, Flywheel, exact environments, rigs, and telemetry."

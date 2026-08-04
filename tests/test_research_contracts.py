@@ -13,11 +13,11 @@ ROOT = Path(__file__).parents[1]
 
 
 class ResearchContractTests(unittest.TestCase):
-    def test_plugin_minor_version_and_distributed_capabilities(self) -> None:
+    def test_plugin_major_version_and_distributed_capabilities(self) -> None:
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "1.5.0")
+        self.assertEqual(manifest["version"], "2.0.0")
         self.assertTrue((ROOT / "plugins/research/skills/rig-sync/SKILL.md").is_file())
         self.assertTrue(
             (ROOT / "plugins/research/skills/integrate-reference-code/SKILL.md").is_file()
@@ -25,6 +25,221 @@ class ResearchContractTests(unittest.TestCase):
         self.assertTrue(
             (ROOT / "plugins/research/skills/environment-sync/SKILL.md").is_file()
         )
+        skill_names = {
+            path.parent.name
+            for path in (ROOT / "plugins/research/skills").glob("*/SKILL.md")
+        }
+        self.assertEqual(len(skill_names), 21)
+        self.assertTrue(
+            {
+                "scientific-orchestrator",
+                "science-literature-plan",
+                "assumption-breaker-plan",
+                "critical-scientific-audit",
+                "research-housekeeping",
+                "flywheel",
+                "flywheel-auto",
+                "flywheel-index",
+                "flywheel-log",
+                "flywheel-lookahead",
+                "flywheel-reproduce",
+                "flywheel-to-graph",
+            }.issubset(skill_names)
+        )
+
+    def test_scientific_orchestrator_has_independent_explicit_modes(self) -> None:
+        skill_root = ROOT / "plugins/research/skills/scientific-orchestrator"
+        skill = (skill_root / "SKILL.md").read_text()
+        contract = (skill_root / "references/control-contract.md").read_text()
+
+        self.assertIn("Require explicit `scientific_mode` and `engineering_mode`", skill)
+        self.assertIn("Never infer either mode", skill)
+        self.assertIn("| manual | manual |", contract)
+        self.assertIn("| manual | auto |", contract)
+        self.assertIn("| auto | manual |", contract)
+        self.assertIn("| auto | auto |", contract)
+        self.assertIn("System or sandbox approvals remain independent", contract)
+        self.assertIn("every source-to-target deviation", contract)
+
+    def test_scientific_and_engineering_handoffs_preserve_ownership(self) -> None:
+        skill_root = ROOT / "plugins/research/skills/scientific-orchestrator"
+        skill = (skill_root / "SKILL.md").read_text()
+        contract = (skill_root / "references/control-contract.md").read_text()
+
+        self.assertIn("$experiment-design", skill)
+        self.assertIn("$environment-sync", skill)
+        self.assertIn("$rig-sync", skill)
+        self.assertIn("$sweep-dispatch", skill)
+        self.assertIn("The scientific layer defines what evidence", contract)
+        self.assertIn("The engineering layer chooses how", contract)
+        self.assertIn("never rewrites its factual execution state", contract)
+
+    def test_program_experiments_journal_and_flywheel_are_noncompeting(self) -> None:
+        housekeeping = (
+            ROOT / "plugins/research/skills/research-housekeeping/SKILL.md"
+        ).read_text()
+        orchestrator = (
+            ROOT / "plugins/research/skills/scientific-orchestrator/SKILL.md"
+        ).read_text()
+
+        self.assertIn("program.md` as the one-screen current index", orchestrator)
+        self.assertIn("`EXPERIMENTS.md` as the only run-state authority", orchestrator)
+        self.assertIn("`JOURNAL.md` as the chronological narrative", orchestrator)
+        self.assertIn("Flywheel as curated scientific lineage", orchestrator)
+        self.assertIn("Never introduce a generic `outputs/` tree", housekeeping)
+        self.assertIn("Never edit it from this skill", housekeeping)
+
+    def test_project_init_is_fresh_only_and_scaffolds_research_2_records(self) -> None:
+        init_root = ROOT / "plugins/research/skills/research-project-init"
+        skill = (init_root / "SKILL.md").read_text()
+        templates = (init_root / "references/templates.md").read_text()
+
+        self.assertIn("do not use to upgrade, migrate, or retrofit", skill)
+        self.assertIn("stop as unsupported", skill)
+        self.assertRegex(skill, r"Never\s+infer a default")
+        self.assertIn("## program/00-execution-agreement.md (initial)", templates)
+        self.assertIn("scientific_mode: <manual|auto", templates)
+        self.assertIn("engineering_mode: <manual|auto", templates)
+        self.assertIn("orchestration/", templates)
+        self.assertIn("FLYWHEEL_ROOT_NODE_ID=", templates)
+        self.assertIn("Do not create this file with placeholders", templates)
+        self.assertIn("`.gitkeep` in every directory", skill)
+
+    def test_flywheel_family_preserves_logging_and_index_authority(self) -> None:
+        log = (ROOT / "plugins/research/skills/flywheel-log/SKILL.md").read_text()
+        index = (ROOT / "plugins/research/skills/flywheel-index/SKILL.md").read_text()
+        auto = (ROOT / "plugins/research/skills/flywheel-auto/SKILL.md").read_text()
+        gate = (
+            ROOT
+            / "plugins/research/skills/flywheel/references/research-root-gate.md"
+        ).read_text()
+
+        self.assertIn("sole source of truth", log)
+        self.assertIn("./.flywheel.json", gate)
+        self.assertIn("Never create a", log)
+        self.assertIn("generic `outputs/`", log)
+        self.assertIn("`index.md` is a local logging side effect", log)
+        self.assertIn("index.md` is a *mirror*", index)
+        self.assertIn("authoritative", index)
+        self.assertIn("explicit budget", auto)
+
+    def test_flywheel_logging_contract_is_deterministic_and_fail_closed(self) -> None:
+        log = (ROOT / "plugins/research/skills/flywheel-log/SKILL.md").read_text()
+        index = (ROOT / "plugins/research/skills/flywheel-index/SKILL.md").read_text()
+        gate = (
+            ROOT
+            / "plugins/research/skills/flywheel/references/research-root-gate.md"
+        ).read_text()
+
+        self.assertLess(gate.index("./.flywheel.json"), gate.index("FLYWHEEL_ROOT_NODE_ID"))
+        self.assertLess(gate.index("FLYWHEEL_ROOT_NODE_ID"), gate.index("VS Code setting"))
+        for artifact in (
+            "at least one real plot/image",
+            "`summary.md`",
+            "machine-readable metrics",
+            "`reproducibility.md`",
+            "`commit.txt`",
+        ):
+            self.assertIn(artifact, log)
+        self.assertIn("stop and route its", log)
+        self.assertIn("generation to the owning research skill", log)
+        self.assertIn("explicit approval before deletion", log)
+        self.assertIn("approval before deletion", log)
+        self.assertIn("incremental", index)
+        self.assertIn("--rebuild", index)
+        self.assertIn("Never invent content", index)
+
+    def test_flywheel_writes_use_current_node_and_stage_contracts(self) -> None:
+        log = (ROOT / "plugins/research/skills/flywheel-log/SKILL.md").read_text()
+
+        self.assertNotIn("flywheel_stage_node_create", log)
+        self.assertIn("flywheel_commit_new_node", log)
+        self.assertIn("flywheel_branch_node", log)
+        self.assertIn("flywheel_acquire_stage_lease", log)
+        self.assertIn("stage_session_id", log)
+        self.assertIn("base_committed_revision", log)
+        self.assertIn("full `staged_payload`", log)
+        self.assertIn("Never send removed fields", log)
+        self.assertIn("For a failed or canceled run", log)
+        self.assertIn("For an insight node, require only self-contained `content`", log)
+        self.assertIn("A coherent\ngraph synthesis may be published with no artifacts", log)
+
+    def test_flywheel_mutators_require_canonical_root_ancestry(self) -> None:
+        gate = (
+            ROOT
+            / "plugins/research/skills/flywheel/references/research-root-gate.md"
+        ).read_text()
+        self.assertIn("flywheel_get_node_ancestry", gate)
+        self.assertIn("never overrides the workspace root", gate)
+        self.assertIn("Every new Research 2.0 node must be created with", gate)
+
+        for name in (
+            "flywheel-auto",
+            "flywheel-lookahead",
+            "flywheel-reproduce",
+            "flywheel-to-graph",
+        ):
+            skill = (ROOT / f"plugins/research/skills/{name}/SKILL.md").read_text()
+            self.assertIn("research-root-gate.md", skill, name)
+            self.assertRegex(skill, r"(?i)ancestry", name)
+            self.assertIn("explicitly approved new root", skill, name)
+
+    def test_flywheel_shared_contract_references_are_centralized(self) -> None:
+        common = (
+            "ARTIFACTS.md",
+            "INTERFACES.md",
+            "flywheel-cli-tool-map.md",
+            "flywheel-mcp-tool-map.md",
+        )
+        for skill_name in (
+            "flywheel-auto",
+            "flywheel-lookahead",
+            "flywheel-reproduce",
+            "flywheel-to-graph",
+        ):
+            skill = (ROOT / f"plugins/research/skills/{skill_name}/SKILL.md").read_text()
+            references = ROOT / f"plugins/research/skills/{skill_name}/references"
+            for filename in common:
+                self.assertFalse((references / filename).exists())
+                self.assertIn(f"../flywheel/references/{filename}", skill)
+
+        for skill_name in ("flywheel-auto", "flywheel-reproduce"):
+            duplicate = (
+                ROOT
+                / f"plugins/research/skills/{skill_name}/references/experiment-design-protocol.md"
+            )
+            self.assertFalse(duplicate.exists())
+
+    def test_operational_retry_preserves_run_identity(self) -> None:
+        fast_path = (
+            ROOT
+            / "plugins/research/skills/scientific-orchestrator/references/operational-fast-path.md"
+        ).read_text()
+        audit = (
+            ROOT / "plugins/research/skills/critical-scientific-audit/SKILL.md"
+        ).read_text()
+
+        self.assertIn("same elected run ID", fast_path)
+        self.assertIn("new wave or attempt identifier", fast_path)
+        self.assertIn("evolve the run ID", fast_path)
+        self.assertIn("../scientific-orchestrator/references/operational-fast-path.md", audit)
+        self.assertFalse(
+            (
+                ROOT
+                / "plugins/research/skills/critical-scientific-audit/references/operational-fast-path.md"
+            ).exists()
+        )
+
+    def test_all_execution_skills_reject_legacy_project_migration(self) -> None:
+        tracking = (
+            ROOT / "plugins/research/skills/experiments-tracking/SKILL.md"
+        ).read_text()
+        dispatch = (ROOT / "plugins/research/skills/sweep-dispatch/SKILL.md").read_text()
+
+        self.assertIn("do not offer migration", tracking)
+        self.assertIn("do not offer migration", dispatch)
+        self.assertIn("Unsupported layouts", dispatch)
+        self.assertNotIn("offer to migrate", tracking)
 
     def test_reference_code_integration_requires_informed_delta_approval(self) -> None:
         skill_root = ROOT / "plugins/research/skills/integrate-reference-code"
@@ -160,7 +375,7 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("datetime.datetime.now().astimezone()", project_templates)
         self.assertIn("threading.Thread", project_templates)
 
-    def test_status_writer_template_runs_structured_and_legacy_progress(self) -> None:
+    def test_status_writer_template_runs_structured_progress_only(self) -> None:
         templates = (
             ROOT / "plugins/research/skills/research-project-init/references/templates.md"
         ).read_text()
@@ -188,10 +403,8 @@ class ResearchContractTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     writer.heartbeat(completed=5, total=4, unit="epoch")
 
-                writer.heartbeat(progress="legacy 2/4")
-                legacy = json.loads(writer.path.read_text())
-                self.assertEqual(legacy["progress"], "legacy 2/4")
-                self.assertIsNone(legacy["progress_completed"])
+                with self.assertRaises(TypeError):
+                    writer.heartbeat(progress="legacy 2/4")
                 time.sleep(0.12)
                 live = json.loads(writer.path.read_text())
                 self.assertGreaterEqual(live["elapsed_s"], 0.1)

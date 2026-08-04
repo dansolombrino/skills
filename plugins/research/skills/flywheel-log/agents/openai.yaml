@@ -1,0 +1,12 @@
+interface:
+  display_name: "Flywheel Log"
+  short_description: "Publish curated evidence to the Flywheel graph"
+  default_prompt: "Use $flywheel-log to publish a completed experiment or insight with reproducibility artifacts."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "flywheel"
+      description: "Flywheel MCP server"
+      transport: "streamable_http"
+      url: "https://flywheel.paradigma.inc/mcp-server"

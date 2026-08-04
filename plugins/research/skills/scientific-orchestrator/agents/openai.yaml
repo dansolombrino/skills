@@ -1,0 +1,4 @@
+interface:
+  display_name: "Scientific Orchestrator"
+  short_description: "Coordinate bounded scientific research loops"
+  default_prompt: "Use $scientific-orchestrator to run a research loop with explicit scientific and engineering modes."

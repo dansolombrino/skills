@@ -1,11 +1,15 @@
 ---
 name: experiments-tracking
-description: Keep EXPERIMENTS.md true and derive active-run, lane, and wave ETAs — run tables, wave/rig/gpu placement, status lifecycle (todo/inpr/done/failed), run timing (started/progress/eta/ended/elapsed), and reconciliation from .status.json markers plus artifacts. Use in any structured research session when runs are generated, launched, checked, reported, or discussed, when the user asks about experiment status or ETA, or at session start to reconcile stale statuses.
+description: Keep a Research 2.0 EXPERIMENTS.md true and derive active-run, lane, and wave ETAs from provenance-valid schema-v2 status plus artifacts. Use when runs are generated, launched, checked, reported, or discussed, when the user asks about experiment status or ETA, or at session start to reconcile factual run state; do not interpret or migrate legacy tracking layouts.
 ---
 
 # experiments-tracking
 
 EXPERIMENTS.md is the project's **state** (the story lives in JOURNAL.md). Canon: `../research-project-init/references/conventions.md`.
+
+Require the Research 2.0 scaffold and schema-v2 status contract. If either is absent, stop as
+unsupported; do not offer migration or interpret legacy state. Factual reconciliation is automatic
+in every scientific/engineering mode and does not require a narrative or scientific decision.
 
 ## Hard rules
 
@@ -39,9 +43,7 @@ smoke pass: exit 0 and evaluations/000_grokking/smoke/result.json says one step 
   Git tag is `wave--<wave>`. `gpu` — the GPU set it occupied, opaque identity. Both are read from
   `.status.json`; before the run starts they come from the generated script's path.
 - Statuses: `todo` → `inpr` → `done` | `failed`. `started`/`ended` as `MM-DD HH:MM` (year only if ambiguous), `elapsed` compact (`45m`, `1h45m`, `2d3h`) from `elapsed_s`. **Elapsed values are the project's reference runtimes** — use them to estimate wall-clock and split temporal budgets when planning future waves.
-- `progress` — render schema-v2
-  `progress_unit progress_completed/progress_total`; use the legacy display-only `progress` value
-  only for historical statuses.
+- `progress` — render schema-v2 `progress_unit progress_completed/progress_total`.
 - `eta` — the **only computed column**. Recompute it on **every** reconciliation pass, and leave
   it blank for `todo`/`done`/`failed` rows and whenever there is no sound basis. Never write ETA
   into `.status.json` or present it as measured fact — say `estimated` and state the basis when
@@ -58,10 +60,7 @@ Use this deterministic hierarchy:
 2. At zero/missing structured progress, use the median `elapsed_s` of prior `done` rows with the
    same run_id, minus current elapsed, floored at zero (`exact-run history`). If none exist, use
    the median of all provenance-valid `done` rows in the same experiment (`experiment median`).
-3. Legacy display progress may be parsed only when it contains one unambiguous numeric
-   `<completed>/<total>` pair; apply the same linear formula and label it `legacy progress`.
-   Otherwise continue through the history fallbacks.
-4. A schema-v2 heartbeat older than three minutes, invalid numeric bounds, integrity mismatch,
+3. A schema-v2 heartbeat older than three minutes, invalid numeric bounds, integrity mismatch,
    or unreachable rig makes the active ETA unavailable until resolved. State the reason.
 
 For a lane, add its active run's remaining estimate to the estimated full runtimes of queued runs
@@ -84,8 +83,4 @@ On a run_id re-election (a param joins `RUN_ID_PARAMS` — `experiment-design` s
 
 ## Reconciliation (mandatory)
 
-Whenever a session on rig-4090 touches the project — and always when asked about statuses — sweep the signals and fix any stale rows. Match a `.status.json` to its row by **(run_id, `wave_id`)**; a run with several rows only ever has one live one (its latest wave). **Legacy fallback: a `.status.json` written before the wave schema has no `wave_id` field at all — match those by `run_id` alone and treat the row as pre-wave.** For a current wave, resolve `wave--<wave_id>` and require `.status.json`'s `source_tag` and `source_revision` to match it, then require `environment_fingerprint` to match the value in that wave's README/scripts. A missing or mismatched source/environment value is an integrity error: flag it prominently and do not reconcile that row automatically or accept its artifact for comparisons. Then: `inpr` whose `.status.json` says `done`/`failed` **and** whose artifacts agree ⇒ flip and fill `ended`/`elapsed`; `done` in `.status.json` but expected final artifact missing ⇒ artifacts win, flag it to the user instead of marking done; `inpr` whose `.status.json` is stuck at `running` with a frozen heartbeat **because of a machine fault** — the rig's boot time (`uptime -s`) postdates the heartbeat, or the lane's tmux session is gone — ⇒ the run is **interrupted**, not failed-by-code: keep `inpr` if a relaunched lane is (or is about to be) re-executing it, otherwise flip back to `todo` with a note; when reporting, always distinguish "failed (code error)" from "interrupted (machine fault — safe to relaunch, wave scripts are self-guarded)"; rows whose evaluations dir vanished ⇒ back to `todo` (outputs were deleted, timing cleared). Recompute `eta` for every `inpr` row while you are here. Reconciliation is deterministic: md always converges to the signals.
-
-Old projects may still have plain `.status` markers, a `launched` column, or the pre-wave `run.sh` + `launch_<rig>.sh` script layout with path-form log dirs — when working in one, offer to migrate its table/scripts/logs to the current wave schema opportunistically.
-
-**Never migrate while runs are in flight.** Migration renames script and log trees and rewrites table columns; doing that under a live run breaks the paths it is writing into and desyncs the table from disk mid-flight. Check first — if any run is `inpr` (or any `.status.json` says `running` with an advancing heartbeat), **say so and defer the offer** until the project is quiet. Migration is never urgent; a corrupted in-flight run is unrecoverable.
+Whenever a session on rig-4090 touches the project — and always when asked about statuses — sweep the signals and fix any stale rows. Match a `.status.json` to its row by **(run_id, `wave_id`)**; a run with several rows only ever has one live one (its latest wave). Missing `wave_id` or schema-v2 provenance makes the project unsupported. Resolve `wave--<wave_id>` and require `.status.json`'s `source_tag` and `source_revision` to match it, then require `environment_fingerprint` to match the value in that wave's README/scripts. A missing or mismatched source/environment value is an integrity error: flag it prominently and do not reconcile that row automatically or accept its artifact for comparisons. Then: `inpr` whose `.status.json` says `done`/`failed` **and** whose artifacts agree ⇒ flip and fill `ended`/`elapsed`; `done` in `.status.json` but expected final artifact missing ⇒ artifacts win, flag it to the user instead of marking done; `inpr` whose `.status.json` is stuck at `running` with a frozen heartbeat **because of a machine fault** — the rig's boot time (`uptime -s`) postdates the heartbeat, or the lane's tmux session is gone — ⇒ the run is **interrupted**, not failed-by-code: keep `inpr` if a relaunched lane is (or is about to be) re-executing it, otherwise flip back to `todo` with a note; when reporting, always distinguish "failed (code error)" from "interrupted (machine fault — safe to relaunch, wave scripts are self-guarded)"; rows whose evaluations dir vanished ⇒ back to `todo` (outputs were deleted, timing cleared). Recompute `eta` for every `inpr` row while you are here. Reconciliation is deterministic: md always converges to the signals.

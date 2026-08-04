@@ -1,4 +1,4 @@
 interface:
   display_name: "Research Journal"
   short_description: "Record research decisions, events, and findings"
-  default_prompt: "Use $research-journal to propose a concise journal entry for this research event."
+  default_prompt: "Use $research-journal to record this research event according to the event-owning layer's manual or auto mode."

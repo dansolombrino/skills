@@ -1,0 +1,4 @@
+interface:
+  display_name: "Critical Scientific Audit"
+  short_description: "Audit decisive scientific evidence proportionately"
+  default_prompt: "Use $critical-scientific-audit to judge whether evidence supports the next scientific decision."

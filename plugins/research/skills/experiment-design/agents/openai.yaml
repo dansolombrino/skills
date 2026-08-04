@@ -1,4 +1,4 @@
 interface:
   display_name: "Experiment Design"
   short_description: "Design reproducible experiments and run identities"
-  default_prompt: "Use $experiment-design to design a new experiment and agree on its run identity, checkpoints, and structured progress telemetry."
+  default_prompt: "Use $experiment-design to compile an approved research step into a reproducible experiment under the active engineering mode."

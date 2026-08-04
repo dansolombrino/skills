@@ -1,0 +1,4 @@
+interface:
+  display_name: "Research Housekeeping"
+  short_description: "Maintain scientific program and control records"
+  default_prompt: "Use $research-housekeeping to reconcile program records and local orchestration traces."

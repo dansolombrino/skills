@@ -1,6 +1,6 @@
 ---
 name: research-journal
-description: Keep JOURNAL.md alive — suggest entries after meaningful research events and write them on approval. Use after designing an experiment, launching a sweep, analyzing results, making a decision, hitting a dead end or bug — and whenever the user says to journal, log, or write up what happened.
+description: Keep a Research 2.0 JOURNAL.md as the append-only chronological story of what was done, why, and what was learned. Use after meaningful scientific or engineering events and whenever the user asks to journal, log, or write up the work; authorize each entry according to the event-owning layer's manual or auto mode, never as factual run state or Flywheel publication.
 ---
 
 # research-journal
@@ -9,7 +9,10 @@ JOURNAL.md is the project's **story** — prose explaining what was done, why, a
 
 ## When
 
-- After any meaningful event — experiment designed, sweep launched, results analyzed, decision taken, dead end hit, bug found — **suggest** an entry in the SAME turn: propose the text, the user has the last word on whether/what gets written. Trivial mechanical edits don't journal.
+- Read `program/00-execution-agreement.md`. If the event-owning scientific or engineering layer is
+  manual, suggest the entry in the same turn and wait for approval. If that layer is auto, append a
+  concise factual entry about its own in-envelope action without a per-entry prompt. When ownership
+  is mixed or ambiguous, treat it as manual and ask. Trivial mechanical edits do not journal.
 - On demand, anytime the user asks.
 
 ## Format
@@ -31,4 +34,4 @@ deciding the weight-decay grid (see EXPERIMENTS.md §000).
 
 ## Enforcement backstop
 
-The project's `.githooks/pre-commit` (installed at init) blocks commits touching `code/ config/ scripts/ evaluations/ visualizations/` without a JOURNAL.md change. If a commit gets blocked, that's the cue: propose the missing entry, then commit. Never bypass the hook (`--no-verify`) without explicit user instruction.
+The project's `.githooks/pre-commit` blocks commits touching `code/ config/ scripts/ evaluations/ visualizations/` without a JOURNAL.md change. If blocked, apply the mode-aware policy above, then commit. Never bypass the hook (`--no-verify`) without explicit user instruction.

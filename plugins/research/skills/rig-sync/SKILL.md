@@ -1,6 +1,6 @@
 ---
 name: rig-sync
-description: Deploy exact tested Git revisions and synchronize selected research artifacts across configured GPU rigs. Use when Codex needs to prepare a rig clone, verify GitHub access and rig identity, fast-forward machines to an approved wave commit, check cross-rig revision consistency, or inspect and transfer selected artifacts. Pair with environment-sync for installed runtime parity. Do not use for environment provisioning, continuous mirroring, destructive Git recovery, deletion, or unapproved remote writes.
+description: Deploy exact tested Git revisions and synchronize selected artifacts across configured Research 2.0 GPU rigs. Use when Codex needs to prepare an approved empty rig clone, verify GitHub and rig identity, fast-forward machines to an authorized wave commit, check cross-rig revision consistency, or transfer selected artifacts. Pair with environment-sync; do not use for legacy projects, environment provisioning, continuous mirroring, destructive Git recovery, deletion, or writes outside an approved engineering envelope.
 ---
 
 # rig-sync
@@ -9,13 +9,18 @@ Use the bundled `scripts/rigsync.py` from a structured research-project root. Re
 [references/configuration.md](references/configuration.md) when creating or repairing `sync.toml`
 or the user registry. Git/GitHub distributes launch source; rsync moves selected artifacts.
 
+Read `program/00-execution-agreement.md` and the Research 2.0 conventions first. Stop when the
+project surfaces are absent. In engineering-manual mode, show the dry run and wait; in
+engineering-auto mode, confirm only the named source, destination, revision, and selector covered
+by the approved envelope. New destinations and any destructive recovery remain protected.
+
 ## Safety contract
 
 - Run `doctor` before dispatch, `verify-revision` before every initial/recovery launch, and
   `status` before artifact movement. Run `$environment-sync verify` separately after revision
   deployment; Git consistency does not prove installed-environment consistency.
-- Show a `--dry-run` before every remote write, then get user approval for the named source,
-  destination, and selector. An approved assignment may explicitly authorize its commit, tag,
+- Show a `--dry-run` before every remote write, then authorize it under the active engineering
+  mode for the named source, destination, and selector. The engineering envelope may authorize its commit, tag,
   push, and fast-forward deployment to the named rigs.
 - Never force-push, reset, stash, clean, merge non-fast-forward, add `--delete`, delete remote
   files, or infer an SSH alias/path.
@@ -51,8 +56,8 @@ python3 "$RIGSYNC_SCRIPT" pull evaluations/000_exp --from rig-3090-ti --confirm
 to resolve to the approved SHA, and advances only with `git merge --ff-only`. It verifies exact
 `HEAD`, branch, remote URL, tag, and clean `code/`, `config/`, `scripts/`, dependency manifests,
 Python/uv pins, and `sync.toml` afterward. `$sweep-dispatch` combines this gate with
-`$environment-sync`; `push-source` remains available only for legacy or non-launch staging and
-never establishes launch consistency.
+`$environment-sync`. `push-source` never establishes Research 2.0 launch consistency and must not
+be used by dispatch.
 
 Artifact selectors are `<group>` or `<group>/<relative/path>`, where `<group>` is declared under
 `[artifacts]` in `sync.toml`. `pull` means peer → current rig; `push` means current rig → peer.
@@ -60,7 +65,7 @@ Artifact selectors are `<group>` or `<group>/<relative/path>`, where `<group>` i
 ## Setup and stop conditions
 
 - Require project-local `sync.toml` and user-local `~/.config/rigsync/machines.toml`. For a new
-  destination, preview and approve `prepare`; with `[git]` configured it clones the hub remote
+  destination, preview and authorize `prepare` under the active engineering mode; with `[git]` configured it clones the hub remote
   into an absent/empty path and refuses a non-empty non-Git directory.
 - Preserve existing registry entries. Add canonical rig aliases only from discovered SSH config
   and hostname facts or explicit user input.

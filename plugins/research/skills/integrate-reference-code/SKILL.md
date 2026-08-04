@@ -9,6 +9,10 @@ Integrate reference implementations without silent drift. Retain full freedom to
 best target-native implementation, but make every departure from the reference visible and
 user-approved before writing it.
 
+In a research project, require the Research 2.0 scaffold first. Source-to-target deviations are an
+always-protected choice: neither scientific-auto nor engineering-auto may approve them. The user's
+row-level approval remains required regardless of the active modes.
+
 ## 1. Inspect before editing
 
 1. Identify each reference by local path or URL and by commit, tag, version, or retrieval date
