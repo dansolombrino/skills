@@ -29,7 +29,7 @@ One section per `NNN_experiment`; header restates the run_id decision; table has
 ```markdown
 ## 000_grokking
 run_id params: model, lr, seed   (mirrors RUN_ID_PARAMS in code/000_grokking/train.py)
-smoke command: .venv/bin/python code/000_grokking/train.py smoke=true steps=1 seed=smoke
+smoke command: <environment.name>/bin/python code/000_grokking/train.py smoke=true steps=1 seed=smoke
 smoke pass: exit 0 and evaluations/000_grokking/smoke/result.json says one step completed
 
 | model | lr   | seed | wave            | rig                | gpu     | status | started     | progress   | eta         | ended       | elapsed | notes |

@@ -67,18 +67,19 @@ done
 # ---- end behemoth block
 
 # exact environment guard: runtime drift/incompatibility blocks this lane with reserved exit 87
+ENVIRONMENT_DIR="<environment.name from sync.toml>"
 EXPECTED_ENVIRONMENT_FINGERPRINT="<64-char fingerprint verified on every assigned rig>"
 ACTUAL_ENVIRONMENT_FINGERPRINT=$(
-  .venv/bin/python code/common/environment.py fingerprint --lock uv.lock 2>/dev/null
+  "$ENVIRONMENT_DIR/bin/python" code/common/environment.py fingerprint --lock uv.lock 2>/dev/null
 ) || {
-  echo "[environment-drift] cannot fingerprint .venv" >&2; exit 87;
+  echo "[environment-drift] cannot fingerprint $ENVIRONMENT_DIR" >&2; exit 87;
 }
 if [ "$ACTUAL_ENVIRONMENT_FINGERPRINT" != "$EXPECTED_ENVIRONMENT_FINGERPRINT" ]; then
   echo "[environment-drift] actual=$ACTUAL_ENVIRONMENT_FINGERPRINT expected=$EXPECTED_ENVIRONMENT_FINGERPRINT" >&2
   exit 87
 fi
 ENVIRONMENT_SMOKE=(<shell-quoted gpu_smoke tokens after the leading python>)
-if ! .venv/bin/python "${ENVIRONMENT_SMOKE[@]}"; then
+if ! "$ENVIRONMENT_DIR/bin/python" "${ENVIRONMENT_SMOKE[@]}"; then
   echo "[environment-drift] GPU compatibility smoke failed on $CUDA_VISIBLE_DEVICES" >&2
   exit 87
 fi
@@ -88,7 +89,7 @@ mkdir -p "$EVAL_DIR" "$LOG_DIR" || exit 1
 
 # full terminal capture: everything the run writes to stdout/stderr lands in the run log
 HYDRA_ARGS=(<tokens produced by hydra_override_arg; one per override>)
-.venv/bin/python code/<NNN_exp>/<script>.py "${HYDRA_ARGS[@]}" 2>&1 \
+"$ENVIRONMENT_DIR/bin/python" code/<NNN_exp>/<script>.py "${HYDRA_ARGS[@]}" 2>&1 \
   | tee "$LOG_DIR/wave_<rig>_gpu<ids>-$(date +%Y%m%d-%H%M%S).log"
 pipeline_rc=("${PIPESTATUS[@]}")
 python_rc=${pipeline_rc[0]}
@@ -101,7 +102,7 @@ fi
 
 # fallback: if python died before StatusWriter could finalize, mark the run failed
 if [ $rc -ne 0 ] && [ ! -e "$ARTIFACT" ]; then
-  .venv/bin/python - "$EVAL_DIR/.status.json" <<'EOF'
+  "$ENVIRONMENT_DIR/bin/python" - "$EVAL_DIR/.status.json" <<'EOF'
 import json, os, sys, datetime, pathlib
 p = pathlib.Path(sys.argv[1])
 s = json.loads(p.read_text()) if p.exists() else {}
@@ -138,10 +139,10 @@ Notes:
   by StatusWriter. They are env vars, **not** config params, so they never enter the
   `guard_run_config` snapshot — otherwise relaunch placement/provenance would trip the collision
   guard.
-- The environment guard uses `.venv/bin/python` and the tracked fingerprint helper; it never
-  invokes `uv sync`. Generate `ENVIRONMENT_SMOKE` from `sync.toml`'s argv after removing its
-  leading `python`. Exit `87` means runtime drift or GPU incompatibility, not an experiment
-  failure, and stops the lane.
+- The environment guard reads `ENVIRONMENT_DIR` from `[environment].name`, uses its `bin/python`
+  with the tracked fingerprint helper, and never invokes `uv sync`. Generate `ENVIRONMENT_SMOKE`
+  from `sync.toml`'s argv after removing its leading `python`. Exit `87` means runtime drift or GPU
+  incompatibility, not an experiment failure, and stops the lane.
 - The **behemoth GPU guard** is emitted on `behemoth` lanes only — the other rigs are ours
   outright and get no such block. It sits *after* the artifact guard (a finished run must still skip
   cleanly, not abort) and *before* python. `BEHEMOTH_AUTHORIZED_GPUS` is `0` by default and

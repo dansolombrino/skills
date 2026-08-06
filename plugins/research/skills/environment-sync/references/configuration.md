@@ -30,21 +30,27 @@ Extend the existing project `sync.toml`:
 ```toml
 [environment]
 manager = "uv"
+name = ".venv"
 gpu_smoke = ["python", "code/common/environment_smoke.py"]
 ```
 
+Before adding `name` or creating the environment, ask the user which single directory name to use.
+`.venv` may be suggested, but never inferred or silently selected. Reject paths, `.` and `..`;
+also reject names that collide with the project taxonomy, `.git`, `.env`, or `.rigsync_cache`.
+The chosen name is committed and must be identical across rigs.
+
 `gpu_smoke` is an argv array, not shell. Its first token must be `python`; environment sync
-replaces that token with the project's `.venv/bin/python` and supplies `CUDA_VISIBLE_DEVICES` for
-the approved lane. Keep the test quick and bounded, perform a real device operation through the
-project's locked framework, and exit nonzero on incompatibility. Do not encode GPU ownership in
-this command; `$sweep-dispatch` owns per-wave authorization.
+replaces that token with the configured environment's `bin/python` and supplies
+`CUDA_VISIBLE_DEVICES` for the approved lane. Keep the test quick and bounded, perform a real
+device operation through the project's locked framework, and exit nonzero on incompatibility. Do
+not encode GPU ownership in this command; `$sweep-dispatch` owns per-wave authorization.
 
 Copy the skill's `assets/environment.py` to `code/common/environment.py`. Generated wave scripts
 invoke its `fingerprint --lock uv.lock` command before experiment Python.
 
 ## Machine-local state
 
-- `.venv/` — exact project environment, ignored and never copied.
+- `<environment.name>/` — exact project environment, ignored and never copied.
 - `.rigsync_cache/tools/uv/<version>/` — exact standalone uv binary, ignored.
 - uv-managed Python and package/download caches — user-local, machine-local, never fingerprinted.
 - `.env`, credentials, datasets, drivers, CUDA devices, logs, and artifacts — outside the

@@ -43,6 +43,7 @@ class EnvironmentSyncTests(unittest.TestCase):
             version = 1
             [environment]
             manager = "uv"
+            name = ".venv"
             gpu_smoke = ["python", "-c", "print('gpu ok')"]
             [artifacts.evaluations]
             path = "evaluations"
@@ -71,6 +72,7 @@ class EnvironmentSyncTests(unittest.TestCase):
     def settings(self, root: Path) -> envsync.EnvironmentSettings:
         return envsync.EnvironmentSettings(
             root=root,
+            environment_name="research-env",
             uv_version="0.11.32",
             python_version="3.12.11",
             gpu_smoke=("python", "-c", "print('gpu ok')"),
@@ -83,7 +85,23 @@ class EnvironmentSyncTests(unittest.TestCase):
             settings = envsync.load_environment_settings(root, config)
             self.assertEqual(settings.uv_version, "0.11.32")
             self.assertEqual(settings.python_version, "3.12.11")
+            self.assertEqual(settings.environment_name, ".venv")
             self.assertEqual(settings.gpu_smoke[0], "python")
+
+    def test_load_contract_requires_user_chosen_safe_environment_name(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = self.make_contract(root)
+            contents = config.read_text()
+            for value in (None, "../shared", ".", "name with spaces", "code", ".git"):
+                if value is None:
+                    changed = contents.replace('name = ".venv"\n', "")
+                else:
+                    changed = contents.replace('name = ".venv"', f'name = "{value}"')
+                config.write_text(changed)
+                with self.assertRaisesRegex(envsync.EnvironmentSyncError, "environment.name"):
+                    envsync.load_environment_settings(root, config)
+                config.write_text(contents)
 
     def test_load_contract_rejects_uv_range(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -156,6 +174,7 @@ class EnvironmentSyncTests(unittest.TestCase):
         self.assertIn("--managed-python", command)
         self.assertIn("--dry-run", command)
         self.assertEqual(command[command.index("--python") + 1], "3.12.11")
+        self.assertIn("UV_PROJECT_ENVIRONMENT=/tmp/hub/research-env", command)
 
     def test_uv_install_is_versioned_user_local_and_does_not_use_sudo(self) -> None:
         root = Path("/tmp/hub")
@@ -280,7 +299,10 @@ class EnvironmentSyncTests(unittest.TestCase):
                 self.settings(root), machine, envsync.Lane("hub", "0,1")
             )
         command = remote_mock.call_args.args[1]
-        self.assertEqual(command[:3], ["env", "CUDA_VISIBLE_DEVICES=0,1", "/tmp/hub/.venv/bin/python"])
+        self.assertEqual(
+            command[:3],
+            ["env", "CUDA_VISIBLE_DEVICES=0,1", "/tmp/hub/research-env/bin/python"],
+        )
         self.assertNotIn("uv", command)
 
 

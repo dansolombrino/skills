@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Provision and verify one uv environment across configured research rigs."""
+"""Provision and verify one named uv environment across configured research rigs."""
 
 from __future__ import annotations
 
@@ -40,11 +40,28 @@ URL_CREDENTIAL_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^\s/@:]+):([^\s/@]+)@",
 SECRET_PARAMETER_RE = re.compile(
     r"(?i)(token|password|passwd|secret|api[_-]?key)(=|%3[dD])([^&\s]+)"
 )
+RESERVED_ENVIRONMENT_NAMES = {
+    ".env",
+    ".git",
+    ".rigsync_cache",
+    "checkpoints",
+    "code",
+    "config",
+    "evaluations",
+    "logs",
+    "orchestration",
+    "plots",
+    "references",
+    "scripts",
+    "shitpads",
+    "visualizations",
+}
 
 
 @dataclass(frozen=True)
 class EnvironmentSettings:
     root: Path
+    environment_name: str
     uv_version: str
     python_version: str
     gpu_smoke: tuple[str, ...]
@@ -93,6 +110,18 @@ def load_environment_settings(root: Path, config_path: Path) -> EnvironmentSetti
         raise EnvironmentSyncError(f"{config_path}: missing [environment]")
     if raw_environment.get("manager") != "uv":
         raise EnvironmentSyncError(f'{config_path}: environment.manager must be "uv"')
+    environment_name = raw_environment.get("name")
+    if (
+        not isinstance(environment_name, str)
+        or not environment_name
+        or environment_name in {".", ".."}
+        or Path(environment_name).name != environment_name
+        or not re.fullmatch(r"[A-Za-z0-9._-]+", environment_name)
+        or environment_name in RESERVED_ENVIRONMENT_NAMES
+    ):
+        raise EnvironmentSyncError(
+            f"{config_path}: environment.name must be a safe, non-reserved directory name"
+        )
     raw_smoke = raw_environment.get("gpu_smoke")
     if (
         not isinstance(raw_smoke, list)
@@ -133,7 +162,9 @@ def load_environment_settings(root: Path, config_path: Path) -> EnvironmentSetti
     for required in (root / "uv.lock", root / "code" / "common" / "environment.py"):
         if not required.is_file():
             raise EnvironmentSyncError(f"missing contract file: {required}")
-    return EnvironmentSettings(root, uv_version, python_version, tuple(raw_smoke))
+    return EnvironmentSettings(
+        root, environment_name, uv_version, python_version, tuple(raw_smoke)
+    )
 
 
 def parse_lanes(values: list[str] | None) -> list[Lane]:
@@ -167,8 +198,12 @@ def uv_path(settings: EnvironmentSettings, machine) -> Path:
     return machine_path(settings, machine, relative)
 
 
-def venv_python(machine) -> Path:
-    return machine.repo_path / ".venv" / "bin" / "python"
+def environment_path(settings: EnvironmentSettings, machine) -> Path:
+    return machine.repo_path / settings.environment_name
+
+
+def venv_python(settings: EnvironmentSettings, machine) -> Path:
+    return environment_path(settings, machine) / "bin" / "python"
 
 
 def host_facts(machine) -> HostFacts:
@@ -262,6 +297,7 @@ def sync_command(settings: EnvironmentSettings, machine, *, dry_run: bool) -> li
     command = [
         "env",
         "UV_NO_MODIFY_PATH=1",
+        f"UV_PROJECT_ENVIRONMENT={environment_path(settings, machine)}",
         str(uv_path(settings, machine)),
         "sync",
         "--project",
@@ -280,12 +316,16 @@ def sync_command(settings: EnvironmentSettings, machine, *, dry_run: bool) -> li
 def environment_fingerprint(settings: EnvironmentSettings, machine) -> str:
     helper = machine.repo_path / "code" / "common" / "environment.py"
     lock = machine.repo_path / "uv.lock"
-    exists = remote(machine, ["test", "-x", str(venv_python(machine))], check=False)
+    exists = remote(
+        machine, ["test", "-x", str(venv_python(settings, machine))], check=False
+    )
     if exists.returncode:
-        raise EnvironmentSyncError(f"{machine.name}: missing project environment .venv")
+        raise EnvironmentSyncError(
+            f"{machine.name}: missing project environment {settings.environment_name}"
+        )
     result = remote(
         machine,
-        [str(venv_python(machine)), str(helper), "fingerprint", "--lock", str(lock)],
+        [str(venv_python(settings, machine)), str(helper), "fingerprint", "--lock", str(lock)],
         check=False,
     )
     if result.returncode:
@@ -385,7 +425,7 @@ def provision(
         if dry_run:
             print(
                 f"[dry-run] {machine.name}: uv {settings.uv_version}, Python {settings.python_version}, "
-                f"environment {machine.repo_path / '.venv'}"
+                f"environment {environment_path(settings, machine)}"
             )
             if observed_uv != settings.uv_version:
                 print(
@@ -441,7 +481,7 @@ def run_gpu_smoke(settings: EnvironmentSettings, machine, lane: Lane) -> None:
     command = [
         "env",
         f"CUDA_VISIBLE_DEVICES={lane.gpus}",
-        str(venv_python(machine)),
+        str(venv_python(settings, machine)),
         *settings.gpu_smoke[1:],
     ]
     result = remote(machine, command, check=False)

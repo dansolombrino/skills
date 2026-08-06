@@ -25,7 +25,8 @@ unsupported; halt without upgrading it in place.
 1c. **environment contract check** — require exact uv/Python pins, current `uv.lock`, the standard
 `code/common/environment.py`, and the project GPU smoke. Use `$environment-sync` to verify the hub
 fingerprint before the experiment smoke. Dependency-contract changes must be committed and
-verified before wave generation; never let a launch-time command repair or relock `.venv`.
+verified before wave generation; read `[environment].name` from `sync.toml` and never let a
+launch-time command repair or relock the configured environment.
 1d. **telemetry contract check** — require schema-v2 `code/common/status.py` from
 `research-project-init` and structured progress call sites in every target training/eval entrypoint.
 The helper must provide timezone-aware timestamps, live elapsed time, and its automatic
@@ -56,8 +57,9 @@ scripts/NNN_exp/<run_id_flat>/wave_<wave_id>/
 
 - The wave script is **self-contained** (full python command with explicit hydra overrides, each rendered through `hydra_override_arg`) and **self-guarded**: it exits early only if its expected final artifact is present. A `.status.json` that says `done` while the artifact is absent is inconsistent, so the script warns and re-executes. That guard is what makes lane dispatch idempotent — there is no launcher file holding it. Whether a re-execution resumes or restarts was fixed at experiment design time, never re-asked here.
 - It exports `CUDA_VISIBLE_DEVICES`, `WAVE_ID`, and the approved `ENVIRONMENT_FINGERPRINT`.
-  Before experiment Python it recomputes the fingerprint with `.venv/bin/python`, compares it,
-  and runs the bounded project GPU smoke without syncing. Drift/compatibility failure exits `87`.
+  Before experiment Python it recomputes the fingerprint with the configured environment's
+  `bin/python`, compares it, and runs the bounded project GPU smoke without syncing.
+  Drift/compatibility failure exits `87`.
   On `behemoth` it retains the per-wave authorization guard before the smoke. It captures its own
   timestamped log under the mirror path in `logs/`.
 - Folder names come from `run_id_flat` (via `code/common/run_id.py`) — identical strings to EXPERIMENTS.md rows and wandb run names. `ls scripts/NNN_exp/<run_id_flat>/` is that run's execution history.

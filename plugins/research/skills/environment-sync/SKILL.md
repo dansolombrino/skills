@@ -21,12 +21,17 @@ protected.
 - Require committed `pyproject.toml`, `uv.lock`, `.python-version`, `sync.toml`, and
   `code/common/environment.py`.
 - Require an exact `X.Y.Z` Python pin, exact `[tool.uv].required-version = "==X.Y.Z"`, and
-  `[environment].manager = "uv"` with a tokenized Python `gpu_smoke` command.
+  `[environment].manager = "uv"`, a user-chosen single-directory `name`, and a tokenized Python
+  `gpu_smoke` command. Before creating an environment whose name has not been chosen, ask the user
+  which name the virtual environment should have; suggest `.venv` only as an option and never infer
+  or silently default the name.
+  Reject names that collide with the project taxonomy, `.git`, `.env`, or `.rigsync_cache`.
 - Treat the invariant fingerprint as the lock digest, exact Python implementation/version, and
   canonical installed distribution names/versions. Report OS, architecture, libc, GPU, and
   driver facts separately; allow host differences only when the project GPU smoke passes.
-- Never copy `.venv`, sync system packages, use `sudo`, modify shell profiles, or silently convert
-  requirements/Conda projects. Treat those layouts as unsupported rather than converting them.
+- Never copy the configured environment directory, sync system packages, use `sudo`, modify shell
+  profiles, or silently convert requirements/Conda projects. Treat those layouts as unsupported
+  rather than converting them.
 
 ## Workflow
 
@@ -36,8 +41,8 @@ protected.
    target, and each available `uv sync --frozen --exact --dry-run` result; when pinned uv is
    absent, show its versioned installer plan. Authorize `--confirm` according to engineering mode.
 3. On confirmation, install pinned uv under ignored `.rigsync_cache/`, install the exact
-   uv-managed Python, and exact-sync `.venv`. Refuse mutation while the project has active tmux
-   lanes or `running` statuses.
+   uv-managed Python, and exact-sync the configured named environment. Refuse mutation while the
+   project has active tmux lanes or `running` statuses.
 4. Run `verify` across the complete rig set, then once per approved GPU lane. Require every rig's
    fingerprint to equal the local hub and every bounded GPU smoke to succeed.
 5. Give the verified fingerprint to `$sweep-dispatch`; embed it in wave scripts and status

@@ -17,7 +17,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "2.0.0")
+        self.assertEqual(manifest["version"], "2.0.1")
         self.assertTrue((ROOT / "plugins/research/skills/rig-sync/SKILL.md").is_file())
         self.assertTrue(
             (ROOT / "plugins/research/skills/integrate-reference-code/SKILL.md").is_file()
@@ -102,8 +102,41 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("engineering_mode: <manual|auto", templates)
         self.assertIn("orchestration/", templates)
         self.assertIn("FLYWHEEL_ROOT_NODE_ID=", templates)
+        for key in (
+            "HF_TOKEN",
+            "HUGGING_FACE_HUB_TOKEN",
+            "HF_HOME",
+            "HF_DATASETS_CACHE",
+            "HF_HUB_CACHE",
+            "OPENCLIP_CACHE_DIR",
+            "CACHE_DIR",
+            "TORCH_NUM_WORKERS",
+        ):
+            self.assertGreaterEqual(templates.count(f"{key}="), 2, key)
+        self.assertIn("HF_HOME=/mnt/KS_2TB/cache/huggingface", templates)
+        self.assertIn(
+            "HF_DATASETS_CACHE=/mnt/KS_2TB/cache/huggingface/datasets", templates
+        )
+        self.assertIn(
+            "HF_HUB_CACHE=/mnt/KS_2TB/cache/huggingface/models", templates
+        )
+        self.assertIn(
+            "OPENCLIP_CACHE_DIR=/mnt/KS_2TB/PARA/Projects/quantization/qat-transfer/"
+            "storage/openclip",
+            templates,
+        )
+        self.assertIn(
+            "CACHE_DIR=/mnt/KS_2TB/PARA/Projects/quantization/qat-transfer/"
+            "storage/cache",
+            templates,
+        )
+        self.assertIn("TORCH_NUM_WORKERS=16", templates)
+        self.assertIn("never copy or commit a token", templates)
         self.assertIn("Do not create this file with placeholders", templates)
         self.assertIn("`.gitkeep` in every directory", skill)
+        self.assertIn("Ask which single directory name", skill)
+        self.assertIn('name = "{{ENVIRONMENT_NAME}}"', templates)
+        self.assertIn("{{ENVIRONMENT_NAME}}/", templates)
 
     def test_flywheel_family_preserves_logging_and_index_authority(self) -> None:
         log = (ROOT / "plugins/research/skills/flywheel-log/SKILL.md").read_text()
@@ -291,16 +324,35 @@ class ResearchContractTests(unittest.TestCase):
             status_template,
         )
         environment_guard = templates.index("EXPECTED_ENVIRONMENT_FINGERPRINT")
-        python = templates.index(".venv/bin/python code/<NNN_exp>/<script>.py")
+        python = templates.index('"$ENVIRONMENT_DIR/bin/python" code/<NNN_exp>/<script>.py')
         self.assertLess(environment_guard, python)
         self.assertIn('"$rc" -eq 87', templates)
+
+    def test_uv_environment_name_is_user_chosen_and_consumed_everywhere(self) -> None:
+        environment_sync = (
+            ROOT / "plugins/research/skills/environment-sync/SKILL.md"
+        ).read_text()
+        project_init = (
+            ROOT / "plugins/research/skills/research-project-init/SKILL.md"
+        ).read_text()
+        dispatch = (
+            ROOT / "plugins/research/skills/sweep-dispatch/references/templates.md"
+        ).read_text()
+
+        self.assertIn("ask the user", environment_sync.lower())
+        self.assertIn("virtual environment should have", environment_sync.lower())
+        self.assertIn("Ask which single directory name", project_init)
+        for skill in (environment_sync, project_init):
+            self.assertRegex(skill, r"(?i)never infer|never .*default")
+        self.assertIn('ENVIRONMENT_DIR="<environment.name from sync.toml>"', dispatch)
+        self.assertNotIn(".venv/bin/python", dispatch)
 
     def test_behemoth_guard_precedes_python(self) -> None:
         templates = (
             ROOT / "plugins/research/skills/sweep-dispatch/references/templates.md"
         ).read_text()
         guard = templates.index("BEHEMOTH_AUTHORIZED_GPUS")
-        python = templates.index(".venv/bin/python code/<NNN_exp>/<script>.py")
+        python = templates.index('"$ENVIRONMENT_DIR/bin/python" code/<NNN_exp>/<script>.py')
         self.assertLess(guard, python)
 
     def test_git_revision_guard_precedes_python_and_records_provenance(self) -> None:
@@ -311,7 +363,7 @@ class ResearchContractTests(unittest.TestCase):
             ROOT / "plugins/research/skills/research-project-init/references/templates.md"
         ).read_text()
         source_guard = templates.index("SOURCE_REVISION=$(git rev-parse")
-        python = templates.index(".venv/bin/python code/<NNN_exp>/<script>.py")
+        python = templates.index('"$ENVIRONMENT_DIR/bin/python" code/<NNN_exp>/<script>.py')
         self.assertLess(source_guard, python)
         self.assertIn(
             '"source_revision": os.environ.get("SOURCE_REVISION")', status_template
