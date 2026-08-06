@@ -214,8 +214,9 @@ Every wave also carries one immutable user-space environment identity:
 - The project commits `pyproject.toml`, `uv.lock`, an exact `.python-version`,
   `code/common/environment.py`, and `[environment]` in `sync.toml`. Use only uv's configured
   default dependency groups; never add per-rig extras or manual packages.
-- `$environment-sync` installs the exact required uv and Python without `sudo`, materializes each
-  machine's ignored `.venv` with `uv sync --frozen --exact`, and refuses mutation while project
+- `$environment-sync` installs the exact required uv and Python without `sudo`, asks the user for
+  one environment directory name, records it as `[environment].name`, materializes that ignored
+  directory on each machine with `uv sync --frozen --exact`, and refuses mutation while project
   lanes or `running` statuses exist.
 - The fingerprint hashes the lock, exact interpreter, and canonical installed package
   names/versions. It must match the hub on every assigned rig. OS/architecture must be compatible;

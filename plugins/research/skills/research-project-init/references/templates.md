@@ -198,14 +198,52 @@ engineering_mode: <manual|auto — required>
 Local mirror of the Flywheel graph. The authoritative record lives in Flywheel.
 ```
 
-## .env.example (seed)
+## .env.example (committed key mirror)
 
 ```bash
 WANDB_API_KEY=
 FLYWHEEL_ROOT_NODE_ID=
 FLYWHEEL_ROOT_NODE_SLUG=
 FLYWHEEL_ROOT_NODE_TITLE=
-# machine-varying paths (data roots etc.) — add per project; mirror every new key here
+
+# Hugging Face credentials (secrets; keep values only in .env)
+HF_TOKEN=
+HUGGING_FACE_HUB_TOKEN=
+
+# Machine-varying cache paths (the scaffold writes concrete absolute values to .env)
+HF_HOME=
+HF_DATASETS_CACHE=
+HF_HUB_CACHE=
+OPENCLIP_CACHE_DIR=
+CACHE_DIR=
+
+# Machine-local runtime setting
+TORCH_NUM_WORKERS=
+```
+
+## .env (ignored machine profile)
+
+Render this file directly; do not obtain it by copying `.env.example`. These are the shared cache
+paths used by the research rigs and must be reproduced verbatim so model and dataset downloads are
+reused across projects. Keep secret values empty unless the user explicitly supplies them through
+an authorized secret source; never copy or commit a token from another project's `.env`.
+
+```bash
+WANDB_API_KEY=
+FLYWHEEL_ROOT_NODE_ID=
+FLYWHEEL_ROOT_NODE_SLUG=
+FLYWHEEL_ROOT_NODE_TITLE=
+
+HF_TOKEN=
+HUGGING_FACE_HUB_TOKEN=
+
+HF_HOME=/mnt/KS_2TB/cache/huggingface
+HF_DATASETS_CACHE=/mnt/KS_2TB/cache/huggingface/datasets
+HF_HUB_CACHE=/mnt/KS_2TB/cache/huggingface/models
+OPENCLIP_CACHE_DIR=/mnt/KS_2TB/PARA/Projects/quantization/qat-transfer/storage/openclip
+CACHE_DIR=/mnt/KS_2TB/PARA/Projects/quantization/qat-transfer/storage/cache
+
+TORCH_NUM_WORKERS=16
 ```
 
 ## .flywheel.json (only after root verification)
@@ -224,7 +262,7 @@ Flywheel disposition as setup-incomplete.
 
 ```gitignore
 .env
-.venv/
+{{ENVIRONMENT_NAME}}/
 .rigsync_cache/
 orchestration/
 shitpads/*
@@ -252,8 +290,10 @@ Adjust with the user: they may want evaluations/ (small jsons) or plots/ committ
 Create this from the `$rig-sync` skill's configuration reference. Declare `[git]` with the
 approved remote/branch, the standard artifact groups, and one absolute `repo_path` per intended
 rig; do not put SSH aliases, ports, users, or keys here. Add `[environment]` from
-`$environment-sync` with `manager = "uv"` and the approved tokenized GPU smoke command. Run both
-skills' doctor checks before remote dispatch.
+`$environment-sync` with `manager = "uv"`, the user-chosen single-directory
+`name = "{{ENVIRONMENT_NAME}}"`, and the approved tokenized GPU smoke command. Ask for this name
+before creating the environment; suggest `.venv` only as an option and never infer a default. Run
+both skills' doctor checks before remote dispatch.
 
 ## Python environment
 
@@ -261,7 +301,7 @@ Create `pyproject.toml` with the project metadata, dependencies, exact
 `[tool.uv].required-version = "==X.Y.Z"`, and `python-preference = "managed"`. Commit an exact
 `X.Y.Z` `.python-version` and the generated `uv.lock`. Copy
 `$environment-sync/assets/environment.py` to `code/common/environment.py`; do not rewrite its
-fingerprint algorithm per project. Keep `.venv/` and `.rigsync_cache/` ignored.
+fingerprint algorithm per project. Keep `{{ENVIRONMENT_NAME}}/` and `.rigsync_cache/` ignored.
 
 ## .githooks/pre-commit (journal guard)
 
@@ -295,7 +335,7 @@ cd "$(dirname "$0")/../../../.." || exit 1  # to project root (depth varies with
 LOGDIR="logs/NNN_experiment/<run_id_flat>/wave_<wave_id>"
 mkdir -p "$LOGDIR"
 HYDRA_ARGS=(<tokens produced by hydra_override_arg; one per override>)
-.venv/bin/python code/NNN_experiment/script.py "${HYDRA_ARGS[@]}" 2>&1 \
+{{ENVIRONMENT_NAME}}/bin/python code/NNN_experiment/script.py "${HYDRA_ARGS[@]}" 2>&1 \
   | tee "$LOGDIR/wave_<rig>_gpu<ids>-$(date +%Y%m%d-%H%M%S).log"
 ```
 

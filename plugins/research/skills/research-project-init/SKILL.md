@@ -17,6 +17,10 @@ Scaffold only the Research 2.0 architecture. Read
    would need rewriting, or nontrivial files, stop as unsupported. Do not offer migration.
 3. Confirm project name, path, one-line description, GitHub remote, dispatch branch, exact Python
    patch, exact uv version, bounded GPU smoke command, and whether evaluations/plots are committed.
+   Ask which single directory name the uv virtual environment should have; suggest `.venv` only as
+   an option, and never infer or silently default the name. Reject project-surface collisions.
+   Use the standard cache profile from the templates unless the user explicitly supplies different
+   machine paths or worker count.
 4. Require explicit `scientific_mode: manual|auto` and `engineering_mode: manual|auto`. Never
    infer a default. Capture the initial scientific scope, engineering repo/rig/GPU/budget envelope,
    approved destinations, and protected choices.
@@ -38,8 +42,11 @@ Scaffold only the Research 2.0 architecture. Read
    - ignored `orchestration/control/events.jsonl` and phase traces as needed.
 3. Create `README.md`, `AGENTS.md`, `JOURNAL.md`, `EXPERIMENTS.md`, `.env.example`, `.env`,
    `.gitignore`, `sync.toml`, `pyproject.toml`, `uv.lock`, and `.python-version` from the templates.
-   `.env` contains only secrets and machine-varying paths. Put Flywheel root placeholders in
-   `.env.example`; create `.flywheel.json` only from a verified root.
+   `.env` contains only secrets, machine-varying paths, and machine-local runtime settings. Use the
+   standard cache paths verbatim so projects reuse the same model and dataset caches. Keep token
+   values empty unless the user supplies them through an authorized secret source. Mirror every
+   key in `.env.example` with empty values and explanatory comments; put Flywheel root placeholders
+   there. Create `.flywheel.json` only from a verified root.
 4. Install `.githooks/pre-commit`. It requires a journal update when experiment-relevant files are
    committed; the active layer's mode determines whether the entry is user-approved or delegated.
 5. Create `code/common/run_id.py` and `code/common/status.py`, and copy
