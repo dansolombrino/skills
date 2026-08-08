@@ -34,7 +34,9 @@ Require user approval for destructive operations, history rewrites, deletion of 
 overwriting user changes, new repositories/remotes/accounts/destinations, secrets or authentication
 changes, budget/scope/rig expansion, shared-GPU exceptions, ambiguous Flywheel root or parent,
 external publication outside the approved root, and every source-to-target deviation governed by
-`$integrate-reference-code`.
+`$integrate-reference-code`. Also require approval of the exact title template and fixed
+`RUN_ID_PARAMS` before every plotting-code creation or modification, including in auto modes and
+when a previously approved title would remain unchanged.
 
 System or sandbox approvals remain independent and always apply.
 

@@ -1,6 +1,6 @@
 ---
 name: visualizations
-description: Create or update Research 2.0 plots and figures from provenance-valid experiment evaluation outputs while preserving the standard artifact taxonomy and active engineering mode. Use when the user asks to plot, visualize, chart, make figures from results, or add or modify scripts under visualizations/; do not use to recompute missing evaluation data.
+description: Create or update Research 2.0 plots and figures from provenance-valid experiment evaluation outputs while preserving the standard artifact taxonomy and requiring user approval of exact RUN_ID-aware title templates before every plotting-code edit. Use when the user asks to plot, visualize, chart, make figures from results, or add or modify scripts under visualizations/; do not use to recompute missing evaluation data.
 ---
 
 # visualizations
@@ -10,7 +10,7 @@ Plotting code conventions. Canon: `../research-project-init/references/conventio
 Require the Research 2.0 scaffold and read the active execution agreement. Plot representation,
 placement, and execution follow `engineering_mode`: manual mode proposes and waits; auto mode may
 choose inside the approved envelope. Scientific interpretation and claim changes remain owned by
-the scientific layer.
+the scientific layer. Plot-title approval is always user-owned and overrides both modes.
 
 ## Placement
 
@@ -40,6 +40,17 @@ Resolve placement with the applicable engineering-mode owner and record nonstand
 
 ## Design & execution
 
+- Before every creation or modification of plotting code, read the producer's authoritative
+  ordered `RUN_ID_PARAMS` and classify each parameter as fixed or aggregated for every plot the
+  script produces.
+- Propose the exact title template for every plot, including wording, punctuation, formatting,
+  and each fixed RUN_ID param as `key={value}` in elected order. Omit aggregated RUN_ID params;
+  describe the aggregation semantically only when it helps interpret the plot. If none are fixed,
+  state that the proposed semantic title contains no RUN_ID part rather than fabricating one.
+- Wait for explicit user approval before editing the plotting code. Re-propose and obtain approval
+  on every later plotting-code edit even when the title template is unchanged. Neither scientific-
+  auto nor engineering-auto may bypass this gate; approval of a title does not authorize unrelated
+  protected actions.
 - **No fixed plot checklist**: manual mode asks what the user wants; auto mode chooses the smallest
   visualization that answers the approved scientific handoff.
 - Run plainly on **rig-4090** (where evaluations converge) — no dispatch/tmux machinery.

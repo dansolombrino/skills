@@ -1,4 +1,4 @@
 interface:
   display_name: "Research Visualizations"
   short_description: "Create plots from experiment evaluation outputs"
-  default_prompt: "Use $visualizations to create a mode-authorized plot from these experiment evaluation outputs."
+  default_prompt: "Use $visualizations to propose exact RUN_ID-aware plot titles for my approval before creating or modifying plotting code."

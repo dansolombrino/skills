@@ -103,6 +103,19 @@ The per-experiment **ordered** set of config params that uniquely identifies a r
     run-folder names, wandb run names, and log lines. Flat name ≡ wandb run, 1:1; it maps to
     one EXPERIMENTS.md row **per wave** the run took part in (see below).
 
+### Plot-title approval
+
+Before every creation or modification of code under `visualizations/`, read the producer's
+authoritative ordered `RUN_ID_PARAMS` and propose the exact title template for every plot the code
+produces. Include every RUN_ID param held fixed by that plot as `key={value}` in elected order.
+Omit RUN_ID params aggregated over; describe aggregation semantically only when useful. When no
+RUN_ID param is fixed, propose a semantic title with no fabricated RUN_ID part and state that fact.
+
+Exact title wording, punctuation, formatting, and RUN_ID inclusion require explicit user approval
+before the code edit. This is always protected: scientific-auto and engineering-auto cannot approve
+it, and a prior approval does not carry across a later plotting-code edit even when the proposed
+title remains unchanged. Repeated renders of already-approved, unchanged code need no new approval.
+
 ### run_id schema evolution
 
 A run_id election is only valid for the config schema it was elected against. Any change that
