@@ -109,6 +109,10 @@ No audit verdict grants execution permission. Leakage, contaminated evaluation, 
 - canonical prompt rendering, generation prefix, scoring span, and special tokens for LLM or VLM work;
 - mismatch between the command, config, data path, metric, and reported method;
 - artifact overwrite, fabricated or inconsistent plots, silently skipped failures, or summary-number mismatch;
+- for a newly Codex-authored plot, missing explicit user approval of its exact title, visible metric
+  meaning/direction text, and in-figure placement, or a rendered figure that does not legibly match
+  that accepted specification; treat this as a protected-contract violation rather than optional
+  polish, without retroactively applying it to extracted, user-supplied, or historical figures;
 - missing information needed to reproduce the decisive result;
 - plan drift, stale versions, unauthorized choices, unresolved protected blanks,
   or execution outside allowed scope.

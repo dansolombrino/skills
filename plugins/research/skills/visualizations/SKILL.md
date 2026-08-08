@@ -1,6 +1,6 @@
 ---
 name: visualizations
-description: Create or update Research 2.0 plots and figures from provenance-valid experiment evaluation outputs, run plotting directly on rig-4090 without orchestration or wave machinery, preserve the standard artifact taxonomy, and require user approval of exact RUN_ID-aware title templates before every plotting-code edit. Use when the user asks to plot, visualize, chart, make figures from results, or add or modify scripts under visualizations/; do not use to recompute missing evaluation data.
+description: Create or update Research 2.0 plots and figures from provenance-valid experiment evaluation outputs, run plotting directly on rig-4090 without orchestration or wave machinery, preserve the standard artifact taxonomy, and require user approval of exact titles plus visible metric explanations before every plotting-code edit. Use when the user asks to plot, visualize, chart, make figures from results, or add or modify scripts under visualizations/; do not use to recompute missing evaluation data.
 ---
 
 # visualizations
@@ -10,7 +10,7 @@ Plotting code conventions. Canon: `../research-project-init/references/conventio
 Require the Research 2.0 scaffold and read the active execution agreement. Plot representation,
 placement, and execution follow `engineering_mode`: manual mode proposes and waits; auto mode may
 choose inside the approved envelope. Scientific interpretation and claim changes remain owned by
-the scientific layer. Plot-title approval is always user-owned and overrides both modes.
+the scientific layer. Plot communication approval is always user-owned and overrides both modes.
 
 ## Placement
 
@@ -41,16 +41,25 @@ Resolve placement with the applicable engineering-mode owner and record nonstand
 ## Design & execution
 
 - Before every creation or modification of plotting code, read the producer's authoritative
-  ordered `RUN_ID_PARAMS` and classify each parameter as fixed or aggregated for every plot the
-  script produces.
-- Propose the exact title template for every plot, including wording, punctuation, formatting,
-  and each fixed RUN_ID param as `key={value}` in elected order. Omit aggregated RUN_ID params;
-  describe the aggregation semantically only when it helps interpret the plot. If none are fixed,
-  state that the proposed semantic title contains no RUN_ID part rather than fabricating one.
-- Wait for explicit user approval before editing the plotting code. Re-propose and obtain approval
-  on every later plotting-code edit even when the title template is unchanged. Neither scientific-
-  auto nor engineering-auto may bypass this gate; approval of a title does not authorize unrelated
-  protected actions.
+  ordered `RUN_ID_PARAMS`, metric definitions, evaluation schema, and scientific contract. Classify
+  each RUN_ID parameter as fixed or aggregated for every plot the script produces.
+- Propose one exact communication specification per plot. Include the title wording, punctuation,
+  formatting, and each fixed RUN_ID param as `key={value}` in elected order. Also propose visible
+  in-figure text that explains what every plotted metric measures, its higher/lower/target/range/no-
+  universal-direction interpretation, and the text's exact placement. Omit aggregated RUN_ID
+  params; describe aggregation semantically only when it helps interpretation. If none are fixed,
+  state that the semantic title contains no RUN_ID part rather than fabricating one.
+- Cover multiple axes, panels, derived metrics, and visual encodings separately unless one shared
+  explanation is unambiguous. Stop rather than guess when metric semantics are not grounded. Put
+  the explanation in an axis label, subtitle, legend, annotation, or in-figure caption; surrounding
+  prose alone does not satisfy the requirement.
+- Codex proposes only. Wait for the user's explicit acceptance before editing plotting code.
+  Re-propose and obtain approval on every later plotting-code edit even when the specification is
+  unchanged. Neither scientific-auto nor engineering-auto may bypass this gate. Repeated renders
+  of unchanged approved code need no new approval.
+- After rendering, inspect the figure and verify that the accepted text is present, legible, and
+  unchanged. Do not silently repair wording or placement; propose any correction and reopen the
+  approval gate before editing.
 - **No fixed plot checklist**: manual mode asks what the user wants; auto mode chooses the smallest
   visualization that answers the approved scientific handoff.
 - Treat every plotting render as a direct, non-orchestrated fast path. Run its argparse command in

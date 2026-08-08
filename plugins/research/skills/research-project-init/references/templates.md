@@ -174,7 +174,8 @@ engineering_mode: <manual|auto — required>
 - Soft preferences:
 - Delegable fields:
 - Protected choices:
-  - Plot titles: approve the exact template and fixed RUN_ID_PARAMS before every plotting-code edit.
+  - Plot communication: approve each exact title, fixed RUN_ID_PARAMS, visible metric explanation,
+    and in-figure placement before every plotting-code edit.
   - Additional project-specific choices:
 
 ## Approval

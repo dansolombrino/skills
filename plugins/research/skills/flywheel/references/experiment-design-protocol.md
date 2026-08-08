@@ -115,6 +115,21 @@ Before any compute request or training launch, restate:
 
 If the run is expensive or high-risk, ask for explicit confirmation.
 
+### Plot communication gate
+
+When the artifact plan includes a newly authored plot, propose its complete communication
+specification before creating or modifying plot-producing code: the exact title, visible in-figure
+text defining every plotted metric and its higher/lower/target/range/no-universal-direction
+interpretation, and exact placement. Cover separate axes, panels, derived metrics, and visual
+encodings unless one shared explanation is unambiguous. Ground the proposal in the experiment brief
+and metric definition; stop rather than guess.
+
+Codex proposes only. Wait for the user's explicit acceptance before editing the plot-producing code,
+even in an automatic workflow. Any later code edit reopens the gate; an unchanged rerender does not.
+After rendering, verify that the accepted text is present and legible inside the figure. Extracted
+source figures and pre-existing external artifacts are exempt because this workflow did not author
+them.
+
 ## Phase 5: Drive Flywheel
 
 Use Flywheel in layers when possible.

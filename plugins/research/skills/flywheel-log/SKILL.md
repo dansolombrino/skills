@@ -207,6 +207,14 @@ attempt, and commit provenance; include plots and metrics only when the run actu
 produced evidence for them. Never fabricate a plot, metric, or successful outcome to
 satisfy a template.
 
+For every newly Codex-authored plot governed by the research plot communication gate, verify before
+upload that the figure visibly and legibly matches the user-accepted specification: exact title,
+metric meaning and directional interpretation, and in-figure placement. If the plot omits or changes
+that text, or the producing workflow cannot establish explicit user acceptance, stop and route the
+correction to the owning plotting workflow; never invent retrospective approval. Do not apply this
+check retroactively to extracted source figures, user-supplied plots, or historical external
+artifacts.
+
 For an insight node, require only self-contained `content` with the mandatory TL;DR,
 claim, evidence-node references, reasoning chain, caveats, and implication. Artifacts,
 repository provenance, `summary.md`, `reproducibility.md`, and `commit.txt` are

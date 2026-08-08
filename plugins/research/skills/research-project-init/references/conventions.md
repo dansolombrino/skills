@@ -103,18 +103,31 @@ The per-experiment **ordered** set of config params that uniquely identifies a r
     run-folder names, wandb run names, and log lines. Flat name ≡ wandb run, 1:1; it maps to
     one EXPERIMENTS.md row **per wave** the run took part in (see below).
 
-### Plot-title approval
+### Plot communication approval
 
 Before every creation or modification of code under `visualizations/`, read the producer's
-authoritative ordered `RUN_ID_PARAMS` and propose the exact title template for every plot the code
-produces. Include every RUN_ID param held fixed by that plot as `key={value}` in elected order.
-Omit RUN_ID params aggregated over; describe aggregation semantically only when useful. When no
-RUN_ID param is fixed, propose a semantic title with no fabricated RUN_ID part and state that fact.
+authoritative ordered `RUN_ID_PARAMS` and metric definitions, then propose one exact communication
+specification for every plot the code produces:
 
-Exact title wording, punctuation, formatting, and RUN_ID inclusion require explicit user approval
-before the code edit. This is always protected: scientific-auto and engineering-auto cannot approve
-it, and a prior approval does not carry across a later plotting-code edit even when the proposed
-title remains unchanged. Repeated renders of already-approved, unchanged code need no new approval.
+- the title template, including every fixed RUN_ID param as `key={value}` in elected order;
+- visible in-figure text explaining what every plotted metric measures and whether higher, lower,
+  a target/range, or no universal direction is preferable; and
+- the exact placement of that text in an axis label, subtitle, legend, annotation, or in-figure
+  caption.
+
+Omit aggregated RUN_ID params and describe aggregation semantically only when useful. When no
+RUN_ID param is fixed, propose a semantic title with no fabricated RUN_ID part and state that fact.
+Cover multiple axes, panels, derived metrics, and visual encodings separately unless one shared
+explanation is unambiguous. Stop rather than guess when metric semantics cannot be grounded in the
+producer, evaluation schema, or scientific contract. External or historical figures that the
+workflow did not author are not retroactively subject to this gate.
+
+Codex proposes the exact wording, punctuation, formatting, and placement, but only the user may
+accept them. Wait for explicit user approval before the code edit. This is always protected:
+scientific-auto and engineering-auto cannot approve it, and a prior approval does not carry across
+a later plotting-code edit even when the proposed specification remains unchanged. Repeated renders
+of already-approved, unchanged code need no new approval. After rendering, verify that the accepted
+text is present, legible, and unchanged inside the figure; external prose alone is insufficient.
 
 ### Plot execution
 

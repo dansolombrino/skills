@@ -34,9 +34,12 @@ Require user approval for destructive operations, history rewrites, deletion of 
 overwriting user changes, new repositories/remotes/accounts/destinations, secrets or authentication
 changes, budget/scope/rig expansion, shared-GPU exceptions, ambiguous Flywheel root or parent,
 external publication outside the approved root, and every source-to-target deviation governed by
-`$integrate-reference-code`. Also require approval of the exact title template and fixed
-`RUN_ID_PARAMS` before every plotting-code creation or modification, including in auto modes and
-when a previously approved title would remain unchanged.
+`$integrate-reference-code`. Also require user approval of the complete plot communication
+specification before every plotting-code creation or modification: exact title and fixed
+`RUN_ID_PARAMS`, visible text defining every plotted metric and its directional interpretation,
+and exact in-figure placement. Codex may only propose this specification. Auto modes cannot approve
+it, and a previous approval does not carry across a later plotting-code edit even when the proposed
+specification would remain unchanged. Unchanged rerenders retain their approval.
 
 System or sandbox approvals remain independent and always apply.
 

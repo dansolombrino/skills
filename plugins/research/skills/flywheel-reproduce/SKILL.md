@@ -64,6 +64,11 @@ Before execution, recover or establish these inputs:
 - Treat the flywheel-reproduce skill as claim validation, not as a magical importer. It combines graphification with budgeted empirical execution, because claim-bearing work should become explicit validation branches before compute is spent.
 - Ask only the minimum clarification questions needed to establish a coherent validation contract, and ask none when the required answers are already recoverable from user instructions, conversational context, or graph state.
 - For empirical execution, load the shared [experiment design protocol](../flywheel/references/experiment-design-protocol.md) and [Flywheel MCP tool map](../flywheel/references/flywheel-mcp-tool-map.md) before spending compute.
+- When a validation branch will author a plot, apply the experiment protocol's plot communication
+  gate before creating or modifying plot-producing code. Propose the complete specification and
+  wait for explicit user acceptance; neither scientific-auto nor engineering-auto may approve it.
+  Persist the accepted specification in the validation control node. Reuse it only for unchanged
+  rerenders. Do not apply the gate retroactively to extracted source figures or external artifacts.
 
 ## Workflow
 
@@ -105,6 +110,8 @@ Before execution, recover or establish these inputs:
 8. Plan and execute validation branches against the hard max budget.
    - Prioritize the cheapest branches that most reduce uncertainty first.
    - Prefer explicit validation branches such as baseline checks, mechanism or intermediate-signal checks, ablations, efficiency checks, robustness checks, failure analysis, and follow-up analysis branches after results land.
+   - Resolve the protected plot communication gate before any branch creates or modifies code that
+     will render a new plot. Stop rather than infer metric semantics or user acceptance.
    - If the branch can run through Flywheel execution directly, use `flywheel_launch_execution` (MCP) or `flywheel executions:launch` (CLI) and inspect terminal status before commit.
 
    - If the branch needs managed compute, in MCP mode use `flywheel_request_compute_grant_approval`, resolve the approved `compute_grant_id` with `flywheel_list_compute_grants(status=active, approval_session_id=<session_id>)`, call `flywheel_compute_list_options`, and recommend one offer deterministically with up to two alternatives. Engineering-manual waits for explicit confirmation or override; engineering-auto may select only an in-envelope offer from the already-approved grant and records it. Then use `flywheel_compute_acquire`, poll `flywheel_compute_status`, and use `flywheel_compute_connection` when ready. In CLI mode use the parallel `flywheel compute-grants:request-approval` → `flywheel compute-grants:list` → `flywheel compute:options` → `flywheel compute:acquire` → `flywheel compute:status` → `flywheel compute:connection` sequence.
@@ -159,9 +166,12 @@ Canonical contract shape:
 - Budget unit:
 - Stopping criterion:
 - Preferred branch types: optional
+- Approved plot communication specifications: none
 ```
 
 The `Source or claim nodes under test` line is the recovery anchor for later validation passes. If multiple claim nodes are in scope, list the governing node ids or slugs explicitly.
+Replace `none` only after explicit user acceptance, recording each plot's identifier, exact title,
+visible metric explanation, and in-figure placement.
 
 ## Source Type Routing
 

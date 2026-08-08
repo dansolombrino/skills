@@ -1,4 +1,4 @@
 interface:
   display_name: "Research Visualizations"
   short_description: "Create plots from experiment evaluation outputs"
-  default_prompt: "Use $visualizations to propose exact RUN_ID-aware plot titles for my approval, then run plotting directly on rig-4090 without orchestration or wave machinery."
+  default_prompt: "Use $visualizations to propose exact RUN_ID-aware titles and visible metric explanations for my approval before editing or rendering changed plotting code."

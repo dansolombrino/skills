@@ -20,6 +20,12 @@ non-interactive after the control contract is coherent.
 - Persist every derivation in the control node `content` before compute
   request or acquisition.
 - Require explicit stop recording before any termination.
+- Treat newly authored plot communication as an exception to non-interactivity. Before creating or
+  modifying plot-producing code, propose the exact title, visible metric meaning/direction text,
+  units or relevant ranges, and in-figure placement, then wait for explicit user acceptance. Ground
+  the proposal in the control contract or evaluation schema and stop rather than infer missing
+  metric semantics. Persist the accepted specification in control-node `content`; unchanged
+  rerenders do not reopen the gate.
 
 ## Required Gate Checks
 
@@ -50,6 +56,8 @@ The run is gate-ready only when all checks below pass.
 - Ask only when a required field cannot be recovered from user instructions,
   conversation, or graph state.
 - Once repaired, continue execution without adding a user-acceptance checkpoint.
+- Do not apply that rule to the protected plot communication gate; Codex cannot approve its own
+  proposal or derive acceptance from autonomous mode.
 
 ## Execution Handoff
 

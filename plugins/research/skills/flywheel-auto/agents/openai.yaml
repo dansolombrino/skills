@@ -1,7 +1,7 @@
 interface:
   display_name: "Flywheel Auto"
   short_description: "Run budgeted autonomous Flywheel research"
-  default_prompt: "Use $flywheel-auto to advance this Flywheel frontier autonomously under an explicit budget."
+  default_prompt: "Use $flywheel-auto to advance this frontier under budget while pausing for my approval before authoring any plot."
 
 dependencies:
   tools:

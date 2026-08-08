@@ -64,6 +64,14 @@ Before execution, recover or establish these inputs:
 - Ask only the minimum clarification questions needed to establish a coherent control contract, and ask none when the required answers are already recoverable from user instructions, conversational context, or graph state.
 - Planned nodes that are expected to produce evidence or artifacts should say so in `content` and attach artifacts when evidence exists; planned nodes that encode synthesis, decomposition, or decision structure should keep that rationale in `content`.
 - Do not rely on fresh user feedback to decide whether the flywheel-auto skill should continue, so later replans can resume from node state alone in a fresh chat.
+- If a branch will author a plot, load the protected plot communication rules in
+  [the autonomous experiment gate](references/experiment-design-protocol-autonomous.md). Propose the
+  exact title, visible metric meaning/direction text, and in-figure placement, then wait for explicit
+  user acceptance before creating or modifying plot-producing code. Ground metric meaning,
+  direction, units, and relevant ranges in the control contract or evaluation schema; stop rather
+  than infer missing semantics. Persist the accepted specification in control-node `content`. This
+  gate overrides autonomy; unchanged rerenders may reuse it, while extracted source figures and
+  external artifacts are exempt.
 
 ## Workflow
 
@@ -131,6 +139,8 @@ When the skill completes a pass, it should leave behind:
 - Zero or more staged frontier nodes up to the current `n` and `k` limits.
 - Zero or more committed resolved nodes, once their durable content and artifacts are coherent.
 - Uploaded artifacts for completed empirical work when evidence exists, or an explicit artifact-free rationale in node content when artifacts are absent by design.
+- Every newly authored plot includes its accepted visible metric explanation, with the accepted
+  communication specification persisted in control-node content.
 - Released managed compute if any lease was acquired during the pass.
 - An explicit `stop_reason` recorded in node state so a later pass can resume graph-locally.
 - If the no-branch stop clause is used, a per-candidate rejection log recorded in control node `content`.
@@ -173,6 +183,7 @@ Canonical contract shape:
 - Frontier width:
 - Terminal condition:
 - Stop reason:
+- Approved plot communication specifications: none
 ```
 
 Use `Compute approval cap` for the operational cap that will govern managed
@@ -180,6 +191,8 @@ compute acquisition. If the user already budgets directly in credits, it can
 match `Budget ceiling`. If the user budgets in another unit, keep both values so
 later continuations can recover the user-facing constraint and the executable
 approval cap from node state alone.
+Replace `none` only after explicit user acceptance, recording each plot's identifier, exact title,
+visible metric explanation, and in-figure placement.
 
 ## Guardrails
 
@@ -187,5 +200,7 @@ approval cap from node state alone.
 - Build the graph explicitly with nodes, artifacts, and selected edges.
 - Keep the flywheel-auto skill graph-local: future continuation and stopping decisions should be derivable from the persisted node state rather than from fresh chat context.
 - Do not ask follow-up questions after the control contract is coherent unless a contradiction, missing required approval, or tool/runtime failure makes autonomous continuation impossible.
+- Never treat the coherent control contract, autonomous mode, silence, or Codex's own recommendation
+  as approval of a plot communication specification.
 
 See also: invoke `$flywheel-to-graph` to port source material into Flywheel without implicit execution, invoke `$flywheel-reproduce` to graphify claim-bearing sources and run budgeted validation branches, and invoke `$flywheel-lookahead` to stage next-step frontier nodes from existing graph state without execution.
