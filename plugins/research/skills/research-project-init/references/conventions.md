@@ -116,6 +116,19 @@ before the code edit. This is always protected: scientific-auto and engineering-
 it, and a prior approval does not carry across a later plotting-code edit even when the proposed
 title remains unchanged. Repeated renders of already-approved, unchanged code need no new approval.
 
+### Plot execution
+
+Treat plotting as a direct, non-orchestrated fast path rather than an experiment launch. Run each
+plotting script's argparse command in the foreground from the project checkout on `rig-4090`, where
+evaluations converge. If another host is active, connect directly to `rig-4090`; stop when its
+checkout cannot be identified or reached.
+
+Do not invoke `$scientific-orchestrator`, `$sweep-dispatch`, `$rig-sync`, or
+`$experiments-tracking` for plotting. Do not create orchestration control state, mint a wave id,
+generate a launch script, dispatch work, start tmux, or add/update `EXPERIMENTS.md` rows. Plot
+title approval and the applicable engineering-mode decisions remain in force; this fast path only
+removes experiment-launch machinery from plotting.
+
 ### run_id schema evolution
 
 A run_id election is only valid for the config schema it was elected against. Any change that

@@ -1,6 +1,6 @@
 ---
 name: visualizations
-description: Create or update Research 2.0 plots and figures from provenance-valid experiment evaluation outputs while preserving the standard artifact taxonomy and requiring user approval of exact RUN_ID-aware title templates before every plotting-code edit. Use when the user asks to plot, visualize, chart, make figures from results, or add or modify scripts under visualizations/; do not use to recompute missing evaluation data.
+description: Create or update Research 2.0 plots and figures from provenance-valid experiment evaluation outputs, run plotting directly on rig-4090 without orchestration or wave machinery, preserve the standard artifact taxonomy, and require user approval of exact RUN_ID-aware title templates before every plotting-code edit. Use when the user asks to plot, visualize, chart, make figures from results, or add or modify scripts under visualizations/; do not use to recompute missing evaluation data.
 ---
 
 # visualizations
@@ -53,6 +53,12 @@ Resolve placement with the applicable engineering-mode owner and record nonstand
   protected actions.
 - **No fixed plot checklist**: manual mode asks what the user wants; auto mode chooses the smallest
   visualization that answers the approved scientific handoff.
-- Run plainly on **rig-4090** (where evaluations converge) — no dispatch/tmux machinery.
+- Treat every plotting render as a direct, non-orchestrated fast path. Run its argparse command in
+  the foreground on **`rig-4090`**, where evaluations converge. When another host is active,
+  connect directly to `rig-4090` and run from its project checkout; stop if that checkout cannot
+  be identified or reached.
+- Do not invoke `$scientific-orchestrator`, `$sweep-dispatch`, `$rig-sync`, or
+  `$experiments-tracking` for plotting. Do not create orchestration control state, mint a wave id,
+  generate launch scripts, dispatch work, start tmux, or add/update `EXPERIMENTS.md` rows.
 - New plots produced ⇒ apply `$research-journal` according to the event-owning layer's mode when
   they reveal something.

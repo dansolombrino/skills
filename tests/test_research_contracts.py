@@ -17,7 +17,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "2.0.1")
+        self.assertEqual(manifest["version"], "2.0.3")
         self.assertTrue((ROOT / "plugins/research/skills/rig-sync/SKILL.md").is_file())
         self.assertTrue(
             (ROOT / "plugins/research/skills/integrate-reference-code/SKILL.md").is_file()
@@ -46,6 +46,25 @@ class ResearchContractTests(unittest.TestCase):
                 "flywheel-to-graph",
             }.issubset(skill_names)
         )
+
+    def test_visualizations_use_direct_rig_4090_execution(self) -> None:
+        skill = (
+            ROOT / "plugins/research/skills/visualizations/SKILL.md"
+        ).read_text()
+        conventions = (
+            ROOT
+            / "plugins/research/skills/research-project-init/references/conventions.md"
+        ).read_text()
+
+        for contract in (skill, conventions):
+            self.assertIn("direct, non-orchestrated fast path", contract)
+            self.assertIn("foreground", contract)
+            self.assertIn("`rig-4090`", contract)
+            self.assertIn("Do not invoke `$scientific-orchestrator`", contract)
+            self.assertIn("`$sweep-dispatch`", contract)
+            self.assertIn("mint a wave id", contract)
+            self.assertIn("start tmux", contract)
+            self.assertIn("`EXPERIMENTS.md` rows", contract)
 
     def test_scientific_orchestrator_has_independent_explicit_modes(self) -> None:
         skill_root = ROOT / "plugins/research/skills/scientific-orchestrator"
