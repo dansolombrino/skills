@@ -71,9 +71,9 @@ logs/NNN_exp/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-<YYYYmmdd-HHMMSS>.
 ```
 
 So `logs/` mirrors `scripts/` (flat run_id form, wave-scoped) — you reach a log from its
-script — while `checkpoints/`, `evaluations/` and `plots/` mirror each other in the nested
-run_id **path** form and stay run-scoped. Logs are timestamped per launch: history is kept,
-logs are never overwritten, and a crash-recovery relaunch inside the same wave never clobbers
+script — while `checkpoints/`, `evaluations/`, and `plots/` all use the nested run_id **path**
+form after their experiment-specific prefixes and stay run-scoped. Logs are timestamped per launch,
+so history is kept; logs are never overwritten, and a crash-recovery relaunch never clobbers
 the earlier attempt. Hydra projects must disable hydra's job file logging (defaults entry
 `- override hydra/job_logging: none`) or explicitly point it inside `logs/` — a stray
 `<job_name>.log` must never appear in the project root.
@@ -81,6 +81,21 @@ the earlier attempt. Hydra projects must disable hydra's job file logging (defau
 Experiments are named `NNN_[experiment_name]` (three-digit zero-padded), optionally nested
 (`NNN_exp/NNN_sub_exp/...`). The same `NNN_...` hierarchy is mirrored across
 `checkpoints/ code/ config/ evaluations/ logs/ plots/ scripts/ visualizations/`.
+Call this complete numbered leaf hierarchy `<experiment_path>`; never shorten it to the parent
+experiment when the producer is a sub-experiment. A visualization with exactly one producer lives
+at `visualizations/<experiment_path>/<script_stem>.py` and writes only below
+`plots/<experiment_path>/<script_stem>/<partial_run_id path>/`. For example:
+
+```
+visualizations/000_grokking/plot_loss.py
+plots/000_grokking/plot_loss/model=mlp/lr=1e-3/seed=0/loss_curve.pdf
+
+visualizations/001_compression/002_weight_error/plot_layers.py
+plots/001_compression/002_weight_error/plot_layers/model=vit/seed=0/layer_error.pdf
+```
+
+Do not infer placement for a visualization that combines multiple producer experiment paths; stop
+and resolve that separate taxonomy decision with the user.
 
 ## run_id
 

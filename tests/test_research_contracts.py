@@ -17,7 +17,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "2.0.3")
+        self.assertEqual(manifest["version"], "3.0.0")
         self.assertTrue((ROOT / "plugins/research/skills/rig-sync/SKILL.md").is_file())
         self.assertTrue(
             (ROOT / "plugins/research/skills/integrate-reference-code/SKILL.md").is_file()
@@ -65,6 +65,44 @@ class ResearchContractTests(unittest.TestCase):
             self.assertIn("mint a wave id", contract)
             self.assertIn("start tmux", contract)
             self.assertIn("`EXPERIMENTS.md` rows", contract)
+
+    def test_single_producer_plots_preserve_full_experiment_hierarchy(self) -> None:
+        skills = ROOT / "plugins/research/skills"
+        visualization = (skills / "visualizations/SKILL.md").read_text()
+        metadata = (skills / "visualizations/agents/openai.yaml").read_text()
+        design = (skills / "experiment-design/SKILL.md").read_text()
+        housekeeping = (skills / "research-housekeeping/SKILL.md").read_text()
+        conventions = (
+            skills / "research-project-init/references/conventions.md"
+        ).read_text()
+
+        for contract in (visualization, conventions):
+            self.assertIn(
+                "visualizations/<experiment_path>/<script_stem>.py", contract
+            )
+            self.assertIn(
+                "plots/<experiment_path>/<script_stem>/<partial_run_id path>/",
+                contract,
+            )
+            self.assertIn("multiple producer experiment paths", contract)
+
+        nested = (
+            "plots/001_compression/002_weight_error/plot_layers/"
+            "model=vit/seed=0/layer_error.pdf"
+        )
+        top_level = (
+            "plots/000_grokking/plot_loss/"
+            "model=mlp/lr=1e-3/seed=0/loss_curve.pdf"
+        )
+        self.assertIn(top_level, visualization)
+        self.assertIn(top_level, conventions)
+        self.assertIn(nested, visualization)
+        self.assertIn(nested, conventions)
+        self.assertNotIn("plots/NNN_exp/<script_stem>/", visualization)
+        self.assertIn("never migrate it silently", visualization)
+        self.assertIn("preserve it unchanged", design)
+        self.assertIn("complete numbered `<experiment_path>`", housekeeping)
+        self.assertIn("full numbered producer hierarchy", metadata)
 
     def test_scientific_orchestrator_has_independent_explicit_modes(self) -> None:
         skill_root = ROOT / "plugins/research/skills/scientific-orchestrator"

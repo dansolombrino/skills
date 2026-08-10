@@ -20,7 +20,9 @@ Use these roles:
 - `orchestration/`: local-only execution traces for orchestrators and subagents, plus append-only decision, progress, and deviation history under `orchestration/control/events.jsonl`. Never stage, commit, or push this directory. Add `orchestration/` to the project `.gitignore` when allowed. Correct a bad event with a later superseding entry rather than rewriting history.
 - `orchestration/<phase_id>/operational-failures.md`: one consolidated record for related `O0` and `O1` attempts when operational failures occur; never create one scientific audit file per attempt.
 - The standard `checkpoints/`, `evaluations/`, `logs/`, `plots/`, and `visualizations/` trees:
-  execution artifacts keyed by the elected run identity. Never introduce a generic `outputs/` tree.
+  execution artifacts keyed by the elected run identity. For a single-producer visualization,
+  preserve the producer's complete numbered `<experiment_path>` before the script-stem and run-id
+  layers. Never introduce a generic `outputs/` tree.
 - `index.md`: backward-looking Flywheel mirror. Do not replace it with local narrative.
 - `EXPERIMENTS.md`: sole factual run-state authority. Never edit it from this skill.
 - `JOURNAL.md`: append-only narrative owned by `$research-journal`; do not duplicate it here.
@@ -73,6 +75,9 @@ Each check should verify:
 - `program/` and `orchestration/` contain the active phase plans, traces, agent assignments, and logger handoff notes.
 - Elected run paths are unique and no artifacts from older runs were overwritten.
 - Metrics, plots, reports, summaries, scheduler logs, and failure traces use the standard taxonomy.
+- Every single-producer visualization and plot root preserves the producer's complete numbered
+  experiment/sub-experiment hierarchy. Record and route any flattened or mismatched path; do not
+  move code or artifacts from this skill.
 - Every failed run is preserved and classified exactly once. Operational recovery of the same
   scientific configuration retains its elected run id and wave recovery semantics; material
   code/config changes require a newly approved wave and applicable run-id evolution checks.

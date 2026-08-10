@@ -17,7 +17,10 @@ Integrity gates and protected choices never become delegable.
 ## 1. Name & mirrored structure
 
 - Propose the next `NNN_[experiment_name]` (zero-padded, next free number; sub-experiments nest as `NNN_exp/NNN_sub_exp`).
-- Once authorized by the active mode, create the matching dirs in `code/`, `config/` (others appear as artifacts are produced).
+- Treat the complete numbered leaf hierarchy as `<experiment_path>` and preserve it unchanged in
+  every engineering handoff. Once authorized by the active mode, create the matching dirs in
+  `code/` and `config/`; later `evaluations/`, `visualizations/`, and `plots/` paths must retain the
+  same hierarchy as their artifacts appear. Apply `$visualizations` for plotting-code placement.
 
 ## 2. run_id election
 
