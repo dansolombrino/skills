@@ -5,9 +5,14 @@ description: Deploy exact tested Git revisions and synchronize selected artifact
 
 # rig-sync
 
-Use the bundled `scripts/rigsync.py` from a structured research-project root. Read
+Run this skill's bundled `scripts/rigsync.py` against a structured research-project root. Read
 [references/configuration.md](references/configuration.md) when creating or repairing `sync.toml`
 or the user registry. Git/GitHub distributes launch source; rsync moves selected artifacts.
+
+**Resolving this skill's own files.** `scripts/rigsync.py` means *this skill's installed
+directory* — the folder holding the SKILL.md you are reading — not the research project. Use that
+directory's absolute path. Never resolve it against the project root: the project's own `scripts/`
+holds shell wave scripts only and has no `rigsync.py`.
 
 Read `program/00-execution-agreement.md` and the Research 2.0 conventions first. Stop when the
 project surfaces are absent. In engineering-manual mode, show the dry run and wait; in
@@ -35,7 +40,8 @@ by the approved envelope. New destinations and any destructive recovery remain p
 
 ## Commands
 
-Set `RIGSYNC_SCRIPT` to this skill's `scripts/rigsync.py`, then run:
+Set `RIGSYNC_SCRIPT` to the absolute path of this skill's own `scripts/rigsync.py` — see
+"Resolving this skill's own files" above — then run:
 
 ```bash
 python3 "$RIGSYNC_SCRIPT" doctor --machines rig-4090,rig-3090-ti,behemoth

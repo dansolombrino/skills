@@ -5,10 +5,15 @@ description: Provision and verify one exact uv-managed Python environment across
 
 # environment-sync
 
-Use `scripts/envsync.py` from a structured research-project root. Read
+Run this skill's bundled `scripts/envsync.py` against a structured research-project root. Read
 [references/configuration.md](references/configuration.md) when establishing or repairing the
-project contract. Copy `assets/environment.py` to `code/common/environment.py`; keep that tracked
-helper identical across the deployed Git revision.
+project contract. Copy this skill's `assets/environment.py` to `code/common/environment.py`; keep
+that tracked helper identical across the deployed Git revision.
+
+**Resolving this skill's own files.** `scripts/` and `assets/` here mean *this skill's installed
+directory* — the folder holding the SKILL.md you are reading — not the research project. Use that
+directory's absolute path. Never resolve them against the project root: the project's own
+`scripts/` holds shell wave scripts only and has no `envsync.py`.
 
 Read `program/00-execution-agreement.md` and the Research 2.0 conventions first. Stop when the
 project surfaces are absent. In engineering-manual mode, preview and wait before `--confirm`; in
@@ -51,7 +56,8 @@ protected.
 ## Commands
 
 ```bash
-ENVSYNC_SCRIPT=<installed environment-sync>/scripts/envsync.py
+# Absolute path to this skill's own scripts/envsync.py; see "Resolving this skill's own files".
+ENVSYNC_SCRIPT=/absolute/path/to/environment-sync/scripts/envsync.py
 python3 "$ENVSYNC_SCRIPT" doctor --machines rig-4090,rig-3090-ti,behemoth
 python3 "$ENVSYNC_SCRIPT" provision --revision <40-char-sha> \
   --machines rig-4090,rig-3090-ti --dry-run

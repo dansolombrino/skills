@@ -73,9 +73,12 @@ Repeat only while the approved stop rule, budget, scope, and terminal condition 
 Delegate only bounded tasks with explicit inputs, output schema, write scope, stop conditions, and
 source limits. The orchestrator remains the sole synthesizer and decision-register writer.
 
-Keep one subagent slot for the orchestrator. With four total slots, run at most three worker
-agents concurrently; satisfy larger literature coverage in waves. Do not overlap literature
-explorers with rig-monitoring subagents when doing so would exceed capacity.
+Run at most `available concurrent subagents minus one` workers, reserving the remainder for the
+orchestrator itself; never assume a fixed slot count, and never stop merely because concurrency is
+limited. When the ceiling is unknown, treat it as the number the host actually starts in parallel.
+Satisfy larger literature coverage in waves, and run explorers sequentially rather than skipping
+them. Rig-monitoring subagents hold their slots for the whole wave, so when a wave is live, defer
+literature explorers and say so instead of silently dropping them.
 
 ## Mode behavior
 

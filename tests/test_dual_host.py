@@ -119,6 +119,51 @@ class MaintenanceSkillMirrorTests(unittest.TestCase):
             )
 
 
+class BehavioralRegressionTests(unittest.TestCase):
+    """Locks fixes for defects found by running the skills, not just reading them."""
+
+    def test_bundled_scripts_resolve_against_the_skill_not_the_project(self) -> None:
+        # A project's own scripts/ holds shell wave scripts only, so a bare "scripts/envsync.py"
+        # sends the agent to a path that cannot exist.
+        for name, script in (("environment-sync", "envsync"), ("rig-sync", "rigsync")):
+            skill = (SKILLS / name / "SKILL.md").read_text()
+            self.assertIn("Resolving this skill's own files", skill, name)
+            self.assertIn("holding the SKILL.md you are reading", skill, name)
+            self.assertNotIn(f"Use `scripts/{script}.py` from a structured", skill, name)
+            self.assertNotIn(f"Use the bundled `scripts/{script}.py` from a structured", skill, name)
+
+    def test_no_unresolvable_installed_placeholder(self) -> None:
+        offenders = [
+            f"{markdown.relative_to(ROOT)}: {line.strip()}"
+            for markdown in SKILLS.rglob("*.md")
+            for line in markdown.read_text().splitlines()
+            if "<installed " in line
+        ]
+        self.assertEqual(offenders, [], "angle-bracket placeholders are not resolvable at runtime")
+
+    def test_concurrency_is_discovered_not_hardcoded(self) -> None:
+        skill = (SKILLS / "scientific-orchestrator/SKILL.md").read_text()
+        self.assertNotIn("With four total slots", skill)
+        self.assertIn("available concurrent subagents minus one", skill)
+        self.assertIn("never assume a fixed slot count", skill)
+
+    def test_gpu_smoke_target_has_a_template(self) -> None:
+        templates = (SKILLS / "research-project-init/references/templates.md").read_text()
+        skill = (SKILLS / "research-project-init/SKILL.md").read_text()
+        for reference in ("environment-sync", "rig-sync"):
+            config = (SKILLS / reference / "references/configuration.md").read_text()
+            if "code/common/environment_smoke.py" in config:
+                self.assertIn("## code/common/environment_smoke.py", templates, reference)
+                self.assertIn("environment_smoke.py", skill, reference)
+
+    def test_uv_lock_is_generated_not_templated(self) -> None:
+        skill = (SKILLS / "research-project-init/SKILL.md").read_text()
+        templates = (SKILLS / "research-project-init/references/templates.md").read_text()
+        self.assertNotIn("`uv.lock`, and `.python-version` from the templates", skill)
+        self.assertIn("`uv.lock`\n   is not templated", skill)
+        self.assertIn("never\nhand-written", templates)
+
+
 class ScaffoldTests(unittest.TestCase):
     def test_project_init_scaffolds_one_canonical_doc_for_both_hosts(self) -> None:
         init_root = SKILLS / "research-project-init"

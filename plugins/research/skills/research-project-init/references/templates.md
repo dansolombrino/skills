@@ -313,8 +313,10 @@ both skills' doctor checks before remote dispatch.
 
 Create `pyproject.toml` with the project metadata, dependencies, exact
 `[tool.uv].required-version = "==X.Y.Z"`, and `python-preference = "managed"`. Commit an exact
-`X.Y.Z` `.python-version` and the generated `uv.lock`. Copy
-`environment-sync/assets/environment.py` to `code/common/environment.py`; do not rewrite its
+`X.Y.Z` `.python-version`. `uv.lock` is produced by `uv lock` during the environment gate, never
+hand-written; commit it once that gate has run. Copy
+`assets/environment.py` from the environment-sync skill's own installed directory to
+`code/common/environment.py`; do not rewrite its
 fingerprint algorithm per project. Keep `{{ENVIRONMENT_NAME}}/` and `.rigsync_cache/` ignored.
 
 ## .githooks/pre-commit (journal guard)
@@ -455,6 +457,45 @@ def guard_run_config(cfg, params, run_dir: Path) -> None:
     else:
         run_dir.mkdir(parents=True, exist_ok=True)
         snapshot_file.write_text(json.dumps(resolved, indent=2, sort_keys=True, default=str))
+```
+
+## code/common/environment_smoke.py
+
+This is the default `gpu_smoke` target in `sync.toml`. It must perform a real device operation
+through the project's locked framework, so a rig that imports but cannot compute fails the gate.
+Adapt the framework call when the project is not torch-based, but keep it bounded and non-zero on
+failure.
+
+```python
+"""Bounded GPU smoke: prove the locked runtime can actually compute on a device."""
+
+import sys
+
+
+def main() -> int:
+    import torch
+
+    if not torch.cuda.is_available():
+        print("gpu smoke FAIL: no CUDA device visible", file=sys.stderr)
+        return 1
+
+    device = torch.device("cuda:0")
+    name = torch.cuda.get_device_name(device)
+    a = torch.randn(256, 256, device=device)
+    b = torch.randn(256, 256, device=device)
+    result = (a @ b).sum().item()
+    torch.cuda.synchronize()
+
+    if result != result:  # NaN guard
+        print(f"gpu smoke FAIL: NaN result on {name}", file=sys.stderr)
+        return 1
+
+    print(f"gpu smoke OK: {name}, torch {torch.__version__}, cuda {torch.version.cuda}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 ```
 
 ## code/common/status.py

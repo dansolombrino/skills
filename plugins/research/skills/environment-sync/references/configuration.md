@@ -45,7 +45,8 @@ replaces that token with the configured environment's `bin/python` and supplies
 device operation through the project's locked framework, and exit nonzero on incompatibility. Do
 not encode GPU ownership in this command; `sweep-dispatch` owns per-wave authorization.
 
-Copy the skill's `assets/environment.py` to `code/common/environment.py`. Generated wave scripts
+Copy `assets/environment.py` from the environment-sync skill's own installed directory to
+`code/common/environment.py`. Generated wave scripts
 invoke its `fingerprint --lock uv.lock` command before experiment Python.
 
 ## Machine-local state
