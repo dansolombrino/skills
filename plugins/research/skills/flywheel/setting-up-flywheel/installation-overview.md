@@ -2,7 +2,7 @@
 
 We are in the business of automating science. As such, our first interface to Flywheel is through autonomous agents, specifically via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/docs/getting-started/intro).
 
-MCP enables you to connect and authenticate Flywheel from Codex or another compatible host.
+MCP enables you to connect and authenticate Flywheel from Codex, Claude Code, or another compatible host.
 
 ## One-command setup (recommended)
 

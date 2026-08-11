@@ -20,12 +20,12 @@ evidence that makes each concern material. Do not ask it to implement or launch.
 ## Research logger
 
 Give the approved canonical Flywheel root, scientific disposition, engineering return packet,
-decisive artifacts, source revision, and allowed node relationship. Require use of `$flywheel-log`.
+decisive artifacts, source revision, and allowed node relationship. Require use of `flywheel-log`.
 It must not run experiments, change code, fabricate evidence, or publish incomplete work.
 
 ## Housekeeper
 
-Give the active agreement/phase and record paths. Require use of `$research-housekeeping`, factual
+Give the active agreement/phase and record paths. Require use of `research-housekeeping`, factual
 referential updates only, no `EXPERIMENTS.md` mutation, no Flywheel publication, and no rewriting of
 append-only records.
 

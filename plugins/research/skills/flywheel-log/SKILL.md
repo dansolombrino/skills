@@ -17,7 +17,7 @@ If another instruction surface disagrees with this skill about how to log, follo
 this skill and update the stale surface.
 
 Support both installed Flywheel modes. Use the MCP tools named below when MCP is
-available; in CLI mode, load `$flywheel`'s CLI tool map and use the equivalent
+available; in CLI mode, load `flywheel`'s CLI tool map and use the equivalent
 `flywheel` command. Never invent a field or command when the active contract is
 unclear.
 
@@ -207,7 +207,7 @@ attempt, and commit provenance; include plots and metrics only when the run actu
 produced evidence for them. Never fabricate a plot, metric, or successful outcome to
 satisfy a template.
 
-For every newly Codex-authored plot governed by the research plot communication gate, verify before
+For every newly agent-authored plot governed by the research plot communication gate, verify before
 upload that the figure visibly and legibly matches the user-accepted specification: exact title,
 metric meaning and directional interpretation, and in-figure placement. If the plot omits or changes
 that text, or the producing workflow cannot establish explicit user acceptance, stop and route the

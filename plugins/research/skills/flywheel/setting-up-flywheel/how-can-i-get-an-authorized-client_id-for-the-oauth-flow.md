@@ -16,7 +16,7 @@ Then register your OAuth client using the `registration_endpoint`.
 
 ## Public client (default)
 
-This is the default for interactive MCP hosts such as Codex, IDE hosts, and local desktop clients. If `token_endpoint_auth_method` is omitted, we default to `none`.
+This is the default for interactive MCP hosts such as Codex, Claude Code, IDE hosts, and local desktop clients. If `token_endpoint_auth_method` is omitted, we default to `none`.
 
 ```bash
 curl -sS -X POST https://flywheel.paradigma.inc/mcp-server/register \

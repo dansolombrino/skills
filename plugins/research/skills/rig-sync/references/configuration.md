@@ -47,7 +47,7 @@ same URL under that name. `git.branch` is the branch that dispatch commits are p
 rigs may fast-forward. Revision deployment stops rather than switching branches or rewriting a
 working tree.
 
-`[environment]` is owned by `$environment-sync`; it lives here so the same project and machine
+`[environment]` is owned by `environment-sync`; it lives here so the same project and machine
 selection drive both revision and runtime parity. `rigsync.py` preserves but does not execute it.
 
 ## User registry

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate this repository's Codex marketplace, plugins, and skills."""
+"""Validate this repository's Codex and Claude marketplaces, plugins, and skills."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from pathlib import Path
 NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 LINK_RE = re.compile(r"\[[^]]*]\(([^)]+)\)")
+SKILL_SIGIL_RE = re.compile(r"\$([a-z0-9]+(?:-[a-z0-9]+)+)\b")
 
 
 def parse_frontmatter(path: Path, errors: list[str]) -> dict[str, str]:
@@ -38,7 +39,8 @@ def parse_frontmatter(path: Path, errors: list[str]) -> dict[str, str]:
     return fields
 
 
-def validate_skill(skill_dir: Path, errors: list[str]) -> None:
+def validate_skill(skill_dir: Path, errors: list[str], *, shared: bool = True) -> None:
+    """Validate one skill. `shared` skills ship to every host; repo-local ones are Codex-only."""
     skill_md = skill_dir / "SKILL.md"
     if not skill_md.is_file():
         errors.append(f"{skill_dir}: missing SKILL.md")
@@ -82,9 +84,17 @@ def validate_skill(skill_dir: Path, errors: list[str]) -> None:
             if not resolved.exists():
                 errors.append(f"{markdown}: dead relative link {target!r}")
 
-    active_text = "\n".join(path.read_text() for path in skill_dir.rglob("*.md"))
-    if re.search(r"\bClaude\b|CLAUDE\.md|\.claude-plugin", active_text):
-        errors.append(f"{skill_dir}: contains retired Claude-specific instructions")
+    # Skills are shared verbatim by every supported host, so instructions must not carry a
+    # host-specific invocation sigil. Host product names are allowed where they name a real
+    # install target (for example the Flywheel per-host setup docs).
+    if not shared:
+        return
+    for markdown in skill_dir.rglob("*.md"):
+        for match in SKILL_SIGIL_RE.finditer(markdown.read_text()):
+            errors.append(
+                f"{markdown}: host-specific skill invocation {match.group(0)!r}; "
+                f"write {match.group(1)!r} without the leading '$'"
+            )
 
 
 def load_json(path: Path, errors: list[str]) -> dict:
@@ -121,6 +131,23 @@ def main() -> int:
         errors.append(f"{marketplace_path}: plugins must be a non-empty array")
         entries = []
 
+    # Claude Code reads its own catalog. Both hosts share one skill tree, so the two catalogs
+    # must agree on which plugins exist and where they live.
+    claude_marketplace_path = root / ".claude-plugin" / "marketplace.json"
+    claude_marketplace = load_json(claude_marketplace_path, errors)
+    if claude_marketplace.get("name") != marketplace.get("name"):
+        errors.append(
+            f"{claude_marketplace_path}: name must match the Codex catalog "
+            f"{marketplace.get('name')!r}"
+        )
+    if not (claude_marketplace.get("owner") or {}).get("name"):
+        errors.append(f"{claude_marketplace_path}: owner.name is required")
+    claude_entries = {
+        entry["name"]: entry
+        for entry in claude_marketplace.get("plugins", [])
+        if isinstance(entry, dict) and isinstance(entry.get("name"), str)
+    }
+
     seen_plugins: set[str] = set()
     for entry in entries:
         if not isinstance(entry, dict):
@@ -152,6 +179,34 @@ def main() -> int:
             errors.append(f"{manifest_path}: version must be x.y.z semantic version")
         if manifest.get("skills") != "./skills/":
             errors.append(f"{manifest_path}: skills must point to './skills/'")
+
+        claude_entry = claude_entries.pop(name, None)
+        if claude_entry is None:
+            errors.append(f"{claude_marketplace_path}: missing entry for plugin {name!r}")
+        elif claude_entry.get("source") != expected_path:
+            errors.append(f"{claude_marketplace_path}: {name} source must be {expected_path!r}")
+
+        claude_manifest_path = plugin_root / ".claude-plugin" / "plugin.json"
+        claude_manifest = load_json(claude_manifest_path, errors)
+        # Anti-drift guard: a version bump must land in both manifests or neither.
+        for field in ("name", "version", "description"):
+            if claude_manifest.get(field) != manifest.get(field):
+                errors.append(
+                    f"{claude_manifest_path}: {field} must match {manifest_path} "
+                    f"({claude_manifest.get(field)!r} != {manifest.get(field)!r})"
+                )
+        if claude_entry is not None and claude_entry.get("version") != manifest.get("version"):
+            errors.append(f"{claude_marketplace_path}: {name} version must match {manifest_path}")
+        if "interface" in claude_manifest:
+            errors.append(
+                f"{claude_manifest_path}: 'interface' is Codex-only and warns under "
+                f"'claude plugin validate'"
+            )
+        if "skills" in claude_manifest:
+            errors.append(
+                f"{claude_manifest_path}: omit 'skills'; Claude auto-discovers ./skills/"
+            )
+
         skill_root = plugin_root / "skills"
         skill_dirs = sorted(path for path in skill_root.iterdir() if path.is_dir()) if skill_root.is_dir() else []
         if not skill_dirs:
@@ -173,17 +228,37 @@ def main() -> int:
             f"{meta_root}: expected exactly {sorted(expected_meta)}, got {sorted(path.name for path in meta_dirs)}"
         )
     for skill_dir in meta_dirs:
-        validate_skill(skill_dir, errors)
+        validate_skill(skill_dir, errors, shared=False)
 
-    legacy_files = [
-        root / "CLAUDE.md",
-        root / ".claude-plugin" / "marketplace.json",
-        root / "plugins" / "research" / ".claude-plugin" / "plugin.json",
-    ]
-    legacy_files.extend((root / ".claude" / "skills").glob("*/SKILL.md"))
-    for path in legacy_files:
-        if path.is_file():
-            errors.append(f"{path}: active Claude-era file must be removed")
+    # Claude reads project skills from .claude/skills/. Those are pointers, not copies: each one
+    # must link to its canonical .agents counterpart so the two can never drift.
+    claude_meta_root = root / ".claude" / "skills"
+    claude_meta_dirs = (
+        sorted(path for path in claude_meta_root.iterdir() if path.is_dir())
+        if claude_meta_root.is_dir()
+        else []
+    )
+    if {path.name for path in claude_meta_dirs} != expected_meta:
+        errors.append(
+            f"{claude_meta_root}: expected exactly {sorted(expected_meta)}, "
+            f"got {sorted(path.name for path in claude_meta_dirs)}"
+        )
+    for skill_dir in claude_meta_dirs:
+        pointer = skill_dir / "SKILL.md"
+        if not pointer.is_file():
+            errors.append(f"{skill_dir}: missing SKILL.md")
+            continue
+        fields = parse_frontmatter(pointer, errors)
+        if fields.get("name") != skill_dir.name:
+            errors.append(f"{pointer}: name must match folder {skill_dir.name!r}")
+        canonical = agents_root / "skills" / skill_dir.name / "SKILL.md"
+        if f".agents/skills/{skill_dir.name}/SKILL.md" not in pointer.read_text():
+            errors.append(f"{pointer}: must point at {canonical}")
+        elif not canonical.is_file():
+            errors.append(f"{pointer}: points at missing {canonical}")
+
+    for leftover in sorted(claude_entries):
+        errors.append(f"{claude_marketplace_path}: {leftover!r} is absent from the Codex catalog")
 
     if errors:
         print(f"Validation failed with {len(errors)} error(s):", file=sys.stderr)
@@ -195,7 +270,7 @@ def main() -> int:
         1 for path in (root / "plugins").glob("*/skills/*/SKILL.md") if path.is_file()
     )
     print(
-        f"Validation passed: {len(seen_plugins)} plugin(s), "
+        f"Validation passed: {len(seen_plugins)} plugin(s) on Codex and Claude, "
         f"{distributed_count} distributed skill(s), {len(meta_dirs)} repo-local skill(s)."
     )
     return 0

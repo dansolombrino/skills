@@ -64,7 +64,7 @@ Before authoring, recover or establish these inputs:
 - Use artifacts for supporting files and evidence, not as a substitute for the node's main narrative, because the node body should remain the readable source-of-truth for the imported material.
 - Only create graph edges for durable semantic relationships, because graphifying every wiki link floods the graph with noise that hides decision-relevant structure.
 - Use `flywheel_import_subgraph` only for prebuilt Flywheel graph JSON, not for raw markdown repositories, because raw corpora are usually file-centric and cyclic rather than clean node-centric payloads.
-- Treat the flywheel-to-graph skill as source-to-graph authoring only. It ports material into Flywheel primitives but does not execute branches or spend budget implicitly, because that changes the job into `$flywheel-reproduce` or `$flywheel-auto`.
+- Treat the flywheel-to-graph skill as source-to-graph authoring only. It ports material into Flywheel primitives but does not execute branches or spend budget implicitly, because that changes the job into `flywheel-reproduce` or `flywheel-auto`.
 
 ## Concept-First Standard
 
@@ -248,7 +248,7 @@ Guidelines:
 - Keep the source material legible in `content`; do not dump everything into artifacts.
 - Do not mirror the source's table of contents, file tree, or presentation order mechanically when a concept-first graph is clearer.
 - Do not turn source-to-graph import into verbatim transcription; paraphrase unless exact wording matters.
-- Do not confuse graphifying the source with empirically validating it: preserve enough detail for later reuse, but do not execute or test claims inside `$flywheel-to-graph`.
-- These source-to-graph authoring-only rules apply only when $flywheel-to-graph is the active skill.
+- Do not confuse graphifying the source with empirically validating it: preserve enough detail for later reuse, but do not execute or test claims inside `flywheel-to-graph`.
+- These source-to-graph authoring-only rules apply only when flywheel-to-graph is the active skill.
 
-See also: invoke `$flywheel-reproduce` to graphify claim-bearing sources and run budgeted validation branches, invoke `$flywheel-lookahead` to stage next-step frontier nodes from existing graph state without execution, and invoke `$flywheel-auto` to advance a frontier autonomously under an explicit budget and persisted stop condition.
+See also: invoke `flywheel-reproduce` to graphify claim-bearing sources and run budgeted validation branches, invoke `flywheel-lookahead` to stage next-step frontier nodes from existing graph state without execution, and invoke `flywheel-auto` to advance a frontier autonomously under an explicit budget and persisted stop condition.

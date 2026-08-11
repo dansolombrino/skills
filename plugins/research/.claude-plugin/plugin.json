@@ -1,0 +1,26 @@
+{
+  "name": "research",
+  "version": "3.1.0",
+  "description": "Orchestrate scientific research, publish curated Flywheel lineage, and materialize reproducible experiments across verified GPU rigs.",
+  "author": {
+    "name": "Dan Solombrino",
+    "email": "dansolombrino@gmail.com",
+    "url": "https://github.com/dansolombrino"
+  },
+  "repository": "https://github.com/dansolombrino/skills",
+  "keywords": [
+    "research",
+    "experiments",
+    "gpu",
+    "hydra",
+    "reproducibility",
+    "environment-parity",
+    "uv",
+    "reference-code",
+    "adaptation",
+    "scientific-orchestration",
+    "literature-review",
+    "flywheel",
+    "research-lineage"
+  ]
+}

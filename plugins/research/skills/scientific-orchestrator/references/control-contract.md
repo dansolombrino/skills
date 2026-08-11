@@ -34,10 +34,10 @@ Require user approval for destructive operations, history rewrites, deletion of 
 overwriting user changes, new repositories/remotes/accounts/destinations, secrets or authentication
 changes, budget/scope/rig expansion, shared-GPU exceptions, ambiguous Flywheel root or parent,
 external publication outside the approved root, and every source-to-target deviation governed by
-`$integrate-reference-code`. Also require user approval of the complete plot communication
+`integrate-reference-code`. Also require user approval of the complete plot communication
 specification before every plotting-code creation or modification: exact title and fixed
 `RUN_ID_PARAMS`, visible text defining every plotted metric and its directional interpretation,
-and exact in-figure placement. Codex may only propose this specification. Auto modes cannot approve
+and exact in-figure placement. The agent may only propose this specification. Auto modes cannot approve
 it, and a previous approval does not carry across a later plotting-code edit even when the proposed
 specification would remain unchanged. Unchanged rerenders retain their approval.
 
@@ -45,7 +45,7 @@ System or sandbox approvals remain independent and always apply.
 
 ## Engineering handoff
 
-Give `$experiment-design` a self-contained packet containing:
+Give `experiment-design` a self-contained packet containing:
 
 - `research_step_id` and agreement version;
 - question, claim, hypothesis, and competing explanations;

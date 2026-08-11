@@ -27,4 +27,4 @@ Activate this reference only after deterministic and natural-language routing fa
 - If extraction fails, emit explicit failure and stop.
 - Do not silently produce an underspecified graph.
 
-These rules apply only when `$flywheel-reproduce` is the active skill.
+These rules apply only when `flywheel-reproduce` is the active skill.

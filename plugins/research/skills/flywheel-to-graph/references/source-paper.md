@@ -88,4 +88,4 @@ Default shape:
 - Do not silently degrade to one summary node plus artifact-only output.
 - Do not silently collapse a technically dense paper into thin section stubs that cannot preserve the original argument, method, or evidence chain.
 
-These rules apply only when `$flywheel-to-graph` is the active skill.
+These rules apply only when `flywheel-to-graph` is the active skill.

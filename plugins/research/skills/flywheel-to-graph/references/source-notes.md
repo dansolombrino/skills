@@ -32,4 +32,4 @@ Match this reference when source is a local notes corpus with many small markdow
 
 - If note files cannot be read, emit explicit failure with affected paths.
 
-These rules apply only when `$flywheel-to-graph` is the active skill.
+These rules apply only when `flywheel-to-graph` is the active skill.

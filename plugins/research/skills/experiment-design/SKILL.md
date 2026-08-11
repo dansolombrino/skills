@@ -20,7 +20,7 @@ Integrity gates and protected choices never become delegable.
 - Treat the complete numbered leaf hierarchy as `<experiment_path>` and preserve it unchanged in
   every engineering handoff. Once authorized by the active mode, create the matching dirs in
   `code/` and `config/`; later `evaluations/`, `visualizations/`, and `plots/` paths must retain the
-  same hierarchy as their artifacts appear. Apply `$visualizations` for plotting-code placement.
+  same hierarchy as their artifacts appear. Apply `visualizations` for plotting-code placement.
 
 ## 2. run_id election
 
@@ -84,7 +84,7 @@ display-only status contract makes the repository unsupported; do not upgrade it
    workload and cannot collide with a production run_id or final artifact.
 2. Resolve its pass criterion: exit zero plus the named lightweight output/assertion that proves
    initialization and one meaningful unit of work completed.
-3. Record both in the experiment's EXPERIMENTS.md section header. `$sweep-dispatch` reruns this
+3. Record both in the experiment's EXPERIMENTS.md section header. `sweep-dispatch` reruns this
    exact command after staging the wave and before committing/tagging its Git revision; any source
    rewrite or failed criterion blocks the launch.
 
@@ -99,6 +99,6 @@ display-only status contract makes the repository unsupported; do not upgrade it
 
 ## 6. Wrap up
 
-- Apply `$research-journal` according to the event-owning layer's mode, then return the engineering
+- Apply `research-journal` according to the event-owning layer's mode, then return the engineering
   handoff fields, elected run identity, checkpoint/smoke/WandB decisions, and expected artifacts to
-  `$scientific-orchestrator` when it initiated the work.
+  `scientific-orchestrator` when it initiated the work.

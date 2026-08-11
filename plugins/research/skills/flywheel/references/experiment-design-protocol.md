@@ -124,7 +124,7 @@ interpretation, and exact placement. Cover separate axes, panels, derived metric
 encodings unless one shared explanation is unambiguous. Ground the proposal in the experiment brief
 and metric definition; stop rather than guess.
 
-Codex proposes only. Wait for the user's explicit acceptance before editing the plot-producing code,
+The agent proposes only. Wait for the user's explicit acceptance before editing the plot-producing code,
 even in an automatic workflow. Any later code edit reopens the gate; an unchanged rerender does not.
 After rendering, verify that the accepted text is present and legible inside the figure. Extracted
 source figures and pre-existing external artifacts are exempt because this workflow did not author

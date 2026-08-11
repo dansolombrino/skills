@@ -5,7 +5,7 @@ description: Generate, launch, and continuously monitor experiment runs/sweeps a
 
 # sweep-dispatch
 
-Launch machinery for runs and sweeps. Canon: `../research-project-init/references/conventions.md`. Templates: [references/templates.md](references/templates.md). Dispatch always happens **from rig-4090** (the hub). GitHub distributes one tested, tagged commit through `$rig-sync`; `$environment-sync` establishes runtime parity; rsync is only for artifacts. If either gate fails, stop.
+Launch machinery for runs and sweeps. Canon: `../research-project-init/references/conventions.md`. Templates: [references/templates.md](references/templates.md). Dispatch always happens **from rig-4090** (the hub). GitHub distributes one tested, tagged commit through `rig-sync`; `environment-sync` establishes runtime parity; rsync is only for artifacts. If either gate fails, stop.
 
 Read `program/00-execution-agreement.md` first and require the Research 2.0 surfaces. Stop on a
 legacy layout; do not offer migration or recover it as-is. In engineering-manual mode, preview and
@@ -23,7 +23,7 @@ Vocabulary (canon): a **wave** is one dispatch decision, identified by `YYYYMMDD
 `run_id_path`/`run_id_flat` renderers and `hydra_override_arg`. Any older helper makes the project
 unsupported; halt without upgrading it in place.
 1c. **environment contract check** — require exact uv/Python pins, current `uv.lock`, the standard
-`code/common/environment.py`, and the project GPU smoke. Use `$environment-sync` to verify the hub
+`code/common/environment.py`, and the project GPU smoke. Use `environment-sync` to verify the hub
 fingerprint before the experiment smoke. Dependency-contract changes must be committed and
 verified before wave generation; read `[environment].name` from `sync.toml` and never let a
 launch-time command repair or relock the configured environment.
@@ -80,11 +80,11 @@ After generation and before any tmux launch:
 3. Commit as `dispatch(<NNN_exp>): wave <wave_id>`. Refuse an existing `wave--<wave_id>` ref, then
    create that annotated tag at `HEAD`. Push the configured branch and exact tag without force;
    verify GitHub resolves both to the full local commit SHA. A push failure blocks dispatch.
-4. Run `$rig-sync deploy-revision` first as a dry run, obtain authorization under the active
+4. Run `rig-sync deploy-revision` first as a dry run, obtain authorization under the active
    engineering mode, then confirm it for **all assigned rigs together**. It may only fast-forward clean
    checkouts on the configured branch/remote and refuses a different revision on a rig with
    active project lanes or `running` statuses. Run `verify-revision` across the full assigned set.
-   Then run the approved `$environment-sync provision` when its dry run showed changes and
+   Then run the approved `environment-sync provision` when its dry run showed changes and
    `verify` the full rig set plus every assigned lane. Do not launch unless source, fingerprint,
    and GPU smoke all pass.
 
@@ -92,9 +92,9 @@ Later edits to EXPERIMENTS.md/JOURNAL.md are allowed on the hub because they are
 execution source. A different dispatch revision may not be deployed onto a rig while an older
 wave is active there.
 
-## Launch & monitor — orchestrator + one Codex subagent per rig
+## Launch & monitor — orchestrator + one subagent per rig
 
-The chat where the launch is requested is the **orchestrator**. It performs the all-rig Git deployment gate but never launches or polls rigs itself. Only after that gate passes, use Codex's collaboration tools to spawn **one background subagent per assigned rig in parallel**, then collect their reports. One subagent per *rig*, not per lane. A peer subagent drives one SSH target; when the assigned rig is the current local hub, its subagent uses direct bounded commands and never requires self-SSH. If collaboration tools are unavailable, stop before launch and tell the user; do not silently collapse monitoring into the orchestrator.
+The chat where the launch is requested is the **orchestrator**. It performs the all-rig Git deployment gate but never launches or polls rigs itself. Only after that gate passes, use the host's parallel background-subagent capability to spawn **one background subagent per assigned rig in parallel**, then collect their reports. One subagent per *rig*, not per lane. A peer subagent drives one SSH target; when the assigned rig is the current local hub, its subagent uses direct bounded commands and never requires self-SSH. If the host cannot run background subagents in parallel, stop before launch and tell the user; do not silently collapse monitoring into the orchestrator.
 
 Before launch, also require a recurring wait/monitor primitive that lets the orchestrator remain
 active and responsive for the full wave. If it is unavailable, stop before launch. The
@@ -104,7 +104,7 @@ never implement monitoring with shell `sleep`.
 
 Each rig subagent:
 
-1. Runs `$rig-sync verify-revision` and read-only `$environment-sync verify` for its rig/lane
+1. Runs `rig-sync verify-revision` and read-only `environment-sync verify` for its rig/lane
    immediately before launch, then **dispatches each
    lane** as its own named tmux session — `<project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>` — running
    a glob loop over that lane's wave scripts (exact one-liner in
@@ -135,7 +135,7 @@ Each rig subagent is also its rig's watchdog. A machine-level failure (crash, re
 
 - **Unreachable** — ssh fails/times out. Use noninteractive bounded probes (`ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> true`). One failed poll may be a network blip: declare the rig *down* only after 2–3 consecutive failures. Then keep probing reachability every 1–2 minutes and report once to the orchestrator: "rig down since <time>". Never mark its runs failed while it's down.
 - **Back up — diagnose before acting** (one ssh round-trip; exact command in [references/templates.md](references/templates.md)): boot time (`uptime -s`) newer than the dispatch time ⇒ the rig rebooted (tmux never survives a reboot); a lane's session missing from `tmux ls` ⇒ that lane is gone even without a reboot; session alive and heartbeat advancing ⇒ it was only a network blip — resume normal polling, touch nothing.
-- **Recover, lane by lane** — first re-run `verify-revision` and `$environment-sync verify` for
+- **Recover, lane by lane** — first re-run `verify-revision` and `environment-sync verify` for
   the wave's original SHA/fingerprint and lane smoke. If either
   fails, report recovery blocked and do not alter the checkout. Otherwise re-issue that lane's
   dispatch one-liner **with the same wave id** (a relaunch is not a new dispatch: same paths,
@@ -167,7 +167,7 @@ Include:
 - the basis for each estimate (`structured progress`, `exact-run history`, or
   `experiment median`), or `ETA unavailable: <reason>`.
 
-All ETAs are estimates. Use `$experiments-tracking` for the calculation hierarchy. A schema-v2
+All ETAs are estimates. Use `experiments-tracking` for the calculation hierarchy. A schema-v2
 heartbeat older than three minutes is stale: diagnose rig/session/process health and mark its ETA
 unavailable until liveness is resolved. Non-schema-v2 status makes the project unsupported.
 

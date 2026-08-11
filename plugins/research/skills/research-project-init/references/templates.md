@@ -45,10 +45,10 @@ per experiment in its `.py` as `RUN_ID_PARAMS`).
 ## Setup
 
 1. `cp .env.example .env` and fill in the secrets/paths.
-2. Use `$environment-sync` to provision the exact `uv.lock` + `.python-version` environment and
+2. Use `environment-sync` to provision the exact `uv.lock` + `.python-version` environment and
    run the project GPU smoke.
-3. Configure the approved GitHub remote/dispatch branch and `sync.toml`, then use `$rig-sync` and
-   `$environment-sync` to prepare and verify approved rig roots.
+3. Configure the approved GitHub remote/dispatch branch and `sync.toml`, then use `rig-sync` and
+   `environment-sync` to prepare and verify approved rig roots.
 4. Configure one canonical Flywheel root in `.flywheel.json` or `.env` before publishing nodes.
 
 ## Running
@@ -64,7 +64,7 @@ the scripts tree.
 ## AGENTS.md
 
 ```markdown
-# {{PROJECT_NAME}} — project notes for Codex
+# {{PROJECT_NAME}} — project notes
 
 <!-- Thin by design: generic research conventions come from the installed `research`
      skill bundle. Only project-specific facts live here. -->
@@ -89,6 +89,17 @@ the scripts tree.
 ## Project-specific quirks
 
 <!-- datasets, unusual constraints, deviations from the standard structure -->
+```
+
+## CLAUDE.md
+
+`AGENTS.md` is the canonical project doc. `CLAUDE.md` only redirects to it, so Claude Code loads
+the same notes without a second copy that can drift. Scaffold both; never duplicate the content.
+
+```markdown
+# {{PROJECT_NAME}}
+
+Project notes live in `AGENTS.md`. Read @AGENTS.md before doing anything.
 ```
 
 ## EXPERIMENTS.md (initial)
@@ -290,10 +301,10 @@ Adjust with the user: they may want evaluations/ (small jsons) or plots/ committ
 
 ## sync.toml
 
-Create this from the `$rig-sync` skill's configuration reference. Declare `[git]` with the
+Create this from the `rig-sync` skill's configuration reference. Declare `[git]` with the
 approved remote/branch, the standard artifact groups, and one absolute `repo_path` per intended
 rig; do not put SSH aliases, ports, users, or keys here. Add `[environment]` from
-`$environment-sync` with `manager = "uv"`, the user-chosen single-directory
+`environment-sync` with `manager = "uv"`, the user-chosen single-directory
 `name = "{{ENVIRONMENT_NAME}}"`, and the approved tokenized GPU smoke command. Ask for this name
 before creating the environment; suggest `.venv` only as an option and never infer a default. Run
 both skills' doctor checks before remote dispatch.
@@ -303,7 +314,7 @@ both skills' doctor checks before remote dispatch.
 Create `pyproject.toml` with the project metadata, dependencies, exact
 `[tool.uv].required-version = "==X.Y.Z"`, and `python-preference = "managed"`. Commit an exact
 `X.Y.Z` `.python-version` and the generated `uv.lock`. Copy
-`$environment-sync/assets/environment.py` to `code/common/environment.py`; do not rewrite its
+`environment-sync/assets/environment.py` to `code/common/environment.py`; do not rewrite its
 fingerprint algorithm per project. Keep `{{ENVIRONMENT_NAME}}/` and `.rigsync_cache/` ignored.
 
 ## .githooks/pre-commit (journal guard)

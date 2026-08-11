@@ -9,7 +9,7 @@ Use this skill to structure research work and to route setup/support questions t
 
 When `program/00-execution-agreement.md` exists, obey its independent scientific and engineering
 modes and protected boundaries. Route a complete Research 2.0 scientific loop to
-`$scientific-orchestrator`; use the specialized Flywheel skills only for their bounded graph,
+`scientific-orchestrator`; use the specialized Flywheel skills only for their bounded graph,
 logging, reproduction, or frontier operations. Never let a Flywheel-native execution bypass the
 approved scientific scope or engineering compute envelope.
 

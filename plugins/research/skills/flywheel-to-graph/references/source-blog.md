@@ -33,4 +33,4 @@ Match this reference for sources from common blog/article domains or article-lik
 
 - If fetch or extraction fails, emit explicit failure and stop.
 
-These rules apply only when `$flywheel-to-graph` is the active skill.
+These rules apply only when `flywheel-to-graph` is the active skill.

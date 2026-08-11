@@ -17,7 +17,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "3.0.0")
+        self.assertEqual(manifest["version"], "3.1.0")
         self.assertTrue((ROOT / "plugins/research/skills/rig-sync/SKILL.md").is_file())
         self.assertTrue(
             (ROOT / "plugins/research/skills/integrate-reference-code/SKILL.md").is_file()
@@ -60,8 +60,8 @@ class ResearchContractTests(unittest.TestCase):
             self.assertIn("direct, non-orchestrated fast path", contract)
             self.assertIn("foreground", contract)
             self.assertIn("`rig-4090`", contract)
-            self.assertIn("Do not invoke `$scientific-orchestrator`", contract)
-            self.assertIn("`$sweep-dispatch`", contract)
+            self.assertIn("Do not invoke `scientific-orchestrator`", contract)
+            self.assertIn("`sweep-dispatch`", contract)
             self.assertIn("mint a wave id", contract)
             self.assertIn("start tmux", contract)
             self.assertIn("`EXPERIMENTS.md` rows", contract)
@@ -123,10 +123,10 @@ class ResearchContractTests(unittest.TestCase):
         skill = (skill_root / "SKILL.md").read_text()
         contract = (skill_root / "references/control-contract.md").read_text()
 
-        self.assertIn("$experiment-design", skill)
-        self.assertIn("$environment-sync", skill)
-        self.assertIn("$rig-sync", skill)
-        self.assertIn("$sweep-dispatch", skill)
+        self.assertIn("experiment-design", skill)
+        self.assertIn("environment-sync", skill)
+        self.assertIn("rig-sync", skill)
+        self.assertIn("sweep-dispatch", skill)
         self.assertIn("The scientific layer defines what evidence", contract)
         self.assertIn("The engineering layer chooses how", contract)
         self.assertIn("never rewrites its factual execution state", contract)
@@ -358,7 +358,7 @@ class ResearchContractTests(unittest.TestCase):
         templates = (
             ROOT / "plugins/research/skills/sweep-dispatch/references/templates.md"
         ).read_text()
-        self.assertIn("$rig-sync", skill)
+        self.assertIn("rig-sync", skill)
         self.assertIn("current local hub", skill)
         self.assertIn("deploy-revision", skill)
         self.assertIn("verify-revision", skill)
@@ -373,7 +373,7 @@ class ResearchContractTests(unittest.TestCase):
         status_template = (
             ROOT / "plugins/research/skills/research-project-init/references/templates.md"
         ).read_text()
-        self.assertIn("$environment-sync", skill)
+        self.assertIn("environment-sync", skill)
         self.assertIn("EXPECTED_ENVIRONMENT_FINGERPRINT", templates)
         self.assertIn("ENVIRONMENT_FINGERPRINT", templates)
         self.assertIn(

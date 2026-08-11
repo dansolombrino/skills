@@ -86,4 +86,4 @@ Default shape:
 
 Finish paper decomposition before validation branch planning. Do not start step-8 branch execution planning until source decomposition is complete.
 
-These rules apply only when `$flywheel-reproduce` is the active skill.
+These rules apply only when `flywheel-reproduce` is the active skill.

@@ -225,8 +225,8 @@ tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_rig-4090_gpu<ids> \
 - Because every wave script self-guards, re-issuing this exact command is the entire recovery
   procedure.
 
-Before dispatching: use `$rig-sync deploy-revision` then `verify-revision` for the approved wave
-commit across the complete assigned rig set; run approved `$environment-sync provision` as
+Before dispatching: use `rig-sync deploy-revision` then `verify-revision` for the approved wave
+commit across the complete assigned rig set; run approved `environment-sync provision` as
 needed, then verify the full set and every lane. Each rig subagent repeats both read-only gates
 for its target immediately before tmux. Then remind
 the user how to watch: for a peer, `ssh <rig>` →

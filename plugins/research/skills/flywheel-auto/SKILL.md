@@ -7,7 +7,7 @@ description: Advance a Flywheel frontier autonomously with Flywheel MCP or CLI u
 
 ## When To Use
 
-Use this skill when the task is to shape information inside Flywheel rather than only discuss it. Use the flywheel-auto skill when the user wants Flywheel to keep advancing a research frontier autonomously under a specified budget. Flywheel MCP is a node-first durable system of record for research work: nodes hold durable state, artifacts hold supporting files, executions record runs, and compute leases provide managed hardware. Conceptually, the flywheel-auto skill is what you get when you invoke `$flywheel-lookahead`, then execute and replan after each resolution: persist the run contract in the graph, keep the plan `n` hops ahead, and spend only within an explicit measured budget.
+Use this skill when the task is to shape information inside Flywheel rather than only discuss it. Use the flywheel-auto skill when the user wants Flywheel to keep advancing a research frontier autonomously under a specified budget. Flywheel MCP is a node-first durable system of record for research work: nodes hold durable state, artifacts hold supporting files, executions record runs, and compute leases provide managed hardware. Conceptually, the flywheel-auto skill is what you get when you invoke `flywheel-lookahead`, then execute and replan after each resolution: persist the run contract in the graph, keep the plan `n` hops ahead, and spend only within an explicit measured budget.
 
 If exact tool or field semantics are unclear, load the shared [Flywheel MCP tool map](../flywheel/references/flywheel-mcp-tool-map.md) and [interfaces contract](../flywheel/references/INTERFACES.md) before mutating nodes or acquiring compute.
 
@@ -60,7 +60,7 @@ Before execution, recover or establish these inputs:
 - Use artifacts for supporting files and evidence, not as a substitute for the node's main narrative.
 - Only create graph edges for durable semantic relationships, because graphifying every wiki link floods the graph with noise that hides decision-relevant structure.
 - Treat the flywheel-auto skill as graph-local autonomous research: persist the run contract in the graph, keep the plan `n` hops ahead, and spend only within an explicit measured budget.
-- When guidance from flywheel, flywheel-lookahead, flywheel-reproduce, or flywheel-to-graph conflicts during an active $flywheel-auto run, flywheel-auto rules take precedence for compute, questioning, and stop decisions.
+- When guidance from flywheel, flywheel-lookahead, flywheel-reproduce, or flywheel-to-graph conflicts during an active flywheel-auto run, flywheel-auto rules take precedence for compute, questioning, and stop decisions.
 - Ask only the minimum clarification questions needed to establish a coherent control contract, and ask none when the required answers are already recoverable from user instructions, conversational context, or graph state.
 - Planned nodes that are expected to produce evidence or artifacts should say so in `content` and attach artifacts when evidence exists; planned nodes that encode synthesis, decomposition, or decision structure should keep that rationale in `content`.
 - Do not rely on fresh user feedback to decide whether the flywheel-auto skill should continue, so later replans can resume from node state alone in a fresh chat.
@@ -114,7 +114,7 @@ Before execution, recover or establish these inputs:
    - For exact execution and compute request shapes, load the shared [Flywheel MCP tool map](../flywheel/references/flywheel-mcp-tool-map.md) and [references/experiment-design-protocol-autonomous.md](references/experiment-design-protocol-autonomous.md).
    - Use `flywheel_launch_execution` (MCP) or `flywheel executions:launch` (CLI) when the branch can run as a Flywheel node execution without a separate leased machine, and inspect terminal status before commit.
    - Use managed compute when the branch needs provider or SKU choice, SSH access, a custom runtime, or longer-lived hardware. In MCP mode use `flywheel_request_compute_grant_approval`, resolve the approved `compute_grant_id` with `flywheel_list_compute_grants(status=active, approval_session_id=<session_id>)`, call `flywheel_compute_list_options`, and recommend one offer deterministically with up to two alternatives. Engineering-manual waits for explicit user confirmation or override. Engineering-auto may choose an in-envelope offer from the already-approved grant and record the selection. Then use `flywheel_compute_acquire`, poll `flywheel_compute_status`, and use `flywheel_compute_connection` when ready. In CLI mode use the parallel `flywheel compute-grants:request-approval` → `flywheel compute-grants:list` → `flywheel compute:options` → `flywheel compute:acquire` → `flywheel compute:status` → `flywheel compute:connection` sequence.
-   - Spawn up to `min(k, available collaboration slots minus one)` workers for distinct executable frontier nodes. When no worker slot is available, execute branches sequentially; `k` remains the frontier-width ceiling, not a promise of concurrency.
+   - Spawn up to `min(k, available subagent slots minus one)` workers for distinct executable frontier nodes. When no worker slot is available, execute branches sequentially; `k` remains the frontier-width ceiling, not a promise of concurrency.
    - For `k > 1`, apply the list-options and recommendation boundary per worker; manual mode
      confirms each offer, while auto mode verifies and records each offer against the shared envelope.
    - Route additional viable branches sequentially when there are more than `k` worthwhile directions.
@@ -196,11 +196,11 @@ visible metric explanation, and in-figure placement.
 
 ## Guardrails
 
-- Do not blur `$flywheel-reproduce` and the flywheel-auto skill, because `$flywheel-reproduce` validates existing claims under budget while the flywheel-auto skill expands the frontier to create new knowledge.
+- Do not blur `flywheel-reproduce` and the flywheel-auto skill, because `flywheel-reproduce` validates existing claims under budget while the flywheel-auto skill expands the frontier to create new knowledge.
 - Build the graph explicitly with nodes, artifacts, and selected edges.
 - Keep the flywheel-auto skill graph-local: future continuation and stopping decisions should be derivable from the persisted node state rather than from fresh chat context.
 - Do not ask follow-up questions after the control contract is coherent unless a contradiction, missing required approval, or tool/runtime failure makes autonomous continuation impossible.
-- Never treat the coherent control contract, autonomous mode, silence, or Codex's own recommendation
+- Never treat the coherent control contract, autonomous mode, silence, or the agent's own recommendation
   as approval of a plot communication specification.
 
-See also: invoke `$flywheel-to-graph` to port source material into Flywheel without implicit execution, invoke `$flywheel-reproduce` to graphify claim-bearing sources and run budgeted validation branches, and invoke `$flywheel-lookahead` to stage next-step frontier nodes from existing graph state without execution.
+See also: invoke `flywheel-to-graph` to port source material into Flywheel without implicit execution, invoke `flywheel-reproduce` to graphify claim-bearing sources and run budgeted validation branches, and invoke `flywheel-lookahead` to stage next-step frontier nodes from existing graph state without execution.

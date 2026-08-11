@@ -1,11 +1,11 @@
 ---
 name: science-literature-plan
-description: Turn a vague scientific idea, research hypothesis, experiment direction, or benchmark proposal into a literature-grounded research plan. Use when Codex needs paper explorer subagents, common-practice extraction, evidence tables, methods, datasets, metrics, baselines, caveats, and unresolved uncertainties before implementation or experiments.
+description: Turn a vague scientific idea, research hypothesis, experiment direction, or benchmark proposal into a literature-grounded research plan. Use when a plan needs paper explorer subagents, common-practice extraction, evidence tables, methods, datasets, metrics, baselines, caveats, and unresolved uncertainties before implementation or experiments.
 ---
 
 # Science Literature Plan
 
-Convert the idea into a verifiable research plan before proposing implementation. Read the active execution agreement and decision log when present; follow `$scientific-orchestrator` for modes, decision categories, plan versions, and approval points. Read [references/paper-explorer.md](references/paper-explorer.md) before delegation.
+Convert the idea into a verifiable research plan before proposing implementation. Read the active execution agreement and decision log when present; follow `scientific-orchestrator` for modes, decision categories, plan versions, and approval points. Read [references/paper-explorer.md](references/paper-explorer.md) before delegation.
 
 ## Start
 
@@ -112,5 +112,5 @@ In the chat response, summarize the artifact paths and the main decision. Do not
 The required `program/` and `orchestration/` records above are the only repository
 mutations owned by this skill. Do not launch experiments, write implementation or
 configuration code, mutate run artifacts, or publish results. Execution permission
-and approval remain owned by `$scientific-orchestrator`; this literature-planning
+and approval remain owned by `scientific-orchestrator`; this literature-planning
 skill does not perform the gated action.

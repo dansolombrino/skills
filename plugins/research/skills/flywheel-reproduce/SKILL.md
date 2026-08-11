@@ -7,7 +7,7 @@ description: Graphify claim-bearing source material in Flywheel with Flywheel MC
 
 ## When To Use
 
-Use this skill when the task is to shape information inside Flywheel rather than only discuss it. Use the flywheel-reproduce skill when the source is claim-bearing and the user wants Flywheel to both structure the source and run empirical validation. Flywheel MCP is a node-first durable system of record for research work: nodes hold durable state, artifacts hold supporting files, executions record runs, and compute leases provide managed hardware. Conceptually, the flywheel-reproduce skill is `$flywheel-to-graph` plus budgeted empirical execution: graphify the source first, split it into explicit validation branches, then execute those branches within a hard maximum budget.
+Use this skill when the task is to shape information inside Flywheel rather than only discuss it. Use the flywheel-reproduce skill when the source is claim-bearing and the user wants Flywheel to both structure the source and run empirical validation. Flywheel MCP is a node-first durable system of record for research work: nodes hold durable state, artifacts hold supporting files, executions record runs, and compute leases provide managed hardware. Conceptually, the flywheel-reproduce skill is `flywheel-to-graph` plus budgeted empirical execution: graphify the source first, split it into explicit validation branches, then execute those branches within a hard maximum budget.
 
 If exact tool or field semantics are unclear, load the shared [Flywheel MCP tool map](../flywheel/references/flywheel-mcp-tool-map.md) and [interfaces contract](../flywheel/references/INTERFACES.md) before mutating nodes or acquiring compute.
 
@@ -251,10 +251,10 @@ Guidelines:
 ## Guardrails
 
 - Do not treat the flywheel-reproduce skill as a magical bulk importer.
-- Do not blur `$flywheel-reproduce` and `$flywheel-auto`, because `$flywheel-reproduce` validates existing knowledge claims while `$flywheel-auto` expands a frontier autonomously under budget.
+- Do not blur `flywheel-reproduce` and `flywheel-auto`, because `flywheel-reproduce` validates existing knowledge claims while `flywheel-auto` expands a frontier autonomously under budget.
 - Build the graph explicitly with nodes, artifacts, and selected edges.
 - Keep the source material legible in `content`; do not dump everything into artifacts.
 - Keep the flywheel-reproduce skill scoped by cost and decision value, not by exhaustively trying every possible branch.
-- These claim-validation execution rules apply only when $flywheel-reproduce is the active skill.
+- These claim-validation execution rules apply only when flywheel-reproduce is the active skill.
 
-See also: invoke `$flywheel-to-graph` to port source material into Flywheel without implicit execution, invoke `$flywheel-lookahead` to stage next-step frontier nodes from existing graph state without execution, and invoke `$flywheel-auto` to advance a frontier autonomously under an explicit budget and persisted stop condition.
+See also: invoke `flywheel-to-graph` to port source material into Flywheel without implicit execution, invoke `flywheel-lookahead` to stage next-step frontier nodes from existing graph state without execution, and invoke `flywheel-auto` to advance a frontier autonomously under an explicit budget and persisted stop condition.

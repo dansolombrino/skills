@@ -1,6 +1,6 @@
 ---
 name: research-housekeeping
-description: Maintain Research 2.0 scientific program records and local orchestration hygiene without owning experiment state or publishing results. Use when Codex needs to initialize, reconcile, compact, or check program.md, program phase reports, decision history, subagent traces, failure notes, and Flywheel logger handoffs during a nontrivial research workflow.
+description: Maintain Research 2.0 scientific program records and local orchestration hygiene without owning experiment state or publishing results. Use when initializing, reconciling, compacting, or checking program.md, program phase reports, decision history, subagent traces, failure notes, and Flywheel logger handoffs during a nontrivial research workflow.
 ---
 
 # Research Housekeeping
@@ -25,7 +25,7 @@ Use these roles:
   layers. Never introduce a generic `outputs/` tree.
 - `index.md`: backward-looking Flywheel mirror. Do not replace it with local narrative.
 - `EXPERIMENTS.md`: sole factual run-state authority. Never edit it from this skill.
-- `JOURNAL.md`: append-only narrative owned by `$research-journal`; do not duplicate it here.
+- `JOURNAL.md`: append-only narrative owned by `research-journal`; do not duplicate it here.
 
 Keep the compact `program.md` block to: active request, current phase, agreement version,
 scientific/engineering modes, scientific question, next decision, active engineering handoff,
@@ -81,13 +81,13 @@ Each check should verify:
 - Every failed run is preserved and classified exactly once. Operational recovery of the same
   scientific configuration retains its elected run id and wave recovery semantics; material
   code/config changes require a newly approved wave and applicable run-id evolution checks.
-- Logger handoff material is complete enough for a `$flywheel-log` subagent to publish without
+- Logger handoff material is complete enough for a `flywheel-log` subagent to publish without
   reading the chat transcript.
 
 The housekeeper must not launch experiments, mutate Flywheel, edit `EXPERIMENTS.md`, delete
 artifacts, rewrite scientific conclusions, change mode, resolve scientific decisions, grant
 execution permission, or act as the user-facing progress reporter. Record discrepancies and route
-them to `$scientific-orchestrator`; only that orchestrator consolidates user notifications.
+them to `scientific-orchestrator`; only that orchestrator consolidates user notifications.
 
 ## Required Checklist
 
@@ -135,4 +135,4 @@ Before calling a logger agent, prepare a concise handoff in `orchestration/<phas
 - Flywheel root or destination, if known
 
 Do not log to Flywheel from this skill. If logging is needed, prepare the handoff and delegate a
-bounded logger subagent using `$flywheel-log`.
+bounded logger subagent using `flywheel-log`.

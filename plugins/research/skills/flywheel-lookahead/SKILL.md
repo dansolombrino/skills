@@ -1,6 +1,6 @@
 ---
 name: flywheel-lookahead
-description: Plan the next Flywheel frontier from existing graph state by persisting a control node, explicit option nodes at each hop, and one selected continuation chain, without execution or compute acquisition. Use when Codex needs planning-only Flywheel graph authoring, `n`/`k` lookahead, or graph-native comparison of candidate next steps, not claim validation, source-to-graph authoring, or autonomous execution.
+description: Plan the next Flywheel frontier from existing graph state by persisting a control node, explicit option nodes at each hop, and one selected continuation chain, without execution or compute acquisition. Use for planning-only Flywheel graph authoring, `n`/`k` lookahead, or graph-native comparison of candidate next steps, not claim validation, source-to-graph authoring, or autonomous execution.
 ---
 
 # flywheel-lookahead
@@ -72,7 +72,7 @@ Before planning, recover or establish these inputs:
 - Treat the main page body as the node readme/body field (`content` on modern Flywheel surfaces).
 - Use artifacts for supporting files and evidence, not as a substitute for the node's main narrative, because the node body should stay readable as the canonical planning record.
 - Only create graph edges for durable semantic relationships, because graphifying every wiki link floods the graph with noise that hides decision-relevant structure.
-- Treat the flywheel-lookahead skill as frontier planning only. It expands the Flywheel graph with staged next-step nodes but does not execute them, because execution or compute acquisition changes the job into `$flywheel-auto` or `$flywheel-reproduce`.
+- Treat the flywheel-lookahead skill as frontier planning only. It expands the Flywheel graph with staged next-step nodes but does not execute them, because execution or compute acquisition changes the job into `flywheel-auto` or `flywheel-reproduce`.
 - Planned nodes that are expected to produce evidence or artifacts should say so in `content` and attach artifacts when evidence exists; planned nodes that encode synthesis, decomposition, or decision structure should keep that rationale in `content`.
 - Ask only the minimum clarification questions needed to establish a coherent planning contract, and ask none when the required answers are already recoverable from user instructions, conversational context, or graph state.
 - Do not request compute approval, acquire managed compute, or launch execution in this skill, because planning should leave the frontier staged for later work rather than spend budget now.
@@ -172,6 +172,6 @@ The `Start nodes` line is the recovery anchor for later replans. If multiple fro
 - Build the graph explicitly with nodes, artifacts, and selected edges. Do not substitute prose-only option lists for durable option nodes when those options are stable enough to plan against.
 - Use the current public Flywheel MCP mutation surface (`flywheel_commit_new_node`, `flywheel_branch_node`, `flywheel_acquire_stage_lease`, `flywheel_commit_node`, `flywheel_add_parent`) rather than inventing local stage-helper tool names.
 - Do not request compute approval, acquire managed compute, or launch execution just to do planning.
-- These planning-only execution prohibitions apply only when $flywheel-lookahead is the active skill.
+- These planning-only execution prohibitions apply only when flywheel-lookahead is the active skill.
 
-See also: invoke `$flywheel-to-graph` to port source material into Flywheel without implicit execution, invoke `$flywheel-reproduce` to graphify claim-bearing sources and run budgeted validation branches, and invoke `$flywheel-auto` to advance a frontier autonomously under an explicit budget and persisted stop condition.
+See also: invoke `flywheel-to-graph` to port source material into Flywheel without implicit execution, invoke `flywheel-reproduce` to graphify claim-bearing sources and run budgeted validation branches, and invoke `flywheel-auto` to advance a frontier autonomously under an explicit budget and persisted stop condition.

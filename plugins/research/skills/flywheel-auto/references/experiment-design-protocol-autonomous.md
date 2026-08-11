@@ -1,6 +1,6 @@
 # Autonomous Experiment Design Gate
 
-Use this gate for `$flywheel-auto` runs that must continue autonomously under a
+Use this gate for `flywheel-auto` runs that must continue autonomously under a
 persisted control contract.
 
 ## Goal
@@ -56,12 +56,12 @@ The run is gate-ready only when all checks below pass.
 - Ask only when a required field cannot be recovered from user instructions,
   conversation, or graph state.
 - Once repaired, continue execution without adding a user-acceptance checkpoint.
-- Do not apply that rule to the protected plot communication gate; Codex cannot approve its own
+- Do not apply that rule to the protected plot communication gate; the agent cannot approve its own
   proposal or derive acceptance from autonomous mode.
 
 ## Execution Handoff
 
-When gate-ready, continue with the active `$flywheel-auto` execution workflow:
+When gate-ready, continue with the active `flywheel-auto` execution workflow:
 
 - persist control node updates,
 - execute or acquire compute within budget,

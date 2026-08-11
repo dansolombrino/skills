@@ -1,6 +1,6 @@
 ---
 name: research-project-init
-description: Scaffold a new or empty Research 2.0 repository with the standard experiment taxonomy, scientific program records, explicit manual/auto modes, Flywheel integration surfaces, exact uv environment, rig configuration, status helpers, journal guard, and Codex guidance. Use when starting, initializing, bootstrapping, or scaffolding a fresh research project; do not use to upgrade, migrate, or retrofit an existing project.
+description: Scaffold a new or empty Research 2.0 repository with the standard experiment taxonomy, scientific program records, explicit manual/auto modes, Flywheel integration surfaces, exact uv environment, rig configuration, status helpers, journal guard, and host guidance. Use when starting, initializing, bootstrapping, or scaffolding a fresh research project; do not use to upgrade, migrate, or retrofit an existing project.
 ---
 
 # Research Project Init
@@ -40,8 +40,10 @@ Scaffold only the Research 2.0 architecture. Read
    - `program/decision-register.md` decision history;
    - `index.md` local Flywheel mirror;
    - ignored `orchestration/control/events.jsonl` and phase traces as needed.
-3. Create `README.md`, `AGENTS.md`, `JOURNAL.md`, `EXPERIMENTS.md`, `.env.example`, `.env`,
+3. Create `README.md`, `AGENTS.md`, `CLAUDE.md`, `JOURNAL.md`, `EXPERIMENTS.md`, `.env.example`, `.env`,
    `.gitignore`, `sync.toml`, `pyproject.toml`, `uv.lock`, and `.python-version` from the templates.
+   `AGENTS.md` holds the project notes; `CLAUDE.md` only points at it, so both hosts read one
+   canonical file. Never duplicate the notes across the two.
    `.env` contains only secrets, machine-varying paths, and machine-local runtime settings. Use the
    standard cache paths verbatim so projects reuse the same model and dataset caches. Keep token
    values empty unless the user supplies them through an authorized secret source. Mirror every
@@ -50,7 +52,7 @@ Scaffold only the Research 2.0 architecture. Read
 4. Install `.githooks/pre-commit`. It requires a journal update when experiment-relevant files are
    committed; the active layer's mode determines whether the entry is user-approved or delegated.
 5. Create `code/common/run_id.py` and `code/common/status.py`, and copy
-   `$environment-sync`'s canonical `assets/environment.py` to `code/common/environment.py`.
+   `environment-sync`'s canonical `assets/environment.py` to `code/common/environment.py`.
 
 ## Git, environment, and rigs
 
@@ -58,9 +60,9 @@ Scaffold only the Research 2.0 architecture. Read
    engineering-manual mode, wait before the first commit/push. In engineering-auto mode, commit and
    push only when the approved envelope explicitly covers that remote and branch. Never force-push
    or overwrite remote history.
-2. Configure `$environment-sync`, run doctor, and require the exact environment plus GPU smoke
+2. Configure `environment-sync`, run doctor, and require the exact environment plus GPU smoke
    gate. Manual mode requires its preview approval; auto mode may confirm inside the envelope.
-3. Configure `$rig-sync`, prepare only approved empty rig paths, and run doctor for every intended
+3. Configure `rig-sync`, prepare only approved empty rig paths, and run doctor for every intended
    peer. Preserve non-empty paths and report them blocked. Manual mode requires preview approval;
    auto mode may confirm inside the envelope.
 4. Finish the local scaffold when remote setup is unavailable, but report remote execution and

@@ -1,6 +1,6 @@
 ---
 name: rig-sync
-description: Deploy exact tested Git revisions and synchronize selected artifacts across configured Research 2.0 GPU rigs. Use when Codex needs to prepare an approved empty rig clone, verify GitHub and rig identity, fast-forward machines to an authorized wave commit, check cross-rig revision consistency, or transfer selected artifacts. Pair with environment-sync; do not use for legacy projects, environment provisioning, continuous mirroring, destructive Git recovery, deletion, or writes outside an approved engineering envelope.
+description: Deploy exact tested Git revisions and synchronize selected artifacts across configured Research 2.0 GPU rigs. Use when preparing an approved empty rig clone, verifying GitHub and rig identity, fast-forwarding machines to an authorized wave commit, checking cross-rig revision consistency, or transferring selected artifacts. Pair with environment-sync; do not use for legacy projects, environment provisioning, continuous mirroring, destructive Git recovery, deletion, or writes outside an approved engineering envelope.
 ---
 
 # rig-sync
@@ -17,7 +17,7 @@ by the approved envelope. New destinations and any destructive recovery remain p
 ## Safety contract
 
 - Run `doctor` before dispatch, `verify-revision` before every initial/recovery launch, and
-  `status` before artifact movement. Run `$environment-sync verify` separately after revision
+  `status` before artifact movement. Run `environment-sync verify` separately after revision
   deployment; Git consistency does not prove installed-environment consistency.
 - Show a `--dry-run` before every remote write, then authorize it under the active engineering
   mode for the named source, destination, and selector. The engineering envelope may authorize its commit, tag,
@@ -55,8 +55,8 @@ python3 "$RIGSYNC_SCRIPT" pull evaluations/000_exp --from rig-3090-ti --confirm
 `deploy-revision` fetches the configured branch and annotated `wave--<wave_id>` tag, requires both
 to resolve to the approved SHA, and advances only with `git merge --ff-only`. It verifies exact
 `HEAD`, branch, remote URL, tag, and clean `code/`, `config/`, `scripts/`, dependency manifests,
-Python/uv pins, and `sync.toml` afterward. `$sweep-dispatch` combines this gate with
-`$environment-sync`. `push-source` never establishes Research 2.0 launch consistency and must not
+Python/uv pins, and `sync.toml` afterward. `sweep-dispatch` combines this gate with
+`environment-sync`. `push-source` never establishes Research 2.0 launch consistency and must not
 be used by dispatch.
 
 Artifact selectors are `<group>` or `<group>/<relative/path>`, where `<group>` is declared under

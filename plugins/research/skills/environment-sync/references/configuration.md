@@ -43,7 +43,7 @@ The chosen name is committed and must be identical across rigs.
 replaces that token with the configured environment's `bin/python` and supplies
 `CUDA_VISIBLE_DEVICES` for the approved lane. Keep the test quick and bounded, perform a real
 device operation through the project's locked framework, and exit nonzero on incompatibility. Do
-not encode GPU ownership in this command; `$sweep-dispatch` owns per-wave authorization.
+not encode GPU ownership in this command; `sweep-dispatch` owns per-wave authorization.
 
 Copy the skill's `assets/environment.py` to `code/common/environment.py`. Generated wave scripts
 invoke its `fingerprint --lock uv.lock` command before experiment Python.

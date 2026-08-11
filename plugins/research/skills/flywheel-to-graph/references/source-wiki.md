@@ -34,4 +34,4 @@ Match this reference when source material is wiki-like markdown content with mul
 - If pages are unreadable or missing, emit explicit failure and stop for that page.
 - Do not silently skip unreadable pages.
 
-These rules apply only when `$flywheel-to-graph` is the active skill.
+These rules apply only when `flywheel-to-graph` is the active skill.

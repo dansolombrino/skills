@@ -6,7 +6,7 @@ description: Build or refresh a local index.md mirror of a Flywheel research gra
 # Flywheel Local Index Builder
 
 Support both installed Flywheel modes. Use the MCP tools named below when MCP is
-available; in CLI mode, load `$flywheel`'s CLI tool map and use the equivalent
+available; in CLI mode, load `flywheel`'s CLI tool map and use the equivalent
 `flywheel` command. Never guess unavailable graph fields.
 
 ## Arguments
@@ -21,9 +21,9 @@ available; in CLI mode, load `$flywheel`'s CLI tool map and use the equivalent
 ## Scope and Source of Truth
 
 This skill is the procedure for rebuilding or reconciling `index.md` from the
-Flywheel graph. `$flywheel-log` defines the canonical root-resolution and one-entry
+Flywheel graph. `flywheel-log` defines the canonical root-resolution and one-entry
 index contract; the full rebuild mechanics and concrete format live below. If the
-entry fields drift, `$flywheel-log` wins. `index.md` is a *mirror*: Flywheel is
+entry fields drift, `flywheel-log` wins. `index.md` is a *mirror*: Flywheel is
 authoritative, this file is the fast local lookup. Never invent content that is not
 in the graph.
 
@@ -84,7 +84,7 @@ flagged `⚠ TL;DR missing`.
 # Flywheel Node Index — <project>
 
 Local mirror of the Flywheel graph. The authoritative record lives in Flywheel;
-this is the fast local lookup. Regenerate with `$flywheel-index`.
+this is the fast local lookup. Regenerate with `flywheel-index`.
 
 ## <Node Title>
 `<node-id>` · <kind> · <outcome> · <date>

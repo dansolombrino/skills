@@ -66,7 +66,7 @@ obtain explicit user authorization before moving code or artifacts; never migrat
   explanation is unambiguous. Stop rather than guess when metric semantics are not grounded. Put
   the explanation in an axis label, subtitle, legend, annotation, or in-figure caption; surrounding
   prose alone does not satisfy the requirement.
-- Codex proposes only. Wait for the user's explicit acceptance before editing plotting code.
+- Propose only. Wait for the user's explicit acceptance before editing plotting code.
   Re-propose and obtain approval on every later plotting-code edit even when the specification is
   unchanged. Neither scientific-auto nor engineering-auto may bypass this gate. Repeated renders
   of unchanged approved code need no new approval.
@@ -79,8 +79,8 @@ obtain explicit user authorization before moving code or artifacts; never migrat
   the foreground on **`rig-4090`**, where evaluations converge. When another host is active,
   connect directly to `rig-4090` and run from its project checkout; stop if that checkout cannot
   be identified or reached.
-- Do not invoke `$scientific-orchestrator`, `$sweep-dispatch`, `$rig-sync`, or
-  `$experiments-tracking` for plotting. Do not create orchestration control state, mint a wave id,
+- Do not invoke `scientific-orchestrator`, `sweep-dispatch`, `rig-sync`, or
+  `experiments-tracking` for plotting. Do not create orchestration control state, mint a wave id,
   generate launch scripts, dispatch work, start tmux, or add/update `EXPERIMENTS.md` rows.
-- New plots produced ⇒ apply `$research-journal` according to the event-owning layer's mode when
+- New plots produced ⇒ apply `research-journal` according to the event-owning layer's mode when
   they reveal something.

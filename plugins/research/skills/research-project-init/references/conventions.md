@@ -21,7 +21,7 @@ become optional.
 Always return to the user for destructive operations, history rewrites, deletion of material data,
 overwriting user changes, new repositories/remotes/accounts/destinations, secrets/authentication
 changes, scope/budget/rig expansion, shared-GPU exceptions, ambiguous Flywheel roots, or a
-source-to-target deviation governed by `$integrate-reference-code`. System permission prompts are
+source-to-target deviation governed by `integrate-reference-code`. System permission prompts are
 independent and always apply.
 
 ## Taxonomy
@@ -51,7 +51,8 @@ independent and always apply.
 ├── uv.lock          # exact cross-rig dependency resolution
 ├── sync.toml        # Git/artifact/machine paths + environment smoke contract
 ├── README.md        # static scaffold (structure, setup, how-to)
-├── AGENTS.md        # thin: project specifics + light awareness map
+├── AGENTS.md        # thin: project specifics + light awareness map (canonical project notes)
+├── CLAUDE.md        # thin pointer to AGENTS.md so Claude Code loads the same notes
 ├── program.md       # one-screen current scientific index
 ├── index.md         # local mirror of the authoritative Flywheel graph
 ├── JOURNAL.md       # story: prose log of what/why/learned (append-only)
@@ -137,7 +138,7 @@ explanation is unambiguous. Stop rather than guess when metric semantics cannot 
 producer, evaluation schema, or scientific contract. External or historical figures that the
 workflow did not author are not retroactively subject to this gate.
 
-Codex proposes the exact wording, punctuation, formatting, and placement, but only the user may
+The agent proposes the exact wording, punctuation, formatting, and placement, but only the user may
 accept them. Wait for explicit user approval before the code edit. This is always protected:
 scientific-auto and engineering-auto cannot approve it, and a prior approval does not carry across
 a later plotting-code edit even when the proposed specification remains unchanged. Repeated renders
@@ -151,8 +152,8 @@ plotting script's argparse command in the foreground from the project checkout o
 evaluations converge. If another host is active, connect directly to `rig-4090`; stop when its
 checkout cannot be identified or reached.
 
-Do not invoke `$scientific-orchestrator`, `$sweep-dispatch`, `$rig-sync`, or
-`$experiments-tracking` for plotting. Do not create orchestration control state, mint a wave id,
+Do not invoke `scientific-orchestrator`, `sweep-dispatch`, `rig-sync`, or
+`experiments-tracking` for plotting. Do not create orchestration control state, mint a wave id,
 generate a launch script, dispatch work, start tmux, or add/update `EXPERIMENTS.md` rows. Plot
 title approval and the applicable engineering-mode decisions remain in force; this fast path only
 removes experiment-launch machinery from plotting.
@@ -250,7 +251,7 @@ Every current wave is one immutable Git deployment decision:
 - If the smoke leaves the staged patch and execution worktree unchanged, commit it and create
   annotated tag `wave--<wave_id>` at that commit. Push the configured branch and tag without
   force; both must resolve to the same full SHA on GitHub.
-- `$rig-sync` may advance assigned rigs only by fast-forward to that SHA. Every rig must expose
+- `rig-sync` may advance assigned rigs only by fast-forward to that SHA. Every rig must expose
   the configured branch/remote, exact `HEAD` and tag, and clean tracked/staged/non-ignored
   execution paths (`code/`, `config/`, `scripts/`, and root dependency manifests).
 - Verify the revision across the full rig set before any lane launches, per rig immediately
@@ -268,7 +269,7 @@ Every wave also carries one immutable user-space environment identity:
 - The project commits `pyproject.toml`, `uv.lock`, an exact `.python-version`,
   `code/common/environment.py`, and `[environment]` in `sync.toml`. Use only uv's configured
   default dependency groups; never add per-rig extras or manual packages.
-- `$environment-sync` installs the exact required uv and Python without `sudo`, asks the user for
+- `environment-sync` installs the exact required uv and Python without `sudo`, asks the user for
   one environment directory name, records it as `[environment].name`, materializes that ignored
   directory on each machine with `uv sync --frozen --exact`, and refuses mutation while project
   lanes or `running` statuses exist.
@@ -298,10 +299,10 @@ script filenames and tmux session names, so it must be the string that actually 
 `behemoth` is a **shared machine**. **GPU 0 is the only card that belongs to us.** Every other
 card is assigned to other people and is off-limits — an idle card is not an available card.
 
-Codex never proposes, generates, or launches on any behemoth GPU other than 0.
+The agent never proposes, generates, or launches on any behemoth GPU other than 0.
 
 The **only** exception: the user explicitly states they have obtained authorization for
-specific additional cards. That grant originates with the user and nowhere else — Codex never
+specific additional cards. That grant originates with the user and nowhere else — the agent never
 infers it from an idle `nvidia-smi`, never assumes it, never fishes for it with a leading
 question.
 
@@ -317,7 +318,7 @@ are free** before proposing an assignment (`sweep-dispatch`, pre-launch gates). 
 that math defaults to `2.0 × 1` (gpu0), and only a grant for this wave widens it.
 
 Passwordless ssh between all rigs. Git/GitHub distributes launch source; selected artifact
-movement is **`$rig-sync`'s job**. Run its bundled doctor's checks before dispatch; if they fail,
+movement is **`rig-sync`'s job**. Run its bundled doctor's checks before dispatch; if they fail,
 stop instead of inventing ad-hoc copying. The hub may be the current local host even when its SSH
 daemon is not listening: local work uses direct commands while peer work uses bounded SSH.
 
@@ -384,7 +385,7 @@ protocol: `sweep-dispatch`.
 ## Launch-chat reporting contract
 
 The chat that launches a wave remains active until all of that wave's runs are terminal or the
-user explicitly asks it to stop monitoring. Before launch, require collaboration plus a
+user explicitly asks it to stop monitoring. Before launch, require parallel background subagents plus a
 recurring wait/monitor capability; if either is unavailable, stop rather than promise updates
 the chat cannot deliver. Never implement the cadence with a blocking shell `sleep`.
 

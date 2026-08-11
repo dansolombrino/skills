@@ -1,13 +1,13 @@
 ---
 name: assumption-breaker-plan
-description: "Generate adversarial scientific planning critiques that break hidden assumptions instead of accepting the initial architecture or hypothesis. Use when Codex should identify fallacious premises, distinguish already-explored dead ends from worth-retrying variants, propose false-hypothesis alternatives, and design new experimental strategies."
+description: "Generate adversarial scientific planning critiques that break hidden assumptions instead of accepting the initial architecture or hypothesis. Use to identify fallacious premises, distinguish already-explored dead ends from worth-retrying variants, propose false-hypothesis alternatives, and design new experimental strategies."
 ---
 
 # Assumption Breaker Plan
 
 Treat the initial architecture, hypothesis, metric, and plan as unproven. Do not accept them as true because the prompt presents them as the starting point.
 
-Read the Research 2.0 execution agreement and decision register. Use `$scientific-orchestrator`'s modes, allowed scope, and ownership rules without redefining them here. Stop as unsupported when those records are absent; do not create a legacy compatibility path.
+Read the Research 2.0 execution agreement and decision register. Use `scientific-orchestrator`'s modes, allowed scope, and ownership rules without redefining them here. Stop as unsupported when those records are absent; do not create a legacy compatibility path.
 
 List the core assumptions first. For each assumption, classify it as supported, untested, weakly supported, contradicted, confounded, or unfalsifiable.
 
@@ -46,7 +46,7 @@ For each proposed strategy, include:
 - decision class, decision owner, and approval state
 - logging or audit requirement
 
-Return ranked, decision-ready recommendations to `$scientific-orchestrator`.
+Return ranked, decision-ready recommendations to `scientific-orchestrator`.
 The router owns mode behavior, approval, and protected boundaries; assumption
 breaking must not expand the agreement, budget, evaluation boundary, or
 publication rights.

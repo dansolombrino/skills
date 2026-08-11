@@ -1,6 +1,6 @@
 ---
 name: environment-sync
-description: Provision and verify one exact uv-managed Python environment across configured Research 2.0 rigs. Use when Codex needs to install or repair a supported project environment, diagnose Python/package drift, validate GPU runtime compatibility, or establish the mandatory parity gate before dispatch. Do not use to adopt legacy projects, converge operating systems, manage containers or Conda, mutate system packages, or write outside an approved engineering envelope.
+description: Provision and verify one exact uv-managed Python environment across configured Research 2.0 rigs. Use when installing or repairing a supported project environment, diagnosing Python/package drift, validating GPU runtime compatibility, or establishing the mandatory parity gate before dispatch. Do not use to adopt legacy projects, converge operating systems, manage containers or Conda, mutate system packages, or write outside an approved engineering envelope.
 ---
 
 # environment-sync
@@ -45,7 +45,7 @@ protected.
    project has active tmux lanes or `running` statuses.
 4. Run `verify` across the complete rig set, then once per approved GPU lane. Require every rig's
    fingerprint to equal the local hub and every bounded GPU smoke to succeed.
-5. Give the verified fingerprint to `$sweep-dispatch`; embed it in wave scripts and status
+5. Give the verified fingerprint to `sweep-dispatch`; embed it in wave scripts and status
    provenance. Re-run verification before initial launch and recovery.
 
 ## Commands
