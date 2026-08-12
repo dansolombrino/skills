@@ -25,13 +25,18 @@ One skill tree serves both hosts. There is no per-host copy of a skill and no ge
   with no `$` sigil, and describe host capabilities generically ("the host's parallel
   background-subagent capability"), not by product name. Name a host only where it identifies a
   real install target, as in the Flywheel per-host setup docs.
-- A distributed skill change requires a version bump in **both** plugin manifests and in the
-  Claude catalog entry. The validator fails if they drift.
+- A distributed skill change requires a version bump in **four** places: both plugin manifests, the
+  Claude catalog entry, and the version pin in `tests/test_research_contracts.py`. The validator
+  fails if the first three drift; `scripts/release.sh` catches the fourth before tagging.
 - Confirm with the user before adding a new domain plugin; register it in both catalogs.
 - Keep each skill's `agents/openai.yaml` synchronized with its `SKILL.md`. The `$<skill>` form
   stays valid there — it is Codex-only metadata.
 - Run `python3 scripts/validate_repo.py` and `python3 -m unittest discover tests` after
   structural or skill changes.
-- Release by committing, creating the annotated `<plugin>--v<version>` tag, and pushing both.
+- Release with `scripts/release.sh`, which validates, creates and pushes the annotated
+  `<plugin>--v<version>` tag, installs the release on both hosts, and fails unless both hosts
+  report the new version. `scripts/release.sh --dry-run` checks for drift without changing
+  anything. Never treat installing on the hosts as a separate follow-up step — that is exactly the
+  step that gets skipped.
 - `claude-final-v0.7.0` is the pre-Codex Claude-native state, kept for history only. Dual-host
   support was reintroduced in `research` 3.1.0 on the shared tree; do not restore that old layout.

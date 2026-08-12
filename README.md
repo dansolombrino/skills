@@ -98,12 +98,35 @@ validation fails if they drift.
 
 ## Release
 
-1. Run `python3 scripts/validate_repo.py`, run the test suite, and test representative skill
-   requests on both hosts.
-2. Commit the changes.
-3. Create the release tag: `git tag -a <plugin>--v<version> -m "<summary>"`.
-4. Push the commit and tag.
-5. Refresh and reinstall the plugin on consuming machines using the update commands above.
+Bump the version, commit, then run:
+
+```bash
+scripts/release.sh
+```
+
+One command validates, tags, pushes, and installs the new version on both hosts. It **fails unless
+both hosts end up reporting the released version**, so publishing and installing cannot drift
+apart. Restart Claude Code and Codex afterwards; running sessions keep the version they launched
+with.
+
+Check for drift at any time without changing anything:
+
+```bash
+scripts/release.sh --dry-run
+```
+
+This prints the target version against what each host actually has installed, and exits non-zero if
+they disagree.
+
+A version bump must land in **four** places, all checked before the release proceeds:
+
+- `plugins/<plugin>/.codex-plugin/plugin.json`
+- `plugins/<plugin>/.claude-plugin/plugin.json`
+- the `.claude-plugin/marketplace.json` entry
+- the pin in `tests/test_research_contracts.py`
+
+Manual fallback, if the script cannot run: validate and test, `git push origin main`,
+`claude plugin tag plugins/<plugin> --push`, then the update commands above for each host.
 
 ## History
 
