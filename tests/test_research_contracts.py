@@ -175,9 +175,12 @@ class ResearchContractTests(unittest.TestCase):
         # No rig's absolute layout, and no other project's paths, may be baked in.
         self.assertNotIn("/mnt/KS_2TB", templates)
         self.assertNotIn("qat-transfer", templates)
-        # Project-scoped storage stays repo-relative so it follows the checkout.
-        self.assertIn("OPENCLIP_CACHE_DIR=storage/openclip", templates)
-        self.assertIn("CACHE_DIR=storage/cache", templates)
+        # Project-scoped storage stays absolute but is derived from the rig's
+        # declared storage root and this project -- never another project's path.
+        self.assertIn("OPENCLIP_CACHE_DIR=<storage_root>/", templates)
+        self.assertIn("CACHE_DIR=<storage_root>/", templates)
+        self.assertIn("storage/openclip", templates)
+        self.assertIn("storage/cache", templates)
         self.assertIn("TORCH_NUM_WORKERS=16", templates)
         self.assertIn("never copy or commit a token", templates)
         self.assertIn("Do not create this file with placeholders", templates)

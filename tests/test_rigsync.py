@@ -455,5 +455,113 @@ class StorageCheckTests(unittest.TestCase):
         self.assertTrue(any(line.startswith("WARN") for line in lines))
 
 
+class MachineEnvTests(unittest.TestCase):
+    CACHES = (
+        ("HF_HOME", "/large/cache/huggingface"),
+        ("UV_CACHE_DIR", "/large/cache/uv"),
+    )
+
+    def machine(self, caches=None) -> rigsync.Machine:
+        return rigsync.Machine(
+            name="peer",
+            ssh="peer-alias",
+            hostname=None,
+            repo_path=Path("/large/projects/thing"),
+            local=False,
+            storage_root=Path("/large"),
+            caches=self.CACHES if caches is None else caches,
+        )
+
+    def test_env_file_exports_every_declared_var_quoted(self) -> None:
+        body = rigsync.render_env_sh(self.machine())
+        self.assertIn("export HF_HOME=/large/cache/huggingface", body)
+        self.assertIn("export UV_CACHE_DIR=/large/cache/uv", body)
+        self.assertIn("do not hand-edit", body.lower())
+
+    def test_env_file_shell_quotes_awkward_paths(self) -> None:
+        body = rigsync.render_env_sh(self.machine(caches=(("TMPDIR", "/large/a b/tmp"),)))
+        self.assertIn("export TMPDIR='/large/a b/tmp'", body)
+
+    def test_provision_wires_zshenv_appended_and_bashrc_prepended(self) -> None:
+        # bash returns early for non-interactive shells, so the block must go
+        # ABOVE that guard; zsh reads .zshenv unconditionally so order is free.
+        script = rigsync.provision_env_script(self.machine())
+        self.assertIn("wire .zshenv append", script)
+        self.assertIn("wire .bashrc prepend", script)
+        self.assertIn(".rigsync.bak", script)
+        self.assertIn(rigsync.MANAGED_BEGIN, script)
+
+    def test_provision_refuses_without_confirm(self) -> None:
+        machine = self.machine()
+        config = rigsync.Config(Path("/src"), {"evaluations": {"path": "e"}}, {"peer": machine})
+        with redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(rigsync.RigSyncError, "--confirm"):
+                rigsync.provision_env(config, [machine], dry_run=False, confirm=False)
+
+    def test_provision_dry_run_writes_nothing(self) -> None:
+        machine = self.machine()
+        config = rigsync.Config(Path("/src"), {"evaluations": {"path": "e"}}, {"peer": machine})
+        stream = io.StringIO()
+        with mock.patch.object(rigsync, "remote") as remote_mock, redirect_stdout(stream):
+            rigsync.provision_env(config, [machine], dry_run=True, confirm=False)
+        remote_mock.assert_not_called()
+        self.assertIn("HF_HOME", stream.getvalue())
+
+    def test_machine_env_check_reports_drift(self) -> None:
+        machine = self.machine()
+        probe = subprocess.CompletedProcess([], 0, b"/wrong/place\n/large/cache/uv\n", b"")
+        with mock.patch.object(rigsync, "remote", return_value=probe):
+            failures, lines = rigsync.check_machine_env(machine)
+        self.assertEqual(failures, 1)
+        self.assertTrue(any("HF_HOME=/wrong/place" in line for line in lines))
+
+    def test_machine_env_check_flags_unset_var(self) -> None:
+        machine = self.machine()
+        probe = subprocess.CompletedProcess([], 0, b"\n/large/cache/uv\n", b"")
+        with mock.patch.object(rigsync, "remote", return_value=probe):
+            failures, lines = rigsync.check_machine_env(machine)
+        self.assertEqual(failures, 1)
+        self.assertTrue(any("(unset)" in line for line in lines))
+
+    def test_machine_env_check_passes_when_all_match(self) -> None:
+        machine = self.machine()
+        probe = subprocess.CompletedProcess(
+            [], 0, b"/large/cache/huggingface\n/large/cache/uv\n", b""
+        )
+        with mock.patch.object(rigsync, "remote", return_value=probe):
+            failures, lines = rigsync.check_machine_env(machine)
+        self.assertEqual(failures, 0)
+        self.assertTrue(lines[0].startswith("OK"))
+
+    def test_project_env_overriding_machine_vars_fails(self) -> None:
+        # The exact mechanism that cost 6.5G on the wrong volume.
+        env = b"HF_TOKEN=secret\nHF_HOME=/home/someone/.cache/huggingface\nTORCH_NUM_WORKERS=16\n"
+        with mock.patch.object(
+            rigsync, "remote", return_value=subprocess.CompletedProcess([], 0, env, b"")
+        ):
+            failures, lines = rigsync.check_project_env(self.machine())
+        self.assertEqual(failures, 1)
+        self.assertIn("HF_HOME", lines[0])
+        self.assertNotIn("HF_TOKEN", lines[0])
+
+    def test_project_env_without_machine_vars_passes(self) -> None:
+        env = b"HF_TOKEN=secret\n# HF_HOME=/commented/out\nCACHE_DIR=/large/p/storage/cache\n"
+        with mock.patch.object(
+            rigsync, "remote", return_value=subprocess.CompletedProcess([], 0, env, b"")
+        ):
+            self.assertEqual(rigsync.check_project_env(self.machine()), (0, []))
+
+    def test_project_env_check_skipped_when_registry_declares_no_caches(self) -> None:
+        with mock.patch.object(rigsync, "remote") as remote_mock:
+            self.assertEqual(rigsync.check_project_env(self.machine(caches=())), (0, []))
+        remote_mock.assert_not_called()
+
+    def test_env_parser_handles_export_quotes_and_blanks(self) -> None:
+        parsed = rigsync.parse_env_assignments(
+            '\n# comment\nexport HF_HOME="/a/b"\nEMPTY=\nQUOTED=\'/c/d\'\nnotanenv=1\n'
+        )
+        self.assertEqual(parsed, {"HF_HOME": "/a/b", "QUOTED": "/c/d"})
+
+
 if __name__ == "__main__":
     unittest.main()

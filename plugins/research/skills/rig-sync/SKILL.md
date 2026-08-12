@@ -35,6 +35,14 @@ by the approved envelope. New destinations and any destructive recovery remain p
   require self-SSH. Use bounded, noninteractive SSH for peers.
 - Treat a configured registry `hostname` as an identity assertion: `doctor` must compare it with
   the selected machine's observed hostname and fail on drift.
+- Treat the registry's `storage_root` and `caches` the same way: a rig's volumes and shared cache
+  paths are **declared, never inferred**, and never defaulted to `$HOME`/`~/.cache`. `doctor`
+  resolves `repo_path` before comparing, checks headroom against the quota rather than `df` alone,
+  probes a **non-interactive** shell for the cache values, and fails a project `.env` that
+  re-declares any of them.
+- `provision-env` edits shell startup files on the rig, so it is a protected write: show its
+  `--dry-run` and authorize under the active engineering mode before `--confirm`. On a shared
+  machine, say so explicitly — the change affects that account's every future shell.
 - Stop dispatch when `doctor` fails for an assigned rig.
 - Refuse revision changes when execution paths are dirty, the branch/remote differs, another
   revision has active tmux lanes or `running` statuses, or the repository uses unconfigured
@@ -47,6 +55,8 @@ Set `RIGSYNC_SCRIPT` to the absolute path of this skill's own `scripts/rigsync.p
 
 ```bash
 python3 "$RIGSYNC_SCRIPT" doctor --machines rig-4090,rig-3090-ti,behemoth
+python3 "$RIGSYNC_SCRIPT" provision-env --machines rig-4090,rig-3090-ti,behemoth --dry-run
+python3 "$RIGSYNC_SCRIPT" provision-env --machines rig-4090,rig-3090-ti,behemoth --confirm
 python3 "$RIGSYNC_SCRIPT" prepare --machine rig-3090-ti --dry-run
 python3 "$RIGSYNC_SCRIPT" prepare --machine rig-3090-ti --confirm
 python3 "$RIGSYNC_SCRIPT" deploy-revision --wave 20260802-120000 \

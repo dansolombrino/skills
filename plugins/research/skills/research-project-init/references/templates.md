@@ -233,7 +233,7 @@ FLYWHEEL_ROOT_NODE_TITLE=
 HF_TOKEN=
 HUGGING_FACE_HUB_TOKEN=
 
-# Project-scoped storage (repo-relative; NOT absolute machine paths)
+# Project-scoped storage (absolute, under THIS rig's storage root and THIS project)
 OPENCLIP_CACHE_DIR=
 CACHE_DIR=
 
@@ -262,9 +262,11 @@ that is right on one machine points at a nonexistent mount on the next; and the 
 it does not exist is to retarget it at `$HOME`, which on a quota'd rig is the small volume. That
 sequence is exactly how a wave dies mid-checkpoint with `Disk quota exceeded`.
 
-Keep only what is genuinely per-project. Project-scoped storage stays **repo-relative** so it
-follows the checkout instead of pinning it to one machine's layout — and never inherits another
-project's path.
+Keep only what is genuinely per-project. Project-scoped storage stays absolute, but is derived
+from **this rig's** storage root and **this project's** own directory — never inherited from
+another project, and never pointed at `$HOME` on a quota'd rig. Substitute the machine's declared
+`storage_root` (`rig-sync` → `references/configuration.md`) for `<storage_root>` below; the
+scaffold writes the concrete value.
 
 ```bash
 WANDB_API_KEY=
@@ -275,8 +277,8 @@ FLYWHEEL_ROOT_NODE_TITLE=
 HF_TOKEN=
 HUGGING_FACE_HUB_TOKEN=
 
-OPENCLIP_CACHE_DIR=storage/openclip
-CACHE_DIR=storage/cache
+OPENCLIP_CACHE_DIR=<storage_root>/PARA/Projects/<...>/{{PROJECT_NAME}}/storage/openclip
+CACHE_DIR=<storage_root>/PARA/Projects/<...>/{{PROJECT_NAME}}/storage/cache
 
 TORCH_NUM_WORKERS=16
 ```

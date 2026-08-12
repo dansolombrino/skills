@@ -69,8 +69,13 @@ storage_root = "/absolute/large-volume/path"
 ssh = "behemoth"
 hostname = "behemoth"
 storage_root = "/absolute/large-volume/path"
-quota_fs = "/dev/disk-or-mount-of-the-small-volume"
+quota_fs = "/dev/filesystem-backing-storage_root"
 min_free_gb = 50
+
+[machines.behemoth.caches]
+HF_HOME = "/absolute/large-volume/path/cache/huggingface"
+UV_CACHE_DIR = "/absolute/large-volume/path/cache/uv"
+TMPDIR = "/absolute/large-volume/path/tmp"
 ```
 
 The `ssh` value is an alias from `~/.ssh/config`; ports, users, and keys remain there. Preserve
@@ -90,11 +95,16 @@ falls outside the root. Resolving matters: a convenience symlink in `$HOME` can 
 volume, so an unresolved string comparison passes while the declaration is still wrong — and stays
 wrong the day the symlink is replaced by a real directory.
 
-`quota_fs` names the filesystem to interrogate when the machine enforces **per-user quotas**. A
-quota is not free space, and `df` does not see it: `df` can report terabytes available on a volume
-where the user's next write fails with `Disk quota exceeded`. When `quota_fs` is present, `doctor`
-reads the user's allowance for that filesystem and reports headroom against it; when it is absent,
-`doctor` falls back to `df -P <storage_root>`.
+`quota_fs` names the filesystem to interrogate when the machine enforces **per-user quotas**. It
+must be the filesystem **backing `storage_root`** — the volume the work actually lands on — as
+reported by `df -P <storage_root>`. Naming a different filesystem produces a headroom number for a
+disk nothing is being written to, which reads as reassuring and means nothing.
+
+A quota is not free space, and `df` does not see it: `df` can report terabytes available on a
+volume where the user's next write fails with `Disk quota exceeded`. On one rig here the two
+differ by 8× on the same mount. When `quota_fs` is present, `doctor` reads the user's allowance
+for that filesystem and reports headroom against it; when it is absent, `doctor` falls back to
+`df -P <storage_root>`, which is correct on rigs with no quotas.
 
 `min_free_gb` is the hard floor below which `doctor` fails instead of warning. It defaults to a
 conservative value; raise it on rigs that run checkpoint-heavy waves. Sizing it is a judgement
@@ -103,6 +113,42 @@ far faster than the number suggests.
 
 Omit all three on rigs with a single volume and no quotas; `doctor` then skips the storage check
 rather than inventing a default.
+
+### `[machines.<rig>.caches]` — the machine environment
+
+This table is the **single source of truth for a rig's shared caches and scratch**: `HF_HOME`,
+`HF_HUB_CACHE`, `HF_DATASETS_CACHE`, `TORCH_HOME`, `UV_CACHE_DIR`, `TRITON_CACHE_DIR`,
+`XDG_CACHE_HOME`, `TMPDIR`, `WANDB_CACHE_DIR`, `WANDB_DIR`. Keys must be valid environment names
+and every value must be an absolute path. Different rigs mount different volumes, so the values
+differ per machine while the variable names do not.
+
+`rigsync provision-env --machines <rigs> --confirm` writes them to `~/.config/rigsync/env.sh` on
+each rig and wires that file into the shell startup so **every** shell sees it:
+
+- appended to `~/.zshenv`, which zsh reads on every invocation — interactive or not;
+- **prepended** to `~/.bashrc`, above the `case $- in *i*)` guard that returns early for
+  non-interactive shells. Appending below that guard is the classic mistake: the exports then
+  exist only for a human at a prompt, and are absent for exactly the dispatched, `nohup`'d, and
+  `ssh <cmd>` invocations that run the long jobs.
+
+Both edits are idempotent — an existing managed block is stripped before the new one is written —
+and each target is backed up once to `<file>.rigsync.bak`. Without `--confirm` the command prints
+what it would write and stops, because it modifies shell startup files.
+
+Prefer this over a project's `.env` for anything machine-level, for two reasons. A `.env` is
+loaded *after* the shell environment and silently overrides it, so one stale line defeats a
+correctly configured rig. And `.env` cannot help the tools that never read it: **`uv` resolves its
+cache before Python starts**, so `UV_CACHE_DIR` in a `.env` has no effect at all — which is how a
+uv cache quietly becomes the largest directory on a machine.
+
+`doctor` therefore runs two checks once `caches` is declared. It probes a **non-interactive** shell
+on the rig and compares each variable against the registry, so a value that only a login shell can
+see is reported as drift. And it reads the project's `.env` on that rig and **fails** if it assigns
+any machine-level variable. Secrets (`HF_TOKEN`), project-scoped storage, and runtime settings
+stay in `.env` and are untouched.
+
+Omit `caches` on rigs whose environment is managed some other way; `doctor` then skips both checks
+and `.env` remains a legitimate place to set these values.
 
 ## Environment overrides
 
