@@ -102,11 +102,19 @@ display-only status contract makes the repository unsupported; do not upgrade it
 ## 5. WandB checklist (must resolve)
 
 1. Use wandb for this experiment?
-2. If yes: resolve metrics and their names/keys with the applicable engineering-mode owner.
-3. Use project = research project, group = `NNN_experiment`, run name = flat run_id as the proposal.
+2. **The ENTIRE resolved config is logged** — `wandb.init(config=wandb_config(cfg), ...)` from
+   `code/common/run_id.py`, which returns the same full payload as the `.run_config.json`
+   snapshot plus a `provenance` namespace (`wave_id`, `gpu`, `source_revision`, `source_tag`,
+   `environment_fingerprint`, from wave env vars). Never a hand-picked subset, never
+   `RUN_ID_PARAMS` only: a run's config, like its run name, **cannot be backfilled**, so a
+   partial config leaves the sweep permanently unfilterable on exactly the params nobody thought
+   to log — and provenance is what lets you filter by tested commit, rig/GPU, and environment.
+   Not a mode decision; no owner may narrow it.
+3. Resolve metrics and their names/keys with the applicable engineering-mode owner.
+4. Use project = research project, group = `NNN_experiment`, run name = flat run_id as the proposal.
    Manual mode waits for approval; auto mode may adopt or safely refine it inside the envelope.
-4. Online mode on all rigs; `WANDB_API_KEY` from `.env`.
-5. wandb files go under `logs/` — `wandb.init(dir=<project_root>/"logs")` — never the project root.
+5. Online mode on all rigs; `WANDB_API_KEY` from `.env`.
+6. wandb files go under `logs/` — `wandb.init(dir=<project_root>/"logs")` — never the project root.
 
 ## 6. Wrap up
 

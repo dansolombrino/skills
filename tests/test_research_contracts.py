@@ -13,6 +13,31 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 RIGSYNC = ROOT / "plugins/research/skills/rig-sync/scripts/rigsync.py"
+PROJECT_TEMPLATES = (
+    ROOT / "plugins/research/skills/research-project-init/references/templates.md"
+)
+
+
+def template_block(heading: str) -> str:
+    """The python body templates.md publishes under one `## <heading>` section."""
+    match = re.search(
+        rf"## {re.escape(heading)}\n\n```python\n(.*?)\n```",
+        PROJECT_TEMPLATES.read_text(),
+        re.DOTALL,
+    )
+    assert match is not None, heading
+    return match.group(1)
+
+
+def run_id_template() -> str:
+    return template_block("code/common/run_id.py")
+
+
+def status_provenance_fields() -> frozenset[str]:
+    """Wave provenance as the canonical StatusWriter records it -- the one authority."""
+    block = template_block("code/common/status.py")
+    section = block.split('"progress_unit": None,')[1].split("}")[0]
+    return frozenset(re.findall(r'"([a-z_]+)": os\.environ\.get\(', section))
 
 
 def machine_env_vars() -> frozenset[str]:
@@ -31,7 +56,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "3.6.0")
+        self.assertEqual(manifest["version"], "3.7.0")
         self.assertTrue((ROOT / "plugins/research/skills/rig-sync/SKILL.md").is_file())
         self.assertTrue(
             (ROOT / "plugins/research/skills/integrate-reference-code/SKILL.md").is_file()
@@ -659,6 +684,70 @@ class ResearchContractTests(unittest.TestCase):
             self.assertEqual(ended["state"], "done")
             self.assertIsNotNone(ended["ended"])
             self.assertFalse(writer.path.with_suffix(".json.tmp").exists())
+
+    def test_experiment_design_mandates_the_whole_config_reaches_wandb(self) -> None:
+        """A run's config cannot be backfilled, so a subset is an unrecoverable loss."""
+        skill = (
+            ROOT / "plugins/research/skills/experiment-design/SKILL.md"
+        ).read_text()
+        conventions = (
+            ROOT / "plugins/research/skills/research-project-init/references/conventions.md"
+        ).read_text()
+        section = skill.split("## 5. WandB checklist")[1].split("\n## ")[0]
+
+        self.assertIn("wandb.init(config=wandb_config(cfg)", section)
+        self.assertIn("ENTIRE resolved config", section)
+        self.assertIn("cannot be backfilled", section)
+        self.assertIn("provenance", section)
+        self.assertIn("wandb_config(cfg)", conventions)
+
+        # the pre-launch gate that checks helper presence must know about them,
+        # or an older run_id.py passes and the script NameErrors at launch
+        dispatch = (ROOT / "plugins/research/skills/sweep-dispatch/SKILL.md").read_text()
+        gate = dispatch.split("**helper safety check**")[1].split("\n1c.")[0]
+        self.assertIn("wandb_config", gate)
+
+    def test_run_id_template_resolves_the_config_in_exactly_one_place(self) -> None:
+        """One resolver, every recorder -- so wandb and .run_config.json cannot drift."""
+        block = run_id_template()
+        self.assertEqual(block.count("OmegaConf.to_container"), 1)
+        self.assertIn("def resolved_config(cfg)", block)
+        self.assertIn("def wandb_config(cfg)", block)
+        self.assertIn("resolved = resolved_config(cfg)", block)
+
+    def test_wandb_config_carries_the_whole_config_plus_wave_provenance(self) -> None:
+        namespace: dict[str, object] = {}
+        stub = type(sys)("omegaconf")
+        stub.OmegaConf = type(
+            "OmegaConf",
+            (),
+            {"is_config": staticmethod(lambda cfg: False)},
+        )
+        sys.modules["omegaconf"] = stub
+        try:
+            exec(compile(run_id_template(), "run_id.py", "exec"), namespace)
+            wandb_config = namespace["wandb_config"]
+            guard_run_config = namespace["guard_run_config"]
+
+            cfg = {"model": "mlp", "lr": 0.001, "seed": 0, "batch_size": 32}
+            logged = wandb_config(cfg)
+            provenance = logged.pop("provenance")
+
+            # everything, not just the run_id params
+            self.assertEqual(logged, cfg)
+            self.assertEqual(set(provenance), status_provenance_fields())
+
+            with tempfile.TemporaryDirectory() as tmp:
+                run_dir = Path(tmp) / "run"
+                guard_run_config(cfg, ["model", "lr", "seed"], run_dir)
+                snapshot = json.loads((run_dir / ".run_config.json").read_text())
+            # the wandb payload is the snapshot plus provenance -- never a subset
+            self.assertEqual(logged, snapshot)
+
+            with self.assertRaises(RuntimeError):
+                wandb_config({**cfg, "provenance": "mine"})
+        finally:
+            del sys.modules["omegaconf"]
 
 
 if __name__ == "__main__":

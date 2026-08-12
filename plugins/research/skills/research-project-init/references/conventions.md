@@ -217,6 +217,11 @@ worse, being skipped by an artifact-guarded wave script as "already done".
 - Corollary: `guard_run_config` catches collisions only once Python starts. An artifact-guarded
   skip does not enter Python, so the mandatory sweep coverage gate must reject schema drift
   before scripts are generated. Never describe the runtime guard as validating a skipped run.
+- **External tracking carries the same full config (canon)** — where wandb is used, the run
+  config is `wandb_config(cfg)`: the identical `resolved_config(cfg)` payload that
+  `.run_config.json` stores, plus a `provenance` namespace. One resolver, every recorder — a
+  wandb run whose config is a subset of its `.run_config.json` is a defect, and it is
+  unrecoverable, because a finished run's config cannot be backfilled.
 
 ## Waves and GPU lanes
 
@@ -442,7 +447,10 @@ provenance is valid, disagreements resolve as **artifacts win**, then `.status.j
    `CUDA_VISIBLE_DEVICES`, `SOURCE_REVISION`, `SOURCE_TAG`, `ENVIRONMENT_FINGERPRINT`), deliberately
    **not** as config params — they must stay
    out of the `guard_run_config` snapshot, or every re-launch in a new wave or on a different
-   card would trip the run_id-collision hard error. `StatusWriter` refreshes `heartbeat` and
+   card would trip the run_id-collision hard error. That is a snapshot rule, not a blanket ban:
+   the same fields also ride into the wandb run config under its `provenance` namespace
+   (`wandb_config`), which is why they are filterable there without endangering the guard.
+   `StatusWriter` refreshes `heartbeat` and
    live `elapsed_s` atomically every 60 seconds even when a training unit is still running.
    Experiment code reports numeric progress with
    `heartbeat(completed=<n>, total=<n>, unit=<label>)`. ETA is deliberately absent: it is

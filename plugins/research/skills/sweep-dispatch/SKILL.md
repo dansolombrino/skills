@@ -20,7 +20,9 @@ Vocabulary (canon): a **wave** is one dispatch decision, identified by `YYYYMMDD
 
 1. **run_id coverage check** — every param varied in the sweep grid, AND every behavior-affecting config param added/changed since this experiment's last runs, must be in `RUN_ID_PARAMS`. If not, **halt** and route through the `experiment-design` skill's run_id evolution protocol (re-election + migration) before generating anything — otherwise new runs collide with old artifacts: overwritten, or silently skipped as "done". The artifact guard is only sound under this gate: `guard_run_config` catches collisions after Python starts, but an artifact-skipped run never enters Python.
 1b. **helper safety check** — verify `code/common/run_id.py` provides the canonical percent-encoded
-`run_id_path`/`run_id_flat` renderers and `hydra_override_arg`. Any older helper makes the project
+`run_id_path`/`run_id_flat` renderers, `hydra_override_arg`, and the single config resolver
+`resolved_config`/`wandb_config` (a wandb run whose config is anything less than the whole
+resolved config is unfixable after the fact). Any older helper makes the project
 unsupported; halt without upgrading it in place.
 1c. **environment contract check** — require exact uv/Python pins, current `uv.lock`, the standard
 `code/common/environment.py`, and the project GPU smoke. Use `environment-sync` to verify the hub

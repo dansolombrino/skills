@@ -456,9 +456,13 @@ StatusWriter starts): it hard-fails on run_id collisions — same run_id, differ
 full config — which happen when a param was added to the config but not to
 RUN_ID_PARAMS (schema evolution rules: conventions.md). One guard at the
 evaluations/ run dir suffices: checkpoints/ and plots/ share the same run_id.
+
+Scripts that use wandb must call wandb.init(config=wandb_config(cfg)) — the whole
+resolved config, never a subset.
 """
 
 import json
+import os
 import shlex
 from pathlib import Path
 from urllib.parse import quote
@@ -500,6 +504,47 @@ def hydra_override_arg(param, value) -> str:
     return shlex.quote(f"{param}={value}")
 
 
+def resolved_config(cfg) -> dict:
+    """The run's ENTIRE config, resolved and json-normalized.
+
+    Single source of truth for "the full config of this run", wherever it is
+    recorded: the .run_config.json snapshot AND the wandb run config are both
+    built from this, so the two can never disagree. Do not resolve a config
+    anywhere else; do not record a hand-picked subset anywhere.
+    """
+    from omegaconf import OmegaConf
+
+    # json round-trip so every consumer sees exactly what a stored snapshot stores
+    raw = OmegaConf.to_container(cfg, resolve=True) if OmegaConf.is_config(cfg) else cfg
+    return json.loads(json.dumps(raw, sort_keys=True, default=str))
+
+
+def wandb_config(cfg) -> dict:
+    """Payload for wandb.init(config=...): whole config + wave provenance.
+
+    Provenance sits in its own "provenance" namespace and is read from the env
+    vars the wave script exports (same set StatusWriter records), NOT from config
+    params: they must stay out of resolved_config()/.run_config.json, or every
+    relaunch in a new wave or on another GPU would trip the run_id-collision hard
+    error. In wandb they are pure gain — they make runs filterable by tested
+    commit, rig/GPU, and environment fingerprint, not just hyperparameters.
+    """
+    resolved = resolved_config(cfg)
+    if "provenance" in resolved:
+        raise RuntimeError(
+            "config has a top-level 'provenance' key, which would be shadowed by "
+            "wave provenance in the wandb run config — rename the config key."
+        )
+    resolved["provenance"] = {
+        "wave_id": os.environ.get("WAVE_ID"),
+        "gpu": os.environ.get("CUDA_VISIBLE_DEVICES"),
+        "source_revision": os.environ.get("SOURCE_REVISION"),
+        "source_tag": os.environ.get("SOURCE_TAG"),
+        "environment_fingerprint": os.environ.get("ENVIRONMENT_FINGERPRINT"),
+    }
+    return resolved
+
+
 def guard_run_config(cfg, params, run_dir: Path) -> None:
     """Refuse to reuse a run dir whose config differs from the current one.
 
@@ -508,12 +553,7 @@ def guard_run_config(cfg, params, run_dir: Path) -> None:
     a run_id collision: a param changed that is not in RUN_ID_PARAMS. Same-config
     reruns (resume/retry) pass. Call BEFORE writing any artifact.
     """
-    from omegaconf import OmegaConf
-
-    # json round-trip so comparison sees exactly what a stored snapshot stores
-    raw = OmegaConf.to_container(cfg, resolve=True) if OmegaConf.is_config(cfg) else cfg
-    resolved = json.loads(json.dumps(raw,
-                                     sort_keys=True, default=str))
+    resolved = resolved_config(cfg)
     snapshot_file = run_dir / ".run_config.json"
     if snapshot_file.exists():
         snapshot = json.loads(snapshot_file.read_text())
