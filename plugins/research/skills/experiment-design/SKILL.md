@@ -59,7 +59,14 @@ Resolve every item with the applicable engineering-mode owner; do not leave impl
 1. Checkpoint filenames? (no repo-wide default — per-case)
 2. Contents? Present trade-offs: full training state (model+optimizer+scheduler+RNG+step+config snapshot; exact resume) vs weights-only (small; cannot truly resume).
 3. Resume support in this script, yes/no? — decided NOW, before coding; sweep-rerun behavior later inherits this silently — **including unattended crash recovery**: after a machine crash/reboot the sweep machinery auto-relaunches interrupted runs, and resumable ones continue from checkpoint while non-resumable ones restart from scratch, so choose full training state for anything expensive.
-4. Which checkpoints to produce / retention?
+4. Which checkpoints to produce / retention? **Compute the footprint before answering**, and
+   state it in the decision: `checkpoint size × checkpoints retained × runs in the sweep`. Full
+   training state (item 2) is typically several times the model size, and "keep every step" is a
+   retention policy — usually an unexamined one. Multiply it out against the rig's declared
+   headroom (`rig-sync` → `references/configuration.md`): a sweep whose total exceeds the
+   allowance cannot be placed anywhere, and no dispatch-time guard can rescue it. If the total is
+   uncomfortable, the lever is here — keep last-N plus the final, checkpoint on a coarser cadence,
+   or store weights-only for the intermediates and full state only where resume must work.
 5. **Expected final artifact** — which file (final checkpoint and/or final eval output) proves the run truly finished? This is the **golden completion signal** monitors check first (`conventions.md`); record the choice in the experiment's EXPERIMENTS.md section header.
 
 ## 4b. Run signaling & timing (mandatory, no user decision needed)
