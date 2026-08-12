@@ -491,6 +491,14 @@ class MachineEnvTests(unittest.TestCase):
         self.assertIn(".rigsync.bak", script)
         self.assertIn(rigsync.MANAGED_BEGIN, script)
 
+    def test_provision_creates_every_declared_directory(self) -> None:
+        # Exporting TMPDIR to a missing directory breaks tools far from here.
+        script = rigsync.provision_env_script(
+            self.machine(caches=(("TMPDIR", "/large/tmp"), ("HF_HOME", "/large/cache/hf")))
+        )
+        self.assertIn("mkdir -p /large/tmp", script)
+        self.assertIn("mkdir -p /large/cache/hf", script)
+
     def test_provision_refuses_without_confirm(self) -> None:
         machine = self.machine()
         config = rigsync.Config(Path("/src"), {"evaluations": {"path": "e"}}, {"peer": machine})

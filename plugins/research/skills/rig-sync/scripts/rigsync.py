@@ -777,9 +777,16 @@ def provision_env_script(machine: Machine) -> str:
     an existing managed block is stripped before the new one is written.
     """
     env_body = render_env_sh(machine)
+    # Every declared directory must exist before anything exports a path to it.
+    # TMPDIR is the sharp edge: pointing it at a missing directory breaks tools
+    # far away from here, in ways that do not name the cause.
+    mkdirs = "\n".join(
+        f"mkdir -p {shlex.quote(value)}" for _var, value in machine.caches
+    )
     return f"""
 set -eu
 umask 022
+{mkdirs}
 mkdir -p "$HOME/$(dirname {shlex.quote(MANAGED_ENV_FILE)})"
 cat > "$HOME/{MANAGED_ENV_FILE}" <<'RIGSYNC_ENV_EOF'
 {env_body}RIGSYNC_ENV_EOF
