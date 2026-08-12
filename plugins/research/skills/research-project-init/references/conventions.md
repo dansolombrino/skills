@@ -24,6 +24,34 @@ changes, scope/budget/rig expansion, shared-GPU exceptions, ambiguous Flywheel r
 source-to-target deviation governed by `integrate-reference-code`. System permission prompts are
 independent and always apply.
 
+## Directives are closed
+
+- **The active skill's `SKILL.md`, its `references/`, and its bundled templates are the complete
+  and only specification** for structure, naming, file contents, and defaults. Follow them
+  literally. They are not a starting point to be enriched from elsewhere.
+- **Never list, search, read, or copy from another project, repository, or directory on disk** —
+  sibling projects, prior research checkouts, home-directory clones — to infer conventions, file
+  contents, defaults, or how something was done last time. An existing project found on disk is
+  not a template, a precedent, or an example, however similar it looks.
+- **When a directive is missing or ambiguous, stop and ask the user.** Never close the gap by
+  imitation and never silently default. A convention the skill does not state is a question for
+  the user, not something to go discover.
+- **Never carry secrets or credentials across projects.** Do not copy or commit a token from
+  another project's `.env` or from any other machine-local secret source.
+
+Reading outside the target project is legitimate in exactly these cases, and each is already
+named by a directive rather than discovered by looking around:
+
+- the target project itself, including its own history and tracked files;
+- the installed directory of a `research` skill — the folder holding the SKILL.md being followed,
+  with its `assets/`, `scripts/`, and `references/` — which is how `assets/environment.py` reaches
+  `code/common/environment.py`;
+- literal values written into the templates, such as the shared cache paths, which are reproduced
+  verbatim because the rigs share those caches, not because another project was inspected;
+- material the user placed in the project's own `references/` directory, or a reference the user
+  identifies explicitly by path or URL, governed by `integrate-reference-code`. References are
+  always user-supplied; never go looking for candidates on the filesystem.
+
 ## Taxonomy
 
 ```

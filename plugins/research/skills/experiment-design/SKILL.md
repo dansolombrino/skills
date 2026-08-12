@@ -10,6 +10,10 @@ Protocol for compiling an approved scientific step into a new experiment. Read
 `program/00-execution-agreement.md` first. Stop as unsupported when Research 2.0 surfaces are
 absent; do not offer migration.
 
+Directives are closed (see the canon section of that name). Derive naming, structure, config
+shape, and defaults from these directives and this project alone. Never read another project on
+disk to copy how an experiment was laid out there; where a directive is missing, ask the user.
+
 Decision ownership follows `engineering_mode`. In manual mode, propose each technical choice and
 wait for the user. In auto mode, choose and record it inside the approved engineering envelope.
 Integrity gates and protected choices never become delegable.

@@ -5,7 +5,7 @@ description: Maintain Research 2.0 scientific program records and local orchestr
 
 # Research Housekeeping
 
-Create or update the local research housekeeping layer before scientific execution becomes complex. This skill keeps the repository workspace orderly; it does not publish research records.
+Create or update the local research housekeeping layer before scientific execution becomes complex. This skill keeps the repository workspace orderly; it does not publish research records. Canon: `../research-project-init/references/conventions.md`, including "Directives are closed" — build these records from this project and these directives alone, never from another project on disk.
 
 ## Housekeeping Layout
 

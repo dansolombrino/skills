@@ -13,6 +13,12 @@ In a research project, require the Research 2.0 scaffold first. Source-to-target
 always-protected choice: neither scientific-auto nor engineering-auto may approve them. The user's
 row-level approval remains required regardless of the active modes.
 
+References are always user-supplied: the user names each one by path or URL, or places it in the
+project's `references/` directory. This skill is the only sanctioned path for external source code
+entering a project, and it never authorizes surveying the filesystem for candidates. Do not go
+looking for a similar project to adapt, and do not widen an approved reference to its neighbours
+on disk.
+
 ## 1. Inspect before editing
 
 1. Identify each reference by local path or URL and by commit, tag, version, or retrieval date

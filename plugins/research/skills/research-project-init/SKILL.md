@@ -9,6 +9,15 @@ Scaffold only the Research 2.0 architecture. Read
 [references/conventions.md](references/conventions.md) and
 [references/templates.md](references/templates.md) before writing.
 
+**These directives are the complete specification.** Scaffold from them alone. Never list, read,
+or copy from another project on disk — sibling projects, prior research checkouts, home-directory
+clones — to decide layout, file contents, dependencies, or defaults, and never treat an existing
+project as a template or precedent however similar it looks. Where a directive is missing or
+ambiguous, stop and ask the user; never close the gap by imitation. The only reads outside this
+project are the ones a directive names: the installed skill directories, the literal template
+values, and material the user supplies explicitly. See "Directives are closed" in
+[references/conventions.md](references/conventions.md).
+
 ## Admission
 
 1. Resolve the requested project path exactly.
@@ -72,4 +81,5 @@ Scaffold only the Research 2.0 architecture. Read
 4. Finish the local scaffold when remote setup is unavailable, but report remote execution and
    Flywheel publication as blocked until their independent gates pass.
 
-Never deviate from the taxonomy, create compatibility shims, or silently weaken a gate.
+Never deviate from the taxonomy, create compatibility shims, or silently weaken a gate. Never take
+structure, file contents, or defaults from another project on disk.

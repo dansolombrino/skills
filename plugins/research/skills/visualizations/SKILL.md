@@ -7,6 +7,10 @@ description: Create or update Research 2.0 plots and figures from provenance-val
 
 Plotting code conventions. Canon: `../research-project-init/references/conventions.md`.
 
+Directives are closed (see the canon section of that name). Take plot placement, naming, and
+style from these directives and this project's own plotting code alone; never copy a plotting
+layout or convention from another project on disk.
+
 Require the Research 2.0 scaffold and read the active execution agreement. Plot representation,
 placement, and execution follow `engineering_mode`: manual mode proposes and waits; auto mode may
 choose inside the approved envelope. Scientific interpretation and claim changes remain owned by

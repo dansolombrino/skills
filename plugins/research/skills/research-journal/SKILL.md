@@ -5,7 +5,7 @@ description: Keep a Research 2.0 JOURNAL.md as the append-only chronological sto
 
 # research-journal
 
-JOURNAL.md is the project's **story** — prose explaining what was done, why, and what was learned (state lives in EXPERIMENTS.md). Append-only: never rewrite or delete past entries.
+JOURNAL.md is the project's **story** — prose explaining what was done, why, and what was learned (state lives in EXPERIMENTS.md). Append-only: never rewrite or delete past entries. Canon: `../research-project-init/references/conventions.md`, including "Directives are closed" — journal only this project, from this project's own evidence, and never model its format on another project on disk.
 
 ## When
 

@@ -73,6 +73,15 @@ the scripts tree.
 
 {{PROJECT_DESCRIPTION}}
 
+## Conventions come from this project and the skills
+
+Follow this project's own files and the `research` skill directives. Never list, read, or copy
+from another project on disk to decide layout, file contents, dependencies, or defaults, and
+never treat a similar-looking project as a template or precedent. Where a convention is not
+stated, ask rather than imitate. External source code enters only through
+`integrate-reference-code`, from a reference the user identifies explicitly or places in
+`references/`.
+
 ## Awareness map
 
 - `EXPERIMENTS.md` — run tracking (state). Read it to know what exists/ran.

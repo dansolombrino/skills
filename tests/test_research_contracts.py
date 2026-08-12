@@ -17,7 +17,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "3.2.0")
+        self.assertEqual(manifest["version"], "3.3.0")
         self.assertTrue((ROOT / "plugins/research/skills/rig-sync/SKILL.md").is_file())
         self.assertTrue(
             (ROOT / "plugins/research/skills/integrate-reference-code/SKILL.md").is_file()
@@ -440,6 +440,53 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("Pre-dispatch smoke test", design)
         self.assertIn("[git]", configuration)
         self.assertIn("source_revision", design)
+
+    def test_directives_are_closed_against_other_projects_on_disk(self) -> None:
+        def flat(path: Path) -> str:
+            # Rules are hard-wrapped in the sources; compare on normalized whitespace.
+            return " ".join(path.read_text().split())
+
+        init_root = ROOT / "plugins/research/skills/research-project-init"
+        conventions = flat(init_root / "references/conventions.md")
+        init_skill = flat(init_root / "SKILL.md")
+        templates = flat(init_root / "references/templates.md")
+        reference_code = flat(
+            ROOT / "plugins/research/skills/integrate-reference-code/SKILL.md"
+        )
+
+        # The canon states the rule, and names the permitted reads so it cannot be over-read.
+        self.assertIn("## Directives are closed", conventions)
+        self.assertIn(
+            "Never list, search, read, or copy from another project, repository, or directory"
+            " on disk",
+            conventions,
+        )
+        self.assertIn("stop and ask the user", conventions)
+        self.assertIn("Reading outside the target project is legitimate", conventions)
+        self.assertIn("the installed directory of a `research` skill", conventions)
+        self.assertIn("References are always user-supplied", reference_code)
+        self.assertIn("never authorizes surveying the filesystem", reference_code)
+
+        # The scaffolder restates it at both ends, and the scaffolded project inherits it.
+        self.assertIn("These directives are the complete specification.", init_skill)
+        self.assertIn(
+            "Never take structure, file contents, or defaults from another project on disk.",
+            init_skill,
+        )
+        self.assertIn("never treat a similar-looking project as a template", templates)
+
+        # Every skill that creates or edits project files carries the rule or the canon link.
+        for skill_name in (
+            "experiment-design",
+            "visualizations",
+            "environment-sync",
+            "rig-sync",
+            "research-journal",
+            "research-housekeeping",
+        ):
+            skill = flat(ROOT / "plugins/research/skills" / skill_name / "SKILL.md")
+            self.assertIn("Directives are closed", skill, skill_name)
+            self.assertIn("another project on disk", skill, skill_name)
 
     def test_dispatch_guarantees_fixed_timestamped_status_updates(self) -> None:
         skill_root = ROOT / "plugins/research/skills/sweep-dispatch"

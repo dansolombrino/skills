@@ -14,7 +14,9 @@ directory* — the folder holding the SKILL.md you are reading — not the resea
 directory's absolute path. Never resolve it against the project root: the project's own `scripts/`
 holds shell wave scripts only and has no `rigsync.py`.
 
-Read `program/00-execution-agreement.md` and the Research 2.0 conventions first. Stop when the
+Read `program/00-execution-agreement.md` and the Research 2.0 conventions
+(`../research-project-init/references/conventions.md`, including "Directives are closed" — never
+infer paths, machine entries, or defaults from another project on disk) first. Stop when the
 project surfaces are absent. In engineering-manual mode, show the dry run and wait; in
 engineering-auto mode, confirm only the named source, destination, revision, and selector covered
 by the approved envelope. New destinations and any destructive recovery remain protected.
