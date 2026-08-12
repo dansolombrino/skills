@@ -60,7 +60,9 @@ scripts/NNN_exp/<run_id_flat>/wave_<wave_id>/
   Before experiment Python it recomputes the fingerprint with the configured environment's
   `bin/python`, compares it, and runs the bounded project GPU smoke without syncing.
   Drift/compatibility failure exits `87`.
-  On `behemoth` it retains the per-wave authorization guard before the smoke. It captures its own
+  On `behemoth` it retains the per-wave authorization guard before the smoke. On a quota'd rig it
+  also checks storage headroom first, exiting `88` rather than dying mid-checkpoint and leaving a
+  truncated artifact that looks real. It captures its own
   timestamped log under the mirror path in `logs/`.
 - Folder names come from `run_id_flat` (via `code/common/run_id.py`) — identical strings to EXPERIMENTS.md rows and wandb run names. `ls scripts/NNN_exp/<run_id_flat>/` is that run's execution history.
 - **The filesystem encodes the assignment**: a run is on that rig and those GPUs precisely because `wave_<rig>_gpu<ids>.sh` exists in its wave folder. No separate manifest to drift.
@@ -109,7 +111,7 @@ Each rig subagent:
    lane** as its own named tmux session — `<project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>` — running
    a glob loop over that lane's wave scripts (exact one-liner in
    [references/templates.md](references/templates.md)). Each queued script repeats the Git guard
-   before Python. Source-drift `86` or environment-drift `87` stops the lane; ordinary run failures continue the queue.
+   before Python. Source-drift `86`, environment-drift `87`, or insufficient storage `88` stops the lane; ordinary run failures continue the queue.
    Sequencing remains a shell loop so it survives subagent death, compaction, and multi-day queues.
 2. **Monitors** its queues to completion, judging each run by the three signals (hierarchy in `conventions.md` — artifacts are golden). Batch all lanes/status files for that rig into bounded probes; in normal operation obtain at least one fresh snapshot every five minutes so a scheduled chat update never depends on an arbitrarily old poll:
    - **expected final artifact** on disk (final checkpoint / final eval output) ⇒ truly done;

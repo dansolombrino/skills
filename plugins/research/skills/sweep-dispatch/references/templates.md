@@ -66,6 +66,29 @@ for d in ${CUDA_VISIBLE_DEVICES//,/ }; do
 done
 # ---- end behemoth block
 
+# storage guard: a quota'd rig blocks this lane with reserved exit 88 BEFORE any compute is spent.
+# Omit only on rigs with a single volume and no quotas. A quota is not free space -- df reports the
+# filesystem, not the user's allowance -- so ask quota first and fall back to df only when absent.
+MIN_FREE_KIB=<floor in 1K blocks; size it to this wave's checkpoint footprint, not the rig>
+QUOTA_FS="<filesystem of the volume this lane writes to, or empty to use df>"
+FREE_KIB=""
+if [ -n "$QUOTA_FS" ] && command -v quota >/dev/null 2>&1; then
+  FREE_KIB=$(quota -w 2>/dev/null | awk -v fs="$QUOTA_FS" '
+    $1 == fs { used = $2; sub(/\*$/, "", used)
+               lim = ($4 > 0 ? $4 : $3)          # hard limit, else soft; 0 means unlimited
+               if (lim > 0) { d = lim - used; print (d > 0 ? d : 0) } }')
+fi
+if [ -z "$FREE_KIB" ]; then
+  FREE_KIB=$(df -P . 2>/dev/null | awk 'NR == 2 { print $4 }')
+fi
+if [ -z "$FREE_KIB" ]; then
+  echo "[storage] cannot determine free space" >&2; exit 88
+fi
+if [ "$FREE_KIB" -lt "$MIN_FREE_KIB" ]; then
+  echo "[storage] only $((FREE_KIB / 1048576))G free, need $((MIN_FREE_KIB / 1048576))G" >&2
+  exit 88
+fi
+
 # exact environment guard: runtime drift/incompatibility blocks this lane with reserved exit 87
 ENVIRONMENT_DIR="<environment.name from sync.toml>"
 EXPECTED_ENVIRONMENT_FINGERPRINT="<64-char fingerprint verified on every assigned rig>"
@@ -143,6 +166,15 @@ Notes:
   with the tracked fingerprint helper, and never invokes `uv sync`. Generate `ENVIRONMENT_SMOKE`
   from `sync.toml`'s argv after removing its leading `python`. Exit `87` means runtime drift or GPU
   incompatibility, not an experiment failure, and stops the lane.
+- The **storage guard** is emitted on quota'd rigs only, and sits *after* the artifact guard (a
+  finished run must still skip cleanly) and *before* the environment guard, so a lane that cannot
+  possibly finish is stopped before it spends GPU time. Reserved exit `88` means insufficient
+  storage, not an experiment failure, and stops the lane. Size `MIN_FREE_KIB` from **this wave's**
+  footprint — checkpoint size × retained checkpoints × runs sharing the volume — not from a fixed
+  per-rig number; a lane writing a 350 MB checkpoint every 30 s exhausts headroom far faster than
+  a static floor suggests. Set `QUOTA_FS` to the filesystem the lane actually writes to; leave it
+  empty only where no quota applies. Running out of space mid-run is worse than a clean abort,
+  because a partial `.pt` on disk looks like a real checkpoint.
 - The **behemoth GPU guard** is emitted on `behemoth` lanes only — the other rigs are ours
   outright and get no such block. It sits *after* the artifact guard (a finished run must still skip
   cleanly, not abort) and *before* python. `BEHEMOTH_AUTHORIZED_GPUS` is `0` by default and

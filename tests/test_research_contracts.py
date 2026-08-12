@@ -17,7 +17,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "3.3.0")
+        self.assertEqual(manifest["version"], "3.4.0")
         self.assertTrue((ROOT / "plugins/research/skills/rig-sync/SKILL.md").is_file())
         self.assertTrue(
             (ROOT / "plugins/research/skills/integrate-reference-code/SKILL.md").is_file()
@@ -162,31 +162,22 @@ class ResearchContractTests(unittest.TestCase):
         for key in (
             "HF_TOKEN",
             "HUGGING_FACE_HUB_TOKEN",
-            "HF_HOME",
-            "HF_DATASETS_CACHE",
-            "HF_HUB_CACHE",
             "OPENCLIP_CACHE_DIR",
             "CACHE_DIR",
             "TORCH_NUM_WORKERS",
         ):
             self.assertGreaterEqual(templates.count(f"{key}="), 2, key)
-        self.assertIn("HF_HOME=/mnt/KS_2TB/cache/huggingface", templates)
-        self.assertIn(
-            "HF_DATASETS_CACHE=/mnt/KS_2TB/cache/huggingface/datasets", templates
-        )
-        self.assertIn(
-            "HF_HUB_CACHE=/mnt/KS_2TB/cache/huggingface/models", templates
-        )
-        self.assertIn(
-            "OPENCLIP_CACHE_DIR=/mnt/KS_2TB/PARA/Projects/quantization/qat-transfer/"
-            "storage/openclip",
-            templates,
-        )
-        self.assertIn(
-            "CACHE_DIR=/mnt/KS_2TB/PARA/Projects/quantization/qat-transfer/"
-            "storage/cache",
-            templates,
-        )
+        # Machine-varying cache paths must NOT be assigned in a project .env: the
+        # file is loaded after the shell environment and silently overrides a
+        # correctly configured rig, sending downloads to whatever volume it names.
+        for key in ("HF_HOME", "HF_DATASETS_CACHE", "HF_HUB_CACHE", "TORCH_HOME", "UV_CACHE_DIR"):
+            self.assertNotRegex(templates, rf"(?m)^{key}=\S", key)
+        # No rig's absolute layout, and no other project's paths, may be baked in.
+        self.assertNotIn("/mnt/KS_2TB", templates)
+        self.assertNotIn("qat-transfer", templates)
+        # Project-scoped storage stays repo-relative so it follows the checkout.
+        self.assertIn("OPENCLIP_CACHE_DIR=storage/openclip", templates)
+        self.assertIn("CACHE_DIR=storage/cache", templates)
         self.assertIn("TORCH_NUM_WORKERS=16", templates)
         self.assertIn("never copy or commit a token", templates)
         self.assertIn("Do not create this file with placeholders", templates)

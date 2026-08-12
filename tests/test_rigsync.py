@@ -350,5 +350,110 @@ class RigSyncTests(unittest.TestCase):
             self.assertIsNotNone(rigsync.DEPENDENCY_FILE_RE.fullmatch(path), path)
 
 
+class StorageCheckTests(unittest.TestCase):
+    # Columns are 1K blocks: filesystem, used, soft, hard, grace, files, ...
+    QUOTA = (
+        "Disk quotas for user someone (uid 1000): \n"
+        "     Filesystem  blocks   quota   limit   grace   files   quota   limit   grace\n"
+        " /dev/small 1210404  99614720 104857600           17504       0       0        \n"
+        " /dev/large 788600360  996147200 1073741824          293842       0       0        \n"
+    )
+
+    def machine(self, **kwargs) -> rigsync.Machine:
+        defaults = dict(
+            name="peer",
+            ssh="peer-alias",
+            hostname=None,
+            repo_path=Path("/large/projects/thing"),
+            local=False,
+            storage_root=Path("/large"),
+            quota_fs="/dev/small",
+            min_free_gb=50.0,
+        )
+        defaults.update(kwargs)
+        return rigsync.Machine(**defaults)
+
+    def run_check(self, machine, resolved: str, quota: str | None):
+        """Drive check_storage with canned readlink/quota/df output."""
+        responses = [subprocess.CompletedProcess([], 0, resolved.encode(), b"")]
+        if quota is None:
+            responses.append(subprocess.CompletedProcess([], 1, b"", b"no quota"))
+            responses.append(
+                subprocess.CompletedProcess(
+                    [],
+                    0,
+                    b"Filesystem 1024-blocks Used Available Capacity Mounted\n"
+                    b"/dev/large 3748905484 1233908892 2514996592 33% /large\n",
+                    b"",
+                )
+            )
+        else:
+            responses.append(subprocess.CompletedProcess([], 0, quota.encode(), b""))
+        with mock.patch.object(rigsync, "remote", side_effect=responses):
+            return rigsync.check_storage(machine)
+
+    def test_parses_quota_columns_not_df(self) -> None:
+        free, allowance = rigsync._parse_quota(self.QUOTA, "/dev/small")
+        self.assertAlmostEqual(allowance / rigsync.KIB_PER_GB, 100.0, places=1)
+        self.assertAlmostEqual(free / rigsync.KIB_PER_GB, 98.8, places=1)
+
+    def test_zero_limits_mean_unlimited_not_zero_headroom(self) -> None:
+        self.assertIsNone(rigsync._parse_quota("/dev/x 100 0 0 - 5 0 0", "/dev/x"))
+
+    def test_soft_limit_is_the_fallback_when_no_hard_limit(self) -> None:
+        self.assertEqual(rigsync._parse_quota("/dev/x 100 500 0 - 5 0 0", "/dev/x"), (400, 500))
+
+    def test_exceeded_soft_limit_star_is_stripped(self) -> None:
+        free, _ = rigsync._parse_quota("/dev/x 99000000* 95000000 100000000 7days 5 0 0", "/dev/x")
+        self.assertEqual(free, 1000000)
+
+    def test_usage_past_hard_limit_clamps_to_zero(self) -> None:
+        free, _ = rigsync._parse_quota("/dev/x 110000000* 95000000 100000000 none 5 0 0", "/dev/x")
+        self.assertEqual(free, 0)
+
+    def test_unparseable_input_is_none_not_a_crash(self) -> None:
+        self.assertIsNone(rigsync._parse_quota("junk", "/dev/x"))
+        self.assertIsNone(rigsync._parse_df("no header"))
+
+    def test_machines_without_storage_root_are_skipped(self) -> None:
+        failures, lines = rigsync.check_storage(self.machine(storage_root=None))
+        self.assertEqual((failures, lines), (0, []))
+
+    def test_repo_path_outside_storage_root_fails(self) -> None:
+        # The exact shape of the incident: repo declared on the small volume.
+        failures, lines = self.run_check(
+            self.machine(repo_path=Path("/home/someone/projects/thing")),
+            "/home/someone/projects/thing\n/large\n",
+            self.QUOTA,
+        )
+        self.assertEqual(failures, 1)
+        self.assertTrue(any("outside declared storage_root" in line for line in lines))
+
+    def test_symlink_into_storage_root_passes(self) -> None:
+        # ~/projects -> /large/projects must not be reported as misplaced.
+        failures, lines = self.run_check(
+            self.machine(repo_path=Path("/home/someone/projects/thing")),
+            "/large/projects/thing\n/large\n",
+            self.QUOTA,
+        )
+        self.assertEqual(failures, 0)
+        self.assertTrue(any("storage root" in line and line.startswith("OK") for line in lines))
+
+    def test_headroom_below_floor_fails(self) -> None:
+        failures, lines = self.run_check(
+            self.machine(min_free_gb=99.0), "/large/projects/thing\n/large\n", self.QUOTA
+        )
+        self.assertEqual(failures, 1)
+        self.assertTrue(any(line.startswith("FAIL") and "storage free" in line for line in lines))
+
+    def test_falls_back_to_df_when_quota_unavailable(self) -> None:
+        failures, lines = self.run_check(
+            self.machine(), "/large/projects/thing\n/large\n", None
+        )
+        self.assertEqual(failures, 0)
+        self.assertTrue(any("via df(" in line for line in lines))
+        self.assertTrue(any(line.startswith("WARN") for line in lines))
+
+
 if __name__ == "__main__":
     unittest.main()

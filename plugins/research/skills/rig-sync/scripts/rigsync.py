@@ -27,6 +27,9 @@ class Machine:
     hostname: str | None
     repo_path: Path
     local: bool
+    storage_root: Path | None = None
+    quota_fs: str | None = None
+    min_free_gb: float | None = None
 
 
 @dataclass(frozen=True)
@@ -106,8 +109,42 @@ def load_config(root: Path, config_path: Path, registry_path: Path) -> Config:
         repo_path = Path(raw_repo)
         if not repo_path.is_absolute():
             raise RigSyncError(f"{config_path}: machines.{name}.repo_path must be absolute")
+        raw_storage = registry_entry.get("storage_root")
+        if raw_storage is not None and (not isinstance(raw_storage, str) or not raw_storage):
+            raise RigSyncError(
+                f"{registry_path}: machines.{name}.storage_root must be a non-empty string"
+            )
+        storage_root = Path(raw_storage) if raw_storage is not None else None
+        if storage_root is not None and not storage_root.is_absolute():
+            raise RigSyncError(
+                f"{registry_path}: machines.{name}.storage_root must be absolute"
+            )
+        quota_fs = registry_entry.get("quota_fs")
+        if quota_fs is not None and (not isinstance(quota_fs, str) or not quota_fs):
+            raise RigSyncError(
+                f"{registry_path}: machines.{name}.quota_fs must be a non-empty string"
+            )
+        min_free_gb = registry_entry.get("min_free_gb")
+        if min_free_gb is not None:
+            if isinstance(min_free_gb, bool) or not isinstance(min_free_gb, (int, float)):
+                raise RigSyncError(
+                    f"{registry_path}: machines.{name}.min_free_gb must be a number"
+                )
+            if min_free_gb < 0:
+                raise RigSyncError(
+                    f"{registry_path}: machines.{name}.min_free_gb must not be negative"
+                )
         local = name == current or hostname == current
-        machines[name] = Machine(name, ssh, hostname, repo_path, local)
+        machines[name] = Machine(
+            name,
+            ssh,
+            hostname,
+            repo_path,
+            local,
+            storage_root,
+            quota_fs,
+            float(min_free_gb) if min_free_gb is not None else None,
+        )
 
     for group, entry in artifacts.items():
         if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
@@ -659,6 +696,130 @@ def status(config: Config, machines: list[Machine], group_filter: str | None) ->
             print("(empty)")
 
 
+DEFAULT_MIN_FREE_GB = 25.0
+KIB_PER_GB = 1024 * 1024
+
+
+def _parse_quota(text: str, quota_fs: str) -> tuple[int, int] | None:
+    """Return (free_kib, allowance_kib) for quota_fs, or None if not quota-limited.
+
+    Parses `quota -w` output, whose space columns are 1K blocks:
+    filesystem, used, soft, hard, grace, files, ... A used value may carry a
+    trailing '*' when the soft limit is already exceeded. A limit of 0 means
+    unlimited, so the hard limit is preferred and the soft one is the fallback.
+    """
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) < 4 or fields[0] != quota_fs:
+            continue
+        used, soft, hard = fields[1].rstrip("*"), fields[2], fields[3]
+        if not used.isdigit():
+            return None
+        for candidate in (hard, soft):
+            if candidate.isdigit() and int(candidate) > 0:
+                allowance = int(candidate)
+                return max(allowance - int(used), 0), allowance
+        return None
+    return None
+
+
+def _parse_df(text: str) -> tuple[int, int] | None:
+    """Return (free_kib, total_kib) from `df -P` output, or None if unparseable."""
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return None
+    fields = lines[-1].split()
+    if len(fields) < 4:
+        return None
+    try:
+        return int(fields[3]), int(fields[1])
+    except ValueError:
+        return None
+
+
+def _remote_stdout(machine: Machine, argv: list[str]) -> str | None:
+    result = remote(machine, argv, check=False)
+    if result.returncode != 0:
+        return None
+    return result.stdout.decode(errors="replace")
+
+
+def check_storage(machine: Machine) -> tuple[int, list[str]]:
+    """Verify repo_path sits on the declared volume and that headroom remains.
+
+    Returns (failure_count, lines_to_print). Machines with no storage_root are
+    skipped entirely rather than being measured against an invented default.
+    """
+    if machine.storage_root is None:
+        return 0, []
+
+    failures = 0
+    lines: list[str] = []
+
+    # Resolve both sides: a convenience symlink in $HOME can point at the large
+    # volume, so comparing the declared strings would pass while the declaration
+    # is still wrong -- and would break the day that symlink becomes a real dir.
+    resolved = _remote_stdout(
+        machine,
+        [
+            "sh",
+            "-c",
+            f"readlink -f {shlex.quote(str(machine.repo_path))}; "
+            f"readlink -f {shlex.quote(str(machine.storage_root))}",
+        ],
+    )
+    resolved_lines = resolved.split() if resolved else []
+    if len(resolved_lines) != 2:
+        lines.append(f"FAIL {machine.name} storage: cannot resolve repo_path or storage_root")
+        return failures + 1, lines
+    real_repo, real_root = PurePosixPath(resolved_lines[0]), PurePosixPath(resolved_lines[1])
+    inside = real_repo == real_root or real_root in real_repo.parents
+    if inside:
+        lines.append(f"OK {machine.name} storage root: {real_repo}")
+    else:
+        lines.append(
+            f"FAIL {machine.name} storage root: repo_path resolves to {real_repo}, "
+            f"outside declared storage_root {real_root}"
+        )
+        failures += 1
+
+    # A quota is not free space: df reports the filesystem, not the user's
+    # allowance, and can show terabytes free where the next write fails with
+    # "Disk quota exceeded". Ask the quota system first when one is declared.
+    measure, source = None, ""
+    if machine.quota_fs is not None:
+        quota_text = _remote_stdout(machine, ["quota", "-w"])
+        if quota_text is not None:
+            measure = _parse_quota(quota_text, machine.quota_fs)
+            source = f"quota({machine.quota_fs})"
+        if measure is None:
+            lines.append(
+                f"WARN {machine.name} storage: no quota reading for {machine.quota_fs}, "
+                "falling back to df"
+            )
+    if measure is None:
+        df_text = _remote_stdout(machine, ["df", "-P", str(machine.storage_root)])
+        if df_text is not None:
+            measure = _parse_df(df_text)
+            source = f"df({machine.storage_root})"
+
+    if measure is None:
+        lines.append(f"FAIL {machine.name} storage: cannot determine free space")
+        return failures + 1, lines
+
+    free_kib, total_kib = measure
+    free_gb, total_gb = free_kib / KIB_PER_GB, total_kib / KIB_PER_GB
+    floor_gb = machine.min_free_gb if machine.min_free_gb is not None else DEFAULT_MIN_FREE_GB
+    headroom_ok = free_gb >= floor_gb
+    status = "OK" if headroom_ok else "FAIL"
+    lines.append(
+        f"{status} {machine.name} storage free: {free_gb:.1f}G of {total_gb:.1f}G "
+        f"via {source} (floor {floor_gb:.1f}G)"
+    )
+    failures += not headroom_ok
+    return failures, lines
+
+
 def doctor(config: Config, machines: list[Machine]) -> None:
     failures = 0
     for binary in ("rsync", "ssh", "git"):
@@ -696,6 +857,11 @@ def doctor(config: Config, machines: list[Machine]) -> None:
         ok = result.returncode == 0
         print(f"{'OK' if ok else 'FAIL'} {machine.name}: {'local' if machine.local else machine.ssh} -> {machine.repo_path}")
         failures += not ok
+        if ok:
+            storage_failures, storage_lines = check_storage(machine)
+            for line in storage_lines:
+                print(line)
+            failures += storage_failures
         if config.git is not None and ok and expected_url is not None:
             try:
                 _head, branch, remote_url = git_repo_facts(config, machine)

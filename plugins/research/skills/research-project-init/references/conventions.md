@@ -309,18 +309,27 @@ Every wave also carries one immutable user-space environment identity:
   stops the lane, and is not an experiment failure. Launch scripts verify only; they never sync.
 - Export `ENVIRONMENT_FINGERPRINT` into the run and record it in `.status.json`. Outputs whose
   source or environment provenance differs from the wave are not comparable.
+- On a quota'd rig, verify storage headroom before dispatch (`rig-sync doctor`) and again inside
+  every queued script before experiment Python. Insufficient storage exits `88`, stops the lane,
+  and is not an experiment failure. Gate before launch rather than after: a run that exhausts its
+  allowance mid-write leaves a truncated checkpoint that is indistinguishable from a real one
+  until it is loaded.
 
 ## Rig fleet
 
 **The canonical name is the ssh alias** — dispatch runs `ssh <rig>`, and the name also lands in
 script filenames and tmux session names, so it must be the string that actually resolves.
 
-| canonical name | sloppy names to recognize                                           | GPUs     | per-GPU speed weight | role |
-|----------------|---------------------------------------------------------------------|----------|----------------------|------|
-| `rig-4090`     | 4090                                                                | 1        | 1.0                  | main/hub: projects start here, dispatch + EXPERIMENTS.md writes happen here |
-| `rig-3090-ti`  | 3090, 3090 ti, `rig-3090ti`                                         | 1        | 0.5                  | support |
-| `rig-3080-ti`  | 3080, 3080 ti, `rig-3080ti`                                         | 1        | 0.5                  | support |
-| `behemoth`     | pro 6000, 6000, bw, blackwell, `rig-6000-pro-blackwell`, `server-pro-6000-bw` | 8 (only GPU 0 is ours) | 2.0 | support |
+| canonical name | sloppy names to recognize                                           | GPUs     | per-GPU speed weight | storage | role |
+|----------------|---------------------------------------------------------------------|----------|----------------------|---------|------|
+| `rig-4090`     | 4090                                                                | 1        | 1.0                  | dedicated volume | main/hub: projects start here, dispatch + EXPERIMENTS.md writes happen here |
+| `rig-3090-ti`  | 3090, 3090 ti, `rig-3090ti`                                         | 1        | 0.5                  | dedicated volume | support |
+| `rig-3080-ti`  | 3080, 3080 ti, `rig-3080ti`                                         | 1        | 0.5                  | dedicated volume | support |
+| `behemoth`     | pro 6000, 6000, bw, blackwell, `rig-6000-pro-blackwell`, `server-pro-6000-bw` | 8 (only GPU 0 is ours) | 2.0 | **quota'd, home is small** | support |
+
+The storage column is a property of the rig, not of a project. Its concrete values — which volume
+is the large one, where the storage root is — live in the user's machine registry
+(`rig-sync` → `references/configuration.md`), never in a skill or a committed project file.
 
 ### behemoth is GPU-0-only
 
@@ -344,6 +353,38 @@ The weight is **per GPU**, so a rig's capacity in the assignment math is
 the number of GPUs actually free varies per dispatch: **ask the user which rigs AND which GPUs
 are free** before proposing an assignment (`sweep-dispatch`, pre-launch gates). For `behemoth`
 that math defaults to `2.0 × 1` (gpu0), and only a grant for this wave widens it.
+
+### behemoth is quota'd
+
+A shared machine shares its **disk** the same way it shares its cards, and `behemoth` enforces
+**per-user disk quotas** on more than one filesystem. The home volume is the small one; the
+large volume is a separate mount with its own, much larger quota.
+
+A rig's storage root is **declared, never inferred**. The agent never defaults a `repo_path`, a
+cache directory, a `TMPDIR`, or an artifact destination to `$HOME` or `~/.cache` on a quota'd rig.
+Where the large volume is mounted is a fact that belongs in the machine registry; a skill that
+guesses it is wrong on the next rig.
+
+**A quota is not free space.** `df` reports the filesystem, not the user's allowance: it can show
+terabytes available on a volume where the next write fails with `Disk quota exceeded`. Checking
+disk headroom on a quota'd rig means asking the quota system (`quota`), not `df` alone — and the
+two can disagree by orders of magnitude.
+
+Three consequences worth stating explicitly, because each one has bitten:
+
+- **A convenience symlink hides the problem, it does not solve it.** If `~/project` points at the
+  large volume, a wrong `repo_path` still *works* — right up until someone recreates the directory
+  for real. Resolve paths (`readlink -f`) when verifying, and fix the declaration, not the symlink.
+- **Machine-level environment is defeated by project-level `.env`.** A rig can be configured
+  perfectly and a single `HF_HOME=` line in a project's `.env` will silently override it. Cache
+  paths that vary per machine do not belong in per-project files.
+- **Shell rc files do not reach the jobs that matter.** Dispatch runs under `nohup`, `ssh <cmd>`,
+  and generated scripts — none of which are interactive shells. An export that lives only in an
+  interactive rc file is absent exactly when a long run needs it. Machine-level environment must
+  be set where *every* shell sees it.
+
+Storage exhaustion is a **stop condition, not a warning**: a run that dies partway through leaves
+truncated checkpoints that look like real ones. Gate before launching, not after.
 
 Passwordless ssh between all rigs. Git/GitHub distributes launch source; selected artifact
 movement is **`rig-sync`'s job**. Run its bundled doctor's checks before dispatch; if they fail,

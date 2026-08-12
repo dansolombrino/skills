@@ -233,10 +233,7 @@ FLYWHEEL_ROOT_NODE_TITLE=
 HF_TOKEN=
 HUGGING_FACE_HUB_TOKEN=
 
-# Machine-varying cache paths (the scaffold writes concrete absolute values to .env)
-HF_HOME=
-HF_DATASETS_CACHE=
-HF_HUB_CACHE=
+# Project-scoped storage (repo-relative; NOT absolute machine paths)
 OPENCLIP_CACHE_DIR=
 CACHE_DIR=
 
@@ -244,12 +241,30 @@ CACHE_DIR=
 TORCH_NUM_WORKERS=
 ```
 
+Shared model and dataset caches (`HF_HOME`, `HF_HUB_CACHE`, `HF_DATASETS_CACHE`, `TORCH_HOME`,
+`UV_CACHE_DIR`, `TMPDIR`) are **absent by design** — see below.
+
 ## .env (ignored machine profile)
 
-Render this file directly; do not obtain it by copying `.env.example`. These are the shared cache
-paths used by the research rigs and must be reproduced verbatim so model and dataset downloads are
-reused across projects. Keep secret values empty unless the user explicitly supplies them through
-an authorized secret source; never copy or commit a token from another project's `.env`.
+Render this file directly; do not obtain it by copying `.env.example`. Keep secret values
+empty unless the user explicitly supplies them through an authorized secret source;
+never copy or commit a token from another project's `.env`.
+
+**Never put shared cache paths in `.env`.** A project `.env` is loaded *after* the shell
+environment and silently overrides it, so a single `HF_HOME=` line defeats a correctly configured
+rig — and it does so invisibly, with the download landing on whatever volume that line names. The
+rig's caches are machine-level configuration and belong in the machine's environment, set where
+**every** shell sees it (a login-independent file such as `~/.zshenv`, not an interactive-only
+`~/.bashrc`/`~/.zshrc`, because dispatch runs under `nohup`, `ssh <cmd>`, and generated scripts).
+
+Two further reasons never to hardcode them here: the absolute path is **rig-specific**, so a value
+that is right on one machine points at a nonexistent mount on the next; and the natural repair when
+it does not exist is to retarget it at `$HOME`, which on a quota'd rig is the small volume. That
+sequence is exactly how a wave dies mid-checkpoint with `Disk quota exceeded`.
+
+Keep only what is genuinely per-project. Project-scoped storage stays **repo-relative** so it
+follows the checkout instead of pinning it to one machine's layout — and never inherits another
+project's path.
 
 ```bash
 WANDB_API_KEY=
@@ -260,14 +275,16 @@ FLYWHEEL_ROOT_NODE_TITLE=
 HF_TOKEN=
 HUGGING_FACE_HUB_TOKEN=
 
-HF_HOME=/mnt/KS_2TB/cache/huggingface
-HF_DATASETS_CACHE=/mnt/KS_2TB/cache/huggingface/datasets
-HF_HUB_CACHE=/mnt/KS_2TB/cache/huggingface/models
-OPENCLIP_CACHE_DIR=/mnt/KS_2TB/PARA/Projects/quantization/qat-transfer/storage/openclip
-CACHE_DIR=/mnt/KS_2TB/PARA/Projects/quantization/qat-transfer/storage/cache
+OPENCLIP_CACHE_DIR=storage/openclip
+CACHE_DIR=storage/cache
 
 TORCH_NUM_WORKERS=16
 ```
+
+If a project truly needs an absolute cache path that the machine environment does not already
+provide, derive it from the machine's declared storage root (`rig-sync` →
+`references/configuration.md`) and record why in the journal. Do not invent one, and do not copy
+one from another project.
 
 ## .flywheel.json (only after root verification)
 
