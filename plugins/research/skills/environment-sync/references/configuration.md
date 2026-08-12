@@ -57,6 +57,13 @@ invoke its `fingerprint --lock uv.lock` command before experiment Python.
 - `.env`, credentials, datasets, drivers, CUDA devices, logs, and artifacts — outside the
   invariant environment identity.
 
+Machine-local does not mean unmanaged. *Where* these caches live is declared per rig in
+`[machines.<rig>.caches]` (`rig-sync` → `references/configuration.md`) and verified by `doctor`;
+only their *contents* stay outside environment identity. `UV_CACHE_DIR` in particular cannot be
+set from a project `.env` — uv resolves its cache before Python starts — so it has to come from
+the rig's machine environment, which `rigsync provision-env` installs. Left on its default path,
+a uv cache is routinely one of the largest directories on a research rig.
+
 Environment sync requires Linux machines with the same architecture. libc, kernel, driver, and
 GPU model may differ; their compatibility is established by successful creation of the locked
 environment plus the project GPU smoke.
