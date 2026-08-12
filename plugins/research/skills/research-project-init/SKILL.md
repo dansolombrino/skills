@@ -49,7 +49,7 @@ values, and material the user supplies explicitly. See "Directives are closed" i
 ## Scaffold
 
 1. Create tracked empty directories for `checkpoints/`, `code/`, `config/`, `evaluations/`,
-   `logs/`, `plots/`, `scripts/`, `visualizations/`, `shitpads/`, and `references/`.
+   `logs/`, `plots/`, `scripts/`, `tests/`, `visualizations/`, `shitpads/`, and `references/`.
    Put a `.gitkeep` in every directory that would otherwise be empty so the initial
    commit actually preserves the complete taxonomy.
 2. Create the scientific records:

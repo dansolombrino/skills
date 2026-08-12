@@ -70,6 +70,7 @@ named by a directive rather than discovered by looking around:
 ├── logs/            # run logs (tee'd stdout+stderr of each run, wandb dirs); mirrors the scripts/ tree exactly; gitignored, dir tracked, rig-local, never synced
 ├── plots/           # plots produced by visualizations/ (one subfolder per plotting script)
 ├── scripts/         # shell scripts that LAUNCH things (shell only — never yaml); wave-scoped, see "Waves and GPU lanes"
+├── tests/           # optional pytest unit tests; mirrors code/ and visualizations/ inside itself
 ├── visualizations/  # plotting code (argparse python), sibling of code/
 ├── shitpads/        # temp space; gitignored, dir tracked, rig-local, never synced
 ├── references/      # papers/codebases to reference; gitignored, dir tracked, rig-synced
@@ -128,6 +129,44 @@ plots/001_compression/002_weight_error/plot_layers/model=vit/seed=0/layer_error.
 
 Do not infer placement for a visualization that combines multiple producer experiment paths; stop
 and resolve that separate taxonomy decision with the user.
+
+## tests/
+
+`tests/` is the one place unit tests go. It is deliberately **not** a peer of the eight mirrored
+folders above: it mirrors the *source root* first and the `NNN_...` hierarchy second, so that
+`code/common/` needs no special case and a shared script stem can never collide across roots.
+
+For a source file at `<root>/<path>/<stem>.py`, where `<root>` is `code/` or `visualizations/`,
+its tests live at `tests/<root>/<path>/<stem>/test_*.py`. The `<stem>` directory is what lets one
+script own many tests without them piling up flat — the same reason
+`plots/<experiment_path>/<script_stem>/` exists. So the two experiment forms are
+`tests/code/<experiment_path>/<script_stem>/test_*.py` and
+`tests/visualizations/<experiment_path>/<script_stem>/test_*.py`, preserving the complete numbered
+leaf hierarchy exactly as everywhere else. For example:
+
+```
+code/001_compression/002_weight_error/train.py
+tests/code/001_compression/002_weight_error/train/test_quantizer_roundtrip.py
+tests/code/001_compression/002_weight_error/train/test_loss_masking.py
+
+visualizations/000_grokking/plot_loss.py
+tests/visualizations/000_grokking/plot_loss/test_axis_labels.py
+
+code/common/run_id.py
+tests/code/common/run_id/test_collision_guard.py
+```
+
+Tests are **optional and create-on-demand**. `tests/` is scaffolded as a tracked empty directory;
+a leaf appears only when someone actually writes a test, and no gate ever requires one to exist.
+Run them with pytest against the project environment, scoped to the directory of interest:
+
+```
+<environment.name>/bin/python -m pytest tests/code/<experiment_path>/<script_stem>/
+```
+
+`tests/` is unrelated to the pre-dispatch smoke test. The smoke command exercises the real
+entrypoint and is recorded in EXPERIMENTS.md (see `experiment-design`); a pytest file never
+satisfies it, and the dispatch gate never runs `tests/`. Keep the two surfaces separate.
 
 ## run_id
 

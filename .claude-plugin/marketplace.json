@@ -11,7 +11,7 @@
       "name": "research",
       "source": "./plugins/research",
       "description": "Orchestrate scientific research, publish curated Flywheel lineage, and materialize reproducible experiments across verified GPU rigs.",
-      "version": "3.7.0",
+      "version": "3.8.0",
       "category": "Developer Tools"
     }
   ]

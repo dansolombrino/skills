@@ -22,13 +22,16 @@ commit; the `.gitignore` exceptions below preserve placeholders in ignored trees
 | `logs/` | run logs — tee'd stdout+stderr per run, wandb files (gitignored, rig-local) |
 | `plots/` | plots produced by `visualizations/` |
 | `scripts/` | shell scripts that launch experiments/sweeps |
+| `tests/` | optional pytest unit tests, mirroring `code/` and `visualizations/` inside itself |
 | `visualizations/` | plotting code (argparse), reads `evaluations/`, writes `plots/` |
 | `shitpads/` | temp scratch space (gitignored, rig-local) |
 | `references/` | papers/codebases for reference (gitignored, rig-synced) |
 | `program/` | scientific agreement, decision history, and phase reports |
 | `orchestration/` | ignored local control events and subagent traces |
 
-Experiments are named `NNN_experiment_name` and mirrored across the folders above.
+Experiments are named `NNN_experiment_name` and mirrored across the folders above — except
+`tests/`, which mirrors the source root first: tests for `<root>/<path>/<stem>.py` live at
+`tests/<root>/<path>/<stem>/test_*.py`, and are optional per script.
 Each run is identified by its **run_id** (an ordered subset of config params, declared
 per experiment in its `.py` as `RUN_ID_PARAMS`).
 
@@ -326,6 +329,7 @@ plots/*
 !plots/.gitkeep
 __pycache__/
 *.pyc
+.pytest_cache/
 outputs/          # hydra default run dir, if left enabled
 ```
 
@@ -352,7 +356,11 @@ both skills' doctor checks before remote dispatch.
 ## Python environment
 
 Create `pyproject.toml` with the project metadata, dependencies, exact
-`[tool.uv].required-version = "==X.Y.Z"`, and `python-preference = "managed"`. Commit an exact
+`[tool.uv].required-version = "==X.Y.Z"`, and `python-preference = "managed"`. Include pytest as a
+dev dependency (`[dependency-groups] dev = ["pytest>=8"]`) so the optional `tests/` tree is
+runnable from the start. Add it now, not later: it participates in the installed-environment
+fingerprint that `environment-sync` uses as its cross-rig parity gate, so introducing it
+mid-project forces a re-provision on every rig. Commit an exact
 `X.Y.Z` `.python-version`. `uv.lock` is produced by `uv lock` during the environment gate, never
 hand-written; commit it once that gate has run. Copy
 `assets/environment.py` from the environment-sync skill's own installed directory to

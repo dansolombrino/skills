@@ -25,6 +25,10 @@ Integrity gates and protected choices never become delegable.
   every engineering handoff. Once authorized by the active mode, create the matching dirs in
   `code/` and `config/`; later `evaluations/`, `visualizations/`, and `plots/` paths must retain the
   same hierarchy as their artifacts appear. Apply `visualizations` for plotting-code placement.
+- Unit tests for an experiment script are optional and create-on-demand. When one is written, it
+  belongs at `tests/code/<experiment_path>/<script_stem>/test_*.py` (pytest). This is not the
+  pre-dispatch smoke test of section 4c and never substitutes for it. Do not scaffold the tree and
+  do not ask whether tests are wanted.
 
 ## 2. run_id election
 

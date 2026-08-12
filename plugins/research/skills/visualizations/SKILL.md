@@ -28,6 +28,8 @@ the scientific layer. Plot communication approval is always user-owned and overr
   script (stem = filename without `.py`) after the complete producer hierarchy.
 - If a visualization consumes multiple producer experiment paths, stop without inferring its
   placement; that taxonomy requires a separate user decision.
+- Unit tests for a plotting script are optional and create-on-demand. When one is written, it
+  belongs at `tests/visualizations/<experiment_path>/<script_stem>/test_*.py` (pytest).
 
 ## Interface: argparse, NOT hydra
 

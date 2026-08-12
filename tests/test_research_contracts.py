@@ -56,7 +56,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "3.7.0")
+        self.assertEqual(manifest["version"], "3.8.0")
         self.assertTrue((ROOT / "plugins/research/skills/rig-sync/SKILL.md").is_file())
         self.assertTrue(
             (ROOT / "plugins/research/skills/integrate-reference-code/SKILL.md").is_file()
@@ -142,6 +142,48 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("preserve it unchanged", design)
         self.assertIn("complete numbered `<experiment_path>`", housekeeping)
         self.assertIn("full numbered producer hierarchy", metadata)
+
+    def test_tests_tree_mirrors_source_root_then_experiment_hierarchy(self) -> None:
+        skills = ROOT / "plugins/research/skills"
+        visualization = (skills / "visualizations/SKILL.md").read_text()
+        design = (skills / "experiment-design/SKILL.md").read_text()
+        init = (skills / "research-project-init/SKILL.md").read_text()
+        conventions = (
+            skills / "research-project-init/references/conventions.md"
+        ).read_text()
+        templates = PROJECT_TEMPLATES.read_text()
+
+        code_form = "tests/code/<experiment_path>/<script_stem>/test_*.py"
+        viz_form = "tests/visualizations/<experiment_path>/<script_stem>/test_*.py"
+        self.assertIn(code_form, conventions)
+        self.assertIn(viz_form, conventions)
+        self.assertIn(code_form, design)
+        self.assertIn(viz_form, visualization)
+
+        # The source root is the first level and is never dropped: without it
+        # code/common/ needs a special case and stems collide across roots.
+        self.assertNotIn("tests/<experiment_path>/", conventions)
+        self.assertIn("tests/code/common/run_id/test_collision_guard.py", conventions)
+        self.assertIn(
+            "tests/code/001_compression/002_weight_error/train/"
+            "test_quantizer_roundtrip.py",
+            conventions,
+        )
+
+        # Optional and independent of the pre-dispatch smoke gate.
+        self.assertIn("optional and create-on-demand", conventions)
+        self.assertIn("unrelated to the pre-dispatch smoke test", conventions)
+        self.assertIn("never substitutes for it", design)
+
+        # Scaffolded as a tracked empty dir, with a runnable pytest from day one.
+        self.assertIn("`tests/`, `visualizations/`", init)
+        self.assertIn('dev = ["pytest>=8"]', templates)
+        self.assertIn(".pytest_cache/", templates)
+
+        # Test edits deliberately do NOT trip the journal guard.
+        self.assertIn(
+            "'^(code|config|scripts|evaluations|visualizations)/'", templates
+        )
 
     def test_scientific_orchestrator_has_independent_explicit_modes(self) -> None:
         skill_root = ROOT / "plugins/research/skills/scientific-orchestrator"
