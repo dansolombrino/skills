@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tomllib
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 def _load_rigsync():
@@ -125,12 +125,28 @@ def load_environment_settings(root: Path, config_path: Path) -> EnvironmentSetti
     raw_smoke = raw_environment.get("gpu_smoke")
     if (
         not isinstance(raw_smoke, list)
-        or not raw_smoke
+        or len(raw_smoke) < 2
         or not all(isinstance(token, str) and token for token in raw_smoke)
         or raw_smoke[0] != "python"
     ):
         raise EnvironmentSyncError(
-            f'{config_path}: environment.gpu_smoke must be a non-empty argv array starting with "python"'
+            f"{config_path}: environment.gpu_smoke must be an argv array of the form "
+            '["python", "<repo-relative script>", ...]'
+        )
+    # The script path is resolved against each rig's repo_path, because the remote
+    # shell has no cwd. That only works if slot 1 really is a repo-relative script:
+    # a flag form leaves nothing to resolve, and an absolute or escaping path names
+    # a location this project does not own on that machine.
+    smoke_script = raw_smoke[1]
+    if smoke_script.startswith("-"):
+        raise EnvironmentSyncError(
+            f"{config_path}: environment.gpu_smoke[1] must be a script path, not the "
+            f"option {smoke_script!r}; the smoke test runs a tracked script under the project"
+        )
+    if PurePosixPath(smoke_script).is_absolute() or ".." in PurePosixPath(smoke_script).parts:
+        raise EnvironmentSyncError(
+            f"{config_path}: environment.gpu_smoke[1] must be a relative path inside the "
+            f"project, not {smoke_script!r}; it is resolved against each rig's repo_path"
         )
 
     pyproject_path = root / "pyproject.toml"
@@ -478,11 +494,16 @@ def provision(
 
 
 def run_gpu_smoke(settings: EnvironmentSettings, machine, lane: Lane) -> None:
+    # `remote` runs over SSH with no cwd, so the script path declared in sync.toml --
+    # relative, because repo_path differs per rig -- has to be resolved against this
+    # machine's checkout the same way uv and the fingerprint helper already are.
+    script = machine_path(settings, machine, Path(settings.gpu_smoke[1]))
     command = [
         "env",
         f"CUDA_VISIBLE_DEVICES={lane.gpus}",
         str(venv_python(settings, machine)),
-        *settings.gpu_smoke[1:],
+        str(script),
+        *settings.gpu_smoke[2:],
     ]
     result = remote(machine, command, check=False)
     if result.returncode:

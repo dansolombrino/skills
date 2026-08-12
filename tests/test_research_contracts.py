@@ -31,7 +31,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "3.5.0")
+        self.assertEqual(manifest["version"], "3.6.0")
         self.assertTrue((ROOT / "plugins/research/skills/rig-sync/SKILL.md").is_file())
         self.assertTrue(
             (ROOT / "plugins/research/skills/integrate-reference-code/SKILL.md").is_file()

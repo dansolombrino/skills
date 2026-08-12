@@ -103,9 +103,11 @@ These live in the **user registry**, not in a project's `sync.toml`, because whe
 large volume is a property of the machine and is the same for every project on it. Keeping them
 here also keeps machine-specific absolute paths out of committed project files.
 
-`storage_root` is the volume that project checkouts, artifacts, and caches belong on. When it is
-set, `doctor` resolves each project's `repo_path` with `readlink -f` and stops when the result
-falls outside the root. Resolving matters: a convenience symlink in `$HOME` can point at the large
+`storage_root` is the volume that project checkouts, artifacts, and caches belong on. It is
+required on every rig a project dispatches to: `doctor` resolves each project's `repo_path` with
+`readlink -f` and stops when the result falls outside the root, and both `doctor` and `check-paths`
+fail a rig that declares no root at all rather than reporting a pass they never performed.
+Resolving matters: a convenience symlink in `$HOME` can point at the large
 volume, so an unresolved string comparison passes while the declaration is still wrong — and stays
 wrong the day the symlink is replaced by a real directory.
 
@@ -204,7 +206,8 @@ Four commands exist so that no path is ever typed twice. Every one of them reads
 above and nothing else.
 
 - `check-paths` — offline, no SSH. Confirms each `repo_path` sits on that rig's `storage_root`,
-  and lists registry rigs missing from `sync.toml`. `doctor` makes the same comparison, but only
+  fails any rig whose registry entry declares no `storage_root`, and lists registry rigs missing
+  from `sync.toml`. `doctor` makes the same comparison, but only
   after the repo exists on the rig, so a mistyped path is caught there only once something has
   been cloned into it. Run this **before** `prepare`. Its comparison is lexical; `doctor` still
   resolves both sides with `readlink -f` on the rig, and that division is deliberate — a symlink

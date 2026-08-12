@@ -9,7 +9,7 @@ import textwrap
 import unittest
 from pathlib import Path
 from unittest import mock
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 
 
 SCRIPT = (
@@ -220,7 +220,10 @@ class RigSyncTests(unittest.TestCase):
         hostname = subprocess.CompletedProcess([], 0, b"peer-host\n", b"")
         dependencies = subprocess.CompletedProcess([], 0, b"", b"")
         project_env = subprocess.CompletedProcess([], 0, b"", b"")
-        with mock.patch.object(
+        # This fixture declares no storage_root, which doctor now fails on its own
+        # (see test_doctor_fails_a_machine_with_no_declared_storage_root). Hold the
+        # storage check aside so this stays a test about hostname agreement.
+        with mock.patch.object(rigsync, "check_storage", return_value=(0, [])), mock.patch.object(
             rigsync, "remote", side_effect=[hostname, dependencies, project_env]
         ):
             rigsync.doctor(config, [machine])
@@ -249,12 +252,28 @@ class RigSyncTests(unittest.TestCase):
             Path("/tmp/source"), {"evaluations": {"path": "evaluations"}}, {"peer": machine}
         )
         dependencies = subprocess.CompletedProcess([], 0, b"", b"")
-        with mock.patch.object(rigsync, "remote", return_value=dependencies) as remote_mock:
+        with mock.patch.object(rigsync, "check_storage", return_value=(0, [])), mock.patch.object(
+            rigsync, "remote", return_value=dependencies
+        ) as remote_mock:
             rigsync.doctor(config, [machine])
         # No hostname assertion and no declared caches, so the only probes are the
         # dependency/path check and the .env read that warns on absolute paths.
         self.assertEqual(remote_mock.call_count, 2)
         self.assertIn("cat /tmp/peer/.env", " ".join(remote_mock.call_args[0][1]))
+
+    def test_doctor_fails_a_machine_with_no_declared_storage_root(self) -> None:
+        # The counterpart to check-paths: a registry carrying host identity only
+        # used to make doctor silent about storage rather than unhappy about it.
+        machine = rigsync.Machine("peer", "peer-alias", None, Path("/tmp/peer"), False)
+        config = rigsync.Config(
+            Path("/tmp/source"), {"evaluations": {"path": "evaluations"}}, {"peer": machine}
+        )
+        reachable = subprocess.CompletedProcess([], 0, b"", b"")
+        stream = io.StringIO()
+        with mock.patch.object(rigsync, "remote", return_value=reachable), redirect_stdout(stream):
+            with self.assertRaisesRegex(rigsync.RigSyncError, "doctor failed"):
+                rigsync.doctor(config, [machine])
+        self.assertIn("FAIL peer storage: no storage_root declared", stream.getvalue())
 
     def test_write_requires_confirmation_after_dry_run(self) -> None:
         machine = rigsync.Machine("peer", "peer", None, Path("/tmp/peer"), False)
@@ -422,9 +441,13 @@ class StorageCheckTests(unittest.TestCase):
         self.assertIsNone(rigsync._parse_quota("junk", "/dev/x"))
         self.assertIsNone(rigsync._parse_df("no header"))
 
-    def test_machines_without_storage_root_are_skipped(self) -> None:
+    def test_machines_without_storage_root_fail_rather_than_pass_silently(self) -> None:
+        # Returning (0, []) here made doctor report nothing at all about storage on
+        # a registry written before the storage fields existed, which reads as a pass.
         failures, lines = rigsync.check_storage(self.machine(storage_root=None))
-        self.assertEqual((failures, lines), (0, []))
+        self.assertEqual(failures, 1)
+        self.assertTrue(any("no storage_root declared" in line for line in lines))
+        self.assertTrue(all(line.startswith("FAIL") for line in lines))
 
     def test_repo_path_outside_storage_root_fails(self) -> None:
         # The exact shape of the incident: repo declared on the small volume.
@@ -601,7 +624,19 @@ class MachineEnvTests(unittest.TestCase):
         ):
             self.assertEqual(rigsync.check_project_env(self.machine(caches=())), (0, []))
 
-    def declared(self, root: Path, repo_path: str, storage_root: str) -> rigsync.Config:
+    def declared(
+        self, root: Path, repo_path: str, storage_root: str | None
+    ) -> rigsync.Config:
+        # storage_root=None reproduces a registry written before the storage fields
+        # were reintroduced: host identity only.
+        storage = (
+            f"""
+            storage_root = {storage_root!r}
+            quota_fs = "/dev/sdb1"
+            min_free_gb = 50"""
+            if storage_root is not None
+            else ""
+        )
         write(
             root / "sync.toml",
             f"""
@@ -617,10 +652,7 @@ class MachineEnvTests(unittest.TestCase):
             root / "machines.toml",
             f"""
             [machines.peer]
-            ssh = "peer"
-            storage_root = {storage_root!r}
-            quota_fs = "/dev/sdb1"
-            min_free_gb = 50
+            ssh = "peer"{storage}
             [machines.unused-rig]
             ssh = "unused-rig"
             """,
@@ -654,6 +686,43 @@ class MachineEnvTests(unittest.TestCase):
             with redirect_stdout(stream):
                 rigsync.check_paths(config, root / "sync.toml", root / "machines.toml")
             self.assertIn("OK peer path", stream.getvalue())
+
+    def test_check_paths_fails_when_the_registry_declares_no_storage_root(self) -> None:
+        """A gate that cannot run is not a gate that passed.
+
+        rig-sync 2.0.0 moved paths out of the registry, so an entry written before
+        the storage fields were reintroduced carries host identity only -- and this
+        check, the only one that catches a misplaced repo_path before a clone, used
+        to print SKIP and exit 0 for every such rig.
+        """
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = self.declared(root, "/large/projects/demo", None)
+            stream = io.StringIO()
+            with redirect_stdout(stream):
+                with self.assertRaisesRegex(rigsync.RigSyncError, "check-paths failed"):
+                    rigsync.check_paths(config, root / "sync.toml", root / "machines.toml")
+            output = stream.getvalue()
+            self.assertIn("FAIL peer path", output)
+            self.assertIn("no storage_root declared", output)
+            self.assertNotIn("SKIP", output)
+
+    def test_check_paths_exits_nonzero_without_a_storage_root(self) -> None:
+        # The reported symptom was the process exit code, so assert it end to end.
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.declared(root, "/large/projects/demo", None)
+            argv = [
+                "--root",
+                str(root),
+                "--config",
+                str(root / "sync.toml"),
+                "--registry",
+                str(root / "machines.toml"),
+                "check-paths",
+            ]
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                self.assertEqual(rigsync.main(argv), 2)
 
     def test_repo_path_and_storage_env_report_the_declarations_verbatim(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

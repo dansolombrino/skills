@@ -44,7 +44,7 @@ class EnvironmentSyncTests(unittest.TestCase):
             [environment]
             manager = "uv"
             name = ".venv"
-            gpu_smoke = ["python", "-c", "print('gpu ok')"]
+            gpu_smoke = ["python", "code/common/environment_smoke.py"]
             [artifacts.evaluations]
             path = "evaluations"
             depth = 2
@@ -67,6 +67,7 @@ class EnvironmentSyncTests(unittest.TestCase):
         write(root / ".python-version", "3.12.11\n")
         write(root / "uv.lock", "version = 1\n")
         write(root / "code/common/environment.py", "print('helper')\n")
+        write(root / "code/common/environment_smoke.py", "print('gpu ok')\n")
         return config
 
     def settings(self, root: Path) -> envsync.EnvironmentSettings:
@@ -75,7 +76,7 @@ class EnvironmentSyncTests(unittest.TestCase):
             environment_name="research-env",
             uv_version="0.11.32",
             python_version="3.12.11",
-            gpu_smoke=("python", "-c", "print('gpu ok')"),
+            gpu_smoke=("python", "code/common/environment_smoke.py"),
         )
 
     def test_load_contract_requires_exact_uv_and_python_pins(self) -> None:
@@ -304,6 +305,63 @@ class EnvironmentSyncTests(unittest.TestCase):
             ["env", "CUDA_VISIBLE_DEVICES=0,1", "/tmp/hub/research-env/bin/python"],
         )
         self.assertNotIn("uv", command)
+
+    def test_gpu_smoke_script_resolves_against_the_target_machine_repo(self) -> None:
+        # The remote shell has no cwd, so a script left relative is read from $HOME
+        # on every peer. Assert the script element itself, not merely that repo_path
+        # appears somewhere in the argv.
+        settings = self.settings(Path("/tmp/hub"))
+        machine = envsync.rigsync.Machine("peer", "peer", None, Path("/srv/proj"), False)
+        completed = subprocess.CompletedProcess([], 0, b"ok\n", b"")
+        with mock.patch.object(envsync, "remote", return_value=completed) as remote_mock:
+            envsync.run_gpu_smoke(settings, machine, envsync.Lane("peer", "0"))
+        command = remote_mock.call_args.args[1]
+        self.assertEqual(
+            command,
+            [
+                "env",
+                "CUDA_VISIBLE_DEVICES=0",
+                "/srv/proj/research-env/bin/python",
+                "/srv/proj/code/common/environment_smoke.py",
+            ],
+        )
+
+    def test_gpu_smoke_passes_trailing_arguments_through_unchanged(self) -> None:
+        root = Path("/tmp/hub")
+        settings = envsync.EnvironmentSettings(
+            root=root,
+            environment_name="research-env",
+            uv_version="0.11.32",
+            python_version="3.12.11",
+            gpu_smoke=("python", "code/common/environment_smoke.py", "--strict", "fp8"),
+        )
+        machine = envsync.rigsync.Machine("peer", "peer", None, Path("/srv/proj"), False)
+        completed = subprocess.CompletedProcess([], 0, b"ok\n", b"")
+        with mock.patch.object(envsync, "remote", return_value=completed) as remote_mock:
+            envsync.run_gpu_smoke(settings, machine, envsync.Lane("peer", "0"))
+        command = remote_mock.call_args.args[1]
+        self.assertEqual(command[3], "/srv/proj/code/common/environment_smoke.py")
+        self.assertEqual(command[4:], ["--strict", "fp8"])
+
+    def test_gpu_smoke_rejects_configs_with_no_resolvable_script(self) -> None:
+        rejected = {
+            "option in the script slot": '["python", "-c", "print(1)"]',
+            "absolute path": '["python", "/srv/proj/code/common/environment_smoke.py"]',
+            "escaping path": '["python", "../other/environment_smoke.py"]',
+            "no script at all": '["python"]',
+        }
+        for label, value in rejected.items():
+            with self.subTest(label):
+                with tempfile.TemporaryDirectory() as raw:
+                    root = Path(raw)
+                    config = self.make_contract(root)
+                    config.write_text(
+                        config.read_text().replace(
+                            '["python", "code/common/environment_smoke.py"]', value
+                        )
+                    )
+                    with self.assertRaises(envsync.EnvironmentSyncError):
+                        envsync.load_environment_settings(root, config)
 
 
 if __name__ == "__main__":

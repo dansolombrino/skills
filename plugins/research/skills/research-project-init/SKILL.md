@@ -32,10 +32,13 @@ values, and material the user supplies explicitly. See "Directives are closed" i
    registry `~/.config/rigsync/machines.toml`
    (`rig-sync` → `references/configuration.md`) for each one before scaffolding: `ssh`, `hostname`,
    `storage_root`, plus `quota_fs`/`min_free_gb` on a quota'd rig and `[machines.<rig>.caches]`
-   wherever the rig owns its shared caches. The registry is written once per machine and reused by
-   every project, so a missing entry is a setup step, not a project decision. When one is absent,
-   walk the user through declaring it and never infer a volume, never default a cache or `TMPDIR`
-   to `$HOME` or `~/.cache`, and never copy another project's values.
+   wherever the rig owns its shared caches. Read the entry and confirm those fields are actually
+   present; an entry carrying only `ssh` is not admission, because a registry that never declares a
+   volume leaves the storage checks with nothing to measure against. The registry is written once
+   per machine and reused by every project, so a missing entry or field is a setup step, not a
+   project decision. When one is absent, walk the user through declaring it and never infer a
+   volume, never default a cache or `TMPDIR` to `$HOME` or `~/.cache`, and never copy another
+   project's values.
 5. Require explicit `scientific_mode: manual|auto` and `engineering_mode: manual|auto`. Never
    infer a default. Capture the initial scientific scope, engineering repo/rig/GPU/budget envelope,
    approved destinations, and protected choices.
@@ -88,13 +91,15 @@ values, and material the user supplies explicitly. See "Directives are closed" i
    gate. Manual mode requires its preview approval; auto mode may confirm inside the envelope.
 3. Bring up every intended rig in this order; each step's failure stops the ones after it.
    Manual mode requires preview approval; auto mode may confirm inside the envelope.
-   1. Confirm the user registry declares every intended rig (admission above). A rig with no entry
-      cannot be declared in `sync.toml` at all.
+   1. Confirm the user registry declares every intended rig, `storage_root` included (admission
+      above). A rig with no entry cannot be declared in `sync.toml` at all, and one with no
+      `storage_root` fails the path gate below.
    2. Write `sync.toml` with one hand-supplied absolute `repo_path` per rig, each on that rig's
       declared `storage_root`. Declare every rig the project will dispatch to, not only the hub —
       adding one later is a hand edit that no gate prompts for.
    3. Run `rig-sync check-paths` and require it to pass. This is the only check that catches a
-      `repo_path` off the rig's large volume *before* something is cloned into it.
+      `repo_path` off the rig's large volume *before* something is cloned into it. It fails, rather
+      than skipping, on a rig whose registry entry declares no `storage_root`.
    4. Run `rig-sync provision-env --dry-run` then `--confirm` for each rig that declares caches.
       Without this a rig has no `HF_HOME`/`UV_CACHE_DIR` and falls back to `~/.cache` — the small
       quota'd volume on a shared machine. It edits shell startup files, so it is a protected write;

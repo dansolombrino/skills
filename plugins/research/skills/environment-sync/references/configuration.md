@@ -39,11 +39,16 @@ Before adding `name` or creating the environment, ask the user which single dire
 also reject names that collide with the project taxonomy, `.git`, `.env`, or `.rigsync_cache`.
 The chosen name is committed and must be identical across rigs.
 
-`gpu_smoke` is an argv array, not shell. Its first token must be `python`; environment sync
-replaces that token with the configured environment's `bin/python` and supplies
-`CUDA_VISIBLE_DEVICES` for the approved lane. Keep the test quick and bounded, perform a real
-device operation through the project's locked framework, and exit nonzero on incompatibility. Do
-not encode GPU ownership in this command; `sweep-dispatch` owns per-wave authorization.
+`gpu_smoke` is an argv array, not shell, of the form `["python", "<script>", ...args]`. Its first
+token must be `python`; environment sync replaces that token with the configured environment's
+`bin/python` and supplies `CUDA_VISIBLE_DEVICES` for the approved lane. The second token is the
+smoke script, written **relative to the project root** and resolved against each rig's own
+`repo_path` — the verification runs over SSH with no working directory, so a path left unresolved
+would be read from `$HOME` on every peer. An option in that slot, an absolute path, or one
+escaping the project with `..` is rejected when the config loads. Any further tokens are passed to
+the script unchanged. Keep the test quick and bounded, perform a real device operation through the
+project's locked framework, and exit nonzero on incompatibility. Do not encode GPU ownership in
+this command; `sweep-dispatch` owns per-wave authorization.
 
 Copy `assets/environment.py` from the environment-sync skill's own installed directory to
 `code/common/environment.py`. Generated wave scripts

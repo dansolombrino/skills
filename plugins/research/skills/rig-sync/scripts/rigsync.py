@@ -1022,11 +1022,15 @@ def _remote_stdout(machine: Machine, argv: list[str]) -> str | None:
 def check_storage(machine: Machine) -> tuple[int, list[str]]:
     """Verify repo_path sits on the declared volume and that headroom remains.
 
-    Returns (failure_count, lines_to_print). Machines with no storage_root are
-    skipped entirely rather than being measured against an invented default.
+    Returns (failure_count, lines_to_print). A machine with no storage_root fails
+    rather than being measured against an invented default: silence here reads as
+    a pass, and the fallback on a quota'd rig is $HOME -- the small volume.
     """
     if machine.storage_root is None:
-        return 0, []
+        return 1, [
+            f"FAIL {machine.name} storage: no storage_root declared in the registry; "
+            f"nothing to measure repo_path against"
+        ]
 
     failures = 0
     lines: list[str] = []
@@ -1104,7 +1108,9 @@ def check_paths(config: Config, config_path: Path, registry_path: Path) -> None:
     it. This runs the same comparison before anything remote happens, which is
     what a scaffold needs: absoluteness and the presence of a registry entry are
     enforced when the config loads, so what remains is whether each declared
-    location actually sits on the volume that rig set aside for work.
+    location actually sits on the volume that rig set aside for work -- and
+    whether the registry declares that volume at all, since an entry carrying
+    only `ssh` would otherwise satisfy this gate vacuously.
 
     The comparison here is lexical. `doctor` resolves both sides with
     `readlink -f` on the rig, which this cannot do without touching it; a
@@ -1115,7 +1121,14 @@ def check_paths(config: Config, config_path: Path, registry_path: Path) -> None:
     failures = 0
     for machine in config.machines.values():
         if machine.storage_root is None:
-            print(f"SKIP {machine.name} path: no storage_root declared in the registry")
+            # Not a pass. This is the only gate that catches a repo_path off the
+            # rig's large volume before anything is cloned into it, so a registry
+            # that cannot answer the question fails it.
+            print(
+                f"FAIL {machine.name} path: no storage_root declared for {machine.name} "
+                f"in {registry_path}; the storage check cannot run"
+            )
+            failures += 1
             continue
         repo = PurePosixPath(machine.repo_path)
         root = PurePosixPath(machine.storage_root)
