@@ -69,8 +69,14 @@ done
 # storage guard: a quota'd rig blocks this lane with reserved exit 88 BEFORE any compute is spent.
 # Omit only on rigs with a single volume and no quotas. A quota is not free space -- df reports the
 # filesystem, not the user's allowance -- so ask quota first and fall back to df only when absent.
-MIN_FREE_KIB=<floor in 1K blocks; size it to this wave's checkpoint footprint, not the rig>
-QUOTA_FS="<filesystem of the volume this lane writes to, or empty to use df>"
+# Both values come from `rig-sync storage-env --machine <rig>`, which reads the machine registry.
+# Never retype them: QUOTA_FS must name the filesystem backing that rig's storage_root, and a
+# hand-typed one produces a headroom number for a disk nothing is being written to. MIN_FREE_KIB
+# may be RAISED above the printed floor to cover this wave's checkpoint footprint -- a run writing
+# 350 MB every 30 s eats headroom far faster than the rig-level number suggests -- but never
+# lowered below it, or this guard passes work that `rig-sync doctor` would have stopped.
+MIN_FREE_KIB=<MIN_FREE_KIB from storage-env, raised to this wave's checkpoint footprint>
+QUOTA_FS="<QUOTA_FS from storage-env; empty means the rig has no quota and df is used>"
 FREE_KIB=""
 if [ -n "$QUOTA_FS" ] && command -v quota >/dev/null 2>&1; then
   FREE_KIB=$(quota -w 2>/dev/null | awk -v fs="$QUOTA_FS" '
@@ -239,8 +245,13 @@ and never persist ETA in `.status.json`. Do not copy a second implementation int
 A **lane** is one GPU set on one rig. There is no launcher file: the lane's queue is the glob of
 its wave scripts, walked sequentially by a shell loop. Lanes on the same rig run in parallel.
 
+Every `<repo_path on rig>` below is the output of `rig-sync repo-path --machine <rig>`, which
+reads the project's `sync.toml`. Resolve it once per rig and substitute it; never type a project
+path into a dispatch, monitor, or recovery command. A path spelled by hand is a second copy of a
+declared fact, and the copy is what goes stale when a rig's checkout moves.
+
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <project path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; rc=\$?; { [ \"\$rc\" -eq 86 ] || [ \"\$rc\" -eq 87 ]; } && exit \"\$rc\"; done'"
+ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <repo_path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; rc=\$?; { [ \"\$rc\" -eq 86 ] || [ \"\$rc\" -eq 87 ]; } && exit \"\$rc\"; done'"
 ```
 
 When `<rig>` is the current local hub, the hub subagent runs the inner command directly instead
@@ -248,7 +259,7 @@ of self-SSH:
 
 ```bash
 tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_rig-4090_gpu<ids> \
-  'cd <project path> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_rig-4090_gpu<ids>.sh; do bash "$s"; rc=$?; { [ "$rc" -eq 86 ] || [ "$rc" -eq 87 ]; } && exit "$rc"; done'
+  'cd <repo_path on rig-4090> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_rig-4090_gpu<ids>.sh; do bash "$s"; rc=$?; { [ "$rc" -eq 86 ] || [ "$rc" -eq 87 ]; } && exit "$rc"; done'
 ```
 
 - Glob expansion sorts lexicographically ⇒ deterministic ordering.
@@ -268,7 +279,7 @@ the user how to watch: for a peer, `ssh <rig>` →
 Monitoring one run via the three signals (artifacts / `.status.json` / latest run log):
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "cat <project>/evaluations/<NNN_exp>/<run_id path>/.status.json; tail -n 30 \$(ls -t <project>/logs/<NNN_exp>/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-*.log | head -1)"
+ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "cat <repo_path on rig>/evaluations/<NNN_exp>/<run_id path>/.status.json; tail -n 30 \$(ls -t <repo_path on rig>/logs/<NNN_exp>/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-*.log | head -1)"
 ```
 
 For the current local hub, run the quoted `cat ...; tail ...` portion directly from the project
@@ -280,7 +291,7 @@ One round-trip to diagnose a rig that stopped answering or whose heartbeat froze
 every lane on that rig + boot time + run status in a single ssh:
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux ls 2>/dev/null | grep <wave_id> || echo SESSIONS=gone; echo BOOT=\$(uptime -s); cat <project>/evaluations/<NNN_exp>/<run_id path>/.status.json"
+ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux ls 2>/dev/null | grep <wave_id> || echo SESSIONS=gone; echo BOOT=\$(uptime -s); cat <repo_path on rig>/evaluations/<NNN_exp>/<run_id path>/.status.json"
 ```
 
 For the current local hub, run the quoted diagnostic portion directly. The same boot-time,
@@ -296,7 +307,7 @@ session already exists); the self-guarded wave scripts then skip done runs and r
 interrupted ones:
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux has-session -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 2>/dev/null || tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <project path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; rc=\$?; { [ \"\$rc\" -eq 86 ] || [ \"\$rc\" -eq 87 ]; } && exit \"\$rc\"; done'"
+ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux has-session -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 2>/dev/null || tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <repo_path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; rc=\$?; { [ \"\$rc\" -eq 86 ] || [ \"\$rc\" -eq 87 ]; } && exit \"\$rc\"; done'"
 ```
 
 For a local hub lane, run the same `tmux has-session ... || tmux new-session ...` command directly

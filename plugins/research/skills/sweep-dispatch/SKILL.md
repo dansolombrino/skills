@@ -27,6 +27,12 @@ unsupported; halt without upgrading it in place.
 fingerprint before the experiment smoke. Dependency-contract changes must be committed and
 verified before wave generation; read `[environment].name` from `sync.toml` and never let a
 launch-time command repair or relock the configured environment.
+1e. **rig declaration check** — resolve each assigned rig's project path with
+`rig-sync repo-path --machine <rig>` and its storage floor with
+`rig-sync storage-env --machine <rig>`, and substitute those values into the wave scripts and the
+dispatch, monitor, and recovery commands. Never type a project path or a quota filesystem by
+hand: both are declared once, and a second copy is what goes stale. A rig missing from `sync.toml`
+or the machine registry is not assignable — stop rather than guessing its layout.
 1d. **telemetry contract check** — require schema-v2 `code/common/status.py` from
 `research-project-init` and structured progress call sites in every target training/eval entrypoint.
 The helper must provide timezone-aware timestamps, live elapsed time, and its automatic

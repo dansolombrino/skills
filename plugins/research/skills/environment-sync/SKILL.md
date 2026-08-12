@@ -15,6 +15,12 @@ directory* — the folder holding the SKILL.md you are reading — not the resea
 directory's absolute path. Never resolve them against the project root: the project's own
 `scripts/` holds shell wave scripts only and has no `envsync.py`.
 
+**`rig-sync` must be installed alongside this skill.** `scripts/envsync.py` imports
+`rig-sync/scripts/rigsync.py` by sibling path — it reuses that config loader, machine selection,
+and doctor rather than keeping a second copy of the rules. Installing this skill without
+`rig-sync`, or outside the plugin's own directory layout, makes every command fail at import with
+a missing-file error rather than a contract failure. Install both, from the same plugin.
+
 Read `program/00-execution-agreement.md` and the Research 2.0 conventions
 (`../research-project-init/references/conventions.md`, including "Directives are closed" — never
 infer environment contents or defaults from another project on disk) first. Stop when the

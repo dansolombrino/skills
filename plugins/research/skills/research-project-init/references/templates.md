@@ -233,7 +233,7 @@ FLYWHEEL_ROOT_NODE_TITLE=
 HF_TOKEN=
 HUGGING_FACE_HUB_TOKEN=
 
-# Project-scoped storage (absolute, under THIS rig's storage root and THIS project)
+# Project-scoped storage (relative to the project root; resolved by code/common/paths.py)
 OPENCLIP_CACHE_DIR=
 CACHE_DIR=
 
@@ -241,8 +241,9 @@ CACHE_DIR=
 TORCH_NUM_WORKERS=
 ```
 
-Shared model and dataset caches (`HF_HOME`, `HF_HUB_CACHE`, `HF_DATASETS_CACHE`, `TORCH_HOME`,
-`UV_CACHE_DIR`, `TMPDIR`) are **absent by design** — see below.
+Shared model and dataset caches (`HF_HOME`, `HF_HUB_CACHE`, `HF_DATASETS_CACHE`,
+`HUGGINGFACE_HUB_CACHE`, `TORCH_HOME`, `UV_CACHE_DIR`, `TRITON_CACHE_DIR`, `XDG_CACHE_HOME`,
+`TMPDIR`, `WANDB_CACHE_DIR`, `WANDB_DIR`) are **absent by design** — see below.
 
 ## .env (ignored machine profile)
 
@@ -262,11 +263,10 @@ that is right on one machine points at a nonexistent mount on the next; and the 
 it does not exist is to retarget it at `$HOME`, which on a quota'd rig is the small volume. That
 sequence is exactly how a wave dies mid-checkpoint with `Disk quota exceeded`.
 
-Keep only what is genuinely per-project. Project-scoped storage stays absolute, but is derived
-from **this rig's** storage root and **this project's** own directory — never inherited from
-another project, and never pointed at `$HOME` on a quota'd rig. Substitute the machine's declared
-`storage_root` (`rig-sync` → `references/configuration.md`) for `<storage_root>` below; the
-scaffold writes the concrete value.
+Keep only what is genuinely per-project, and keep project-scoped storage **relative to the project
+root**. `rig-sync doctor` already requires each rig's `repo_path` to resolve under that rig's
+declared `storage_root`, so a relative path lands on the large volume everywhere, without this
+file naming a mount point that is true on exactly one machine.
 
 ```bash
 WANDB_API_KEY=
@@ -277,16 +277,20 @@ FLYWHEEL_ROOT_NODE_TITLE=
 HF_TOKEN=
 HUGGING_FACE_HUB_TOKEN=
 
-OPENCLIP_CACHE_DIR=<storage_root>/PARA/Projects/<...>/{{PROJECT_NAME}}/storage/openclip
-CACHE_DIR=<storage_root>/PARA/Projects/<...>/{{PROJECT_NAME}}/storage/cache
+OPENCLIP_CACHE_DIR=storage/openclip
+CACHE_DIR=storage/cache
 
 TORCH_NUM_WORKERS=16
 ```
 
-If a project truly needs an absolute cache path that the machine environment does not already
-provide, derive it from the machine's declared storage root (`rig-sync` →
-`references/configuration.md`) and record why in the journal. Do not invent one, and do not copy
-one from another project.
+Written this way the file contains nothing rig-specific, which is the point: `rig-sync push-env`
+copies this one file to every peer rather than rendering a different one per machine, and adding a
+rig later needs no edit here at all.
+
+Do not reach for an absolute path. If a project genuinely needs one that neither the machine
+environment nor the project root provides, derive it from that machine's declared `storage_root`
+(`rig-sync` → `references/configuration.md`), accept that the file is now rig-specific and must be
+maintained per rig, and record why in the journal. `doctor` warns on every absolute value here.
 
 ## .flywheel.json (only after root verification)
 
@@ -306,6 +310,7 @@ Flywheel disposition as setup-incomplete.
 .env
 {{ENVIRONMENT_NAME}}/
 .rigsync_cache/
+storage/
 orchestration/
 shitpads/*
 !shitpads/.gitkeep
@@ -329,9 +334,16 @@ Adjust with the user: they may want evaluations/ (small jsons) or plots/ committ
 
 ## sync.toml
 
-Create this from the `rig-sync` skill's configuration reference. Declare `[git]` with the
-approved remote/branch, the standard artifact groups, and one absolute `repo_path` per intended
-rig; do not put SSH aliases, ports, users, or keys here. Add `[environment]` from
+Create this from the `rig-sync` skill's configuration reference. The user registry
+(`~/.config/rigsync/machines.toml`) is a prerequisite: a rig with no entry there cannot be declared
+here at all.
+
+Declare `[git]` with the approved remote/branch, the standard artifact groups, and one absolute
+`repo_path` per intended rig — each on that rig's declared `storage_root`; do not put SSH aliases,
+ports, users, or keys here. Nothing derives `repo_path`, so declare every rig the project will ever
+dispatch to now: adding one later is a hand edit that no gate asks for. Run `rig-sync check-paths`
+before any remote step — it is the only check that catches a path off the rig's large volume before
+something has been cloned into it. Add `[environment]` from
 `environment-sync` with `manager = "uv"`, the user-chosen single-directory
 `name = "{{ENVIRONMENT_NAME}}"`, and the approved tokenized GPU smoke command. Ask for this name
 before creating the environment; suggest `.venv` only as an option and never infer a default. Run
@@ -385,6 +397,47 @@ HYDRA_ARGS=(<tokens produced by hydra_override_arg; one per override>)
 
 `pipefail` makes either the Python process or `tee` failure visible. The full wave template also
 captures both pipeline statuses so Python remains authoritative when both fail.
+
+## code/common/paths.py
+
+```python
+"""Resolve the repo-relative storage paths declared in .env.
+
+.env keeps project-scoped storage relative (CACHE_DIR=storage/cache) so that one
+file is correct on every rig: rig-sync already requires each rig's repo_path to
+sit on that rig's large volume, so anything under the project root inherits that
+guarantee without naming a mount point. Absolute values are left alone -- they
+are a warned-about exception, not the shape to build against.
+
+Use project_path() for every storage location an experiment writes to. Building
+one from os.getcwd() works from the project root and silently writes somewhere
+else the first time a script is launched from anywhere but there.
+"""
+
+import os
+from pathlib import Path
+
+_MARKER = "pyproject.toml"
+
+
+def project_root() -> Path:
+    """The directory holding pyproject.toml, found by walking up from this file."""
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / _MARKER).is_file():
+            return candidate
+    raise RuntimeError(f"no {_MARKER} above {__file__}: cannot locate the project root")
+
+
+def project_path(value: str | os.PathLike) -> Path:
+    """An absolute path: value as-is when absolute, else relative to the project root."""
+    path = Path(value)
+    return path if path.is_absolute() else project_root() / path
+
+
+def storage_path(var: str, default: str) -> Path:
+    """Resolve an .env storage variable, falling back to its documented default."""
+    return project_path(os.environ.get(var) or default)
+```
 
 ## code/common/run_id.py
 

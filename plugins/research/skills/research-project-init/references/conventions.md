@@ -46,8 +46,11 @@ named by a directive rather than discovered by looking around:
 - the installed directory of a `research` skill — the folder holding the SKILL.md being followed,
   with its `assets/`, `scripts/`, and `references/` — which is how `assets/environment.py` reaches
   `code/common/environment.py`;
-- literal values written into the templates, such as the shared cache paths, which are reproduced
-  verbatim because the rigs share those caches, not because another project was inspected;
+- literal values written into the templates, which are reproduced verbatim because a directive
+  puts them there, not because another project was inspected;
+- the user's machine registry (`~/.config/rigsync/machines.toml`), which is where each rig's
+  volumes and shared caches are declared. Read the declarations; never substitute a value observed
+  on a rig or copied from another project for a missing one;
 - material the user placed in the project's own `references/` directory, or a reference the user
   identifies explicitly by path or URL, governed by `integrate-reference-code`. References are
   always user-supplied; never go looking for candidates on the filesystem.
@@ -328,8 +331,15 @@ script filenames and tmux session names, so it must be the string that actually 
 | `behemoth`     | pro 6000, 6000, bw, blackwell, `rig-6000-pro-blackwell`, `server-pro-6000-bw` | 8 (only GPU 0 is ours) | 2.0 | **quota'd, home is small** | support |
 
 The storage column is a property of the rig, not of a project. Its concrete values — which volume
-is the large one, where the storage root is — live in the user's machine registry
-(`rig-sync` → `references/configuration.md`), never in a skill or a committed project file.
+is the large one, where the storage root is, where the shared caches sit — live in the user's
+machine registry (`rig-sync` → `references/configuration.md`), never in a skill or a committed
+project file.
+
+That registry is written once per machine and reused by every project on it, which makes it a
+**prerequisite for scaffolding** rather than a step inside one: a rig with no entry cannot be
+declared in a project's `sync.toml`, and its shared caches cannot be installed by
+`rig-sync provision-env`. A project scaffolded past that gap runs with no `HF_HOME` or
+`UV_CACHE_DIR` and falls back to `~/.cache` — on `behemoth` that is the small quota'd volume.
 
 ### behemoth is GPU-0-only
 
@@ -378,6 +388,12 @@ Three consequences worth stating explicitly, because each one has bitten:
 - **Machine-level environment is defeated by project-level `.env`.** A rig can be configured
   perfectly and a single `HF_HOME=` line in a project's `.env` will silently override it. Cache
   paths that vary per machine do not belong in per-project files.
+- **Project-scoped storage is repo-relative, not absolute.** `.env` declares `storage/cache`, not
+  a mount point, and `code/common/paths.py` resolves it against the project root. Since a rig's
+  `repo_path` is already required to sit on its large volume, relative paths inherit that for
+  free — and the same `.env` is then correct on every rig, present and future. An absolute
+  per-rig path in any per-project file is a defect: right on the machine it was typed on, wrong on
+  the next, and repaired by pointing it at `$HOME`.
 - **Shell rc files do not reach the jobs that matter.** Dispatch runs under `nohup`, `ssh <cmd>`,
   and generated scripts — none of which are interactive shells. An export that lives only in an
   interactive rc file is absent exactly when a long run needs it. Machine-level environment must

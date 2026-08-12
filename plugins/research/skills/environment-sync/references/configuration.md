@@ -64,6 +64,12 @@ set from a project `.env` — uv resolves its cache before Python starts — so 
 the rig's machine environment, which `rigsync provision-env` installs. Left on its default path,
 a uv cache is routinely one of the largest directories on a research rig.
 
+`.env` is the other half of that split, and it holds no absolute path at all: project-scoped
+storage is declared relative to the project root and resolved by `code/common/paths.py`. Since
+`doctor` already requires each rig's `repo_path` to sit on that rig's `storage_root`, relative
+paths land on the large volume everywhere without the file naming a mount point. That is what
+makes `.env` rig-independent and copyable to a peer with `rigsync push-env`.
+
 Environment sync requires Linux machines with the same architecture. libc, kernel, driver, and
 GPU model may differ; their compatibility is established by successful creation of the locked
 environment plus the project GPU smoke.

@@ -849,20 +849,46 @@ def provision_env(
             print(f"{machine.name}: {line}")
 
 
+def machine_env_probe(
+    machine: Machine, probe: str
+) -> tuple[subprocess.CompletedProcess | None, str]:
+    """Run `probe` through a shell that reads what `provision-env` wired, or give up.
+
+    `zsh -c` is the first choice because `~/.zshenv` is read by every zsh, so it
+    proves the value is present for a dispatched wave and not merely for a human
+    at a prompt. On a rig with no zsh the equivalent is the bare SSH command:
+    sshd invokes the login shell as the remote shell, and bash reads `~/.bashrc`
+    in exactly that case -- which is what `provision-env`'s prepend targets. That
+    substitute does not exist for a local machine, where nothing wraps the call
+    in a shell at all, so the probe is reported as impossible rather than faked.
+    """
+    has_zsh = remote(machine, ["sh", "-c", "command -v zsh >/dev/null"], check=False)
+    if has_zsh.returncode == 0:
+        return remote(machine, ["zsh", "-c", probe], check=False), "zsh"
+    if not machine.local:
+        return run(ssh_base(machine) + [probe], check=False), "login shell"
+    return None, ""
+
+
 def check_machine_env(machine: Machine) -> tuple[int, list[str]]:
     """Confirm a NON-interactive shell on the rig sees the declared cache values.
 
-    Verifying through `zsh -c` rather than reading the file is the whole point:
+    Verifying through a shell rather than reading the file is the whole point:
     an export that only a login or interactive shell can see is absent exactly
     when a dispatched wave needs it.
     """
     if not machine.caches:
         return 0, []
     probe = "; ".join(f"printf '%s\\n' \"${var}\"" for var, _ in machine.caches)
-    result = remote(machine, ["zsh", "-c", probe], check=False)
+    result, shell = machine_env_probe(machine, probe)
+    if result is None:
+        return 1, [
+            f"FAIL {machine.name} machine env: no zsh on this machine, and it is local, "
+            "so there is no non-interactive shell to probe -- verify the exports by hand"
+        ]
     if result.returncode:
         return 1, [
-            f"FAIL {machine.name} machine env: cannot probe a non-interactive zsh "
+            f"FAIL {machine.name} machine env: cannot probe a non-interactive {shell} "
             "(run `rigsync provision-env`)"
         ]
     observed = result.stdout.decode(errors="replace").splitlines()
@@ -897,15 +923,32 @@ def parse_env_assignments(text: str) -> dict[str, str]:
     return found
 
 
-def check_project_env(machine: Machine) -> tuple[int, list[str]]:
-    """Reject a project .env that re-declares machine-level cache variables.
+def absolute_env_assignments(assignments: dict[str, str]) -> list[str]:
+    """Keys whose value is an absolute path, machine-level variables excluded.
 
-    Only meaningful once the registry declares that this rig owns those values:
-    without a declared machine environment there is nothing for .env to shadow,
-    and .env remains a legitimate place to set them.
+    Those are reported separately and more harshly; everything else that names an
+    absolute path is a portability problem rather than an override.
     """
-    if not machine.caches:
-        return 0, []
+    return sorted(
+        key
+        for key, value in assignments.items()
+        if key not in MACHINE_ENV_VARS and PurePosixPath(value).is_absolute()
+    )
+
+
+def check_project_env(machine: Machine) -> tuple[int, list[str]]:
+    """Inspect the project's .env on the rig under two separate rules.
+
+    Re-declaring a machine-level cache variable FAILs, and is only meaningful
+    once the registry declares that this rig owns those values: without a
+    declared machine environment there is nothing for .env to shadow, and .env
+    remains a legitimate place to set them.
+
+    Any other absolute path WARNs, whatever the registry says. Project-scoped
+    storage is repo-relative precisely so that one .env is correct on every rig;
+    an absolute value is right on the machine it was written on and points at a
+    nonexistent mount on the next one.
+    """
     result = remote(
         machine,
         ["sh", "-c", f'cat {shlex.quote(str(machine.repo_path / ".env"))} 2>/dev/null || true'],
@@ -914,13 +957,22 @@ def check_project_env(machine: Machine) -> tuple[int, list[str]]:
     if result.returncode:
         return 0, []
     assignments = parse_env_assignments(result.stdout.decode(errors="replace"))
-    offenders = sorted(set(assignments) & MACHINE_ENV_VARS)
-    if not offenders:
-        return 0, []
-    return 1, [
-        f"FAIL {machine.name} project .env overrides machine environment: "
-        f"{', '.join(offenders)} -- remove them; the rig's environment owns these"
-    ]
+    failures, lines = 0, []
+    if machine.caches:
+        offenders = sorted(set(assignments) & MACHINE_ENV_VARS)
+        if offenders:
+            failures += 1
+            lines.append(
+                f"FAIL {machine.name} project .env overrides machine environment: "
+                f"{', '.join(offenders)} -- remove them; the rig's environment owns these"
+            )
+    absolute = absolute_env_assignments(assignments)
+    if absolute:
+        lines.append(
+            f"WARN {machine.name} project .env sets absolute path(s): {', '.join(absolute)} "
+            "-- project-scoped storage is repo-relative so one .env is correct on every rig"
+        )
+    return failures, lines
 
 
 def _parse_quota(text: str, quota_fs: str) -> tuple[int, int] | None:
@@ -1043,6 +1095,119 @@ def check_storage(machine: Machine) -> tuple[int, list[str]]:
     return failures, lines
 
 
+def check_paths(config: Config, config_path: Path, registry_path: Path) -> None:
+    """Validate declared project locations against declared machine storage, offline.
+
+    `doctor` already makes this comparison, but only after the repo_path
+    existence probe passes -- so a path that is absolute, mistyped, and outside
+    the rig's large volume is caught only once something has been cloned into
+    it. This runs the same comparison before anything remote happens, which is
+    what a scaffold needs: absoluteness and the presence of a registry entry are
+    enforced when the config loads, so what remains is whether each declared
+    location actually sits on the volume that rig set aside for work.
+
+    The comparison here is lexical. `doctor` resolves both sides with
+    `readlink -f` on the rig, which this cannot do without touching it; a
+    declaration that passes here can still fail there through a symlink, and
+    that is the intended division of labour.
+    """
+    registry_machines = _load_toml(registry_path).get("machines", {})
+    failures = 0
+    for machine in config.machines.values():
+        if machine.storage_root is None:
+            print(f"SKIP {machine.name} path: no storage_root declared in the registry")
+            continue
+        repo = PurePosixPath(machine.repo_path)
+        root = PurePosixPath(machine.storage_root)
+        if repo == root or root in repo.parents:
+            print(f"OK {machine.name} path: {repo} under {root}")
+            continue
+        print(
+            f"FAIL {machine.name} path: repo_path {repo} is not under "
+            f"storage_root {root}"
+        )
+        failures += 1
+    if isinstance(registry_machines, dict):
+        for name in sorted(set(registry_machines) - set(config.machines)):
+            print(f"note {name}: in the registry but not in {config_path.name}")
+    if failures:
+        raise RigSyncError(f"check-paths failed with {failures} declaration(s)")
+
+
+def print_repo_path(machine: Machine) -> None:
+    """The one declared project location for this rig, for dispatch to substitute."""
+    print(machine.repo_path)
+
+
+def print_storage_env(machine: Machine) -> None:
+    """Shell-assignable storage facts, straight from the registry.
+
+    A wave script guards on headroom before it writes checkpoints. Typing these
+    values a second time into that script is how the guard ends up interrogating
+    a filesystem nothing is being written to, which reads as reassuring and
+    means nothing. `MIN_FREE_KIB` is the registry floor: a wave may raise it for
+    its own checkpoint footprint, but must not sink below it.
+    """
+    floor_gb = machine.min_free_gb if machine.min_free_gb is not None else DEFAULT_MIN_FREE_GB
+    print(f"QUOTA_FS={shlex.quote(machine.quota_fs or '')}")
+    print(f"MIN_FREE_GB={floor_gb:g}")
+    print(f"MIN_FREE_KIB={int(floor_gb * KIB_PER_GB)}")
+
+
+def push_env(
+    config: Config, machine: Machine, dry_run: bool, confirmed: bool, overwrite: bool
+) -> None:
+    """Place the hub's .env on a peer rig.
+
+    `.env` is ignored by Git, so a freshly `prepare`d peer has none at all and
+    every run there starts without the project's secrets and settings. It is
+    copied rather than regenerated because it is rig-independent by
+    construction: machine-level caches live in the registry and project-scoped
+    storage is repo-relative, so the same file is correct everywhere.
+
+    This moves secrets, so it is a protected write that says so, and it refuses
+    to overwrite a peer's existing file without being told to.
+    """
+    require_confirmation(dry_run, confirmed)
+    source = config.root / ".env"
+    if not source.is_file():
+        raise RigSyncError(f"no .env at {source}")
+    if machine.local and machine.repo_path.resolve() == config.root.resolve():
+        print(f"[local] {machine.name}: .env already at {source}")
+        return
+    assignments = parse_env_assignments(source.read_text(errors="replace"))
+    offenders = sorted(set(assignments) & MACHINE_ENV_VARS)
+    if offenders:
+        raise RigSyncError(
+            f"refusing to push a .env that assigns machine-level variables: "
+            f"{', '.join(offenders)} -- the rig's environment owns these"
+        )
+    absolute = absolute_env_assignments(assignments)
+    if absolute:
+        print(
+            f"WARN {machine.name}: .env sets absolute path(s): {', '.join(absolute)} "
+            "-- these are unlikely to be correct on another rig"
+        )
+    destination_file = machine.repo_path / ".env"
+    existing = remote(machine, ["test", "-f", str(destination_file)], check=False)
+    if existing.returncode == 0 and not overwrite:
+        raise RigSyncError(
+            f"{machine.name}: {destination_file} already exists; "
+            "pass --overwrite to replace it"
+        )
+    print(
+        f"[{'dry-run' if dry_run else 'push-env'}] {machine.name}: "
+        f"{source} -> {destination_file} (this file carries secrets)"
+    )
+    flags = rsync_flags(machine)
+    if dry_run:
+        flags.append("--dry-run")
+    destination = (
+        str(machine.repo_path) + "/" if machine.local else rsync_remote(machine, machine.repo_path)
+    )
+    run(flags + [str(source), destination], show=True)
+
+
 def doctor(config: Config, machines: list[Machine]) -> None:
     failures = 0
     for binary in ("rsync", "ssh", "git"):
@@ -1130,6 +1295,16 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     doctor_p = sub.add_parser("doctor")
     doctor_p.add_argument("--machines")
+    sub.add_parser("check-paths")
+    path_p = sub.add_parser("repo-path")
+    path_p.add_argument("--machine", required=True)
+    storage_p = sub.add_parser("storage-env")
+    storage_p.add_argument("--machine", required=True)
+    push_env_p = sub.add_parser("push-env")
+    push_env_p.add_argument("--machine", required=True)
+    push_env_p.add_argument("--dry-run", action="store_true")
+    push_env_p.add_argument("--confirm", action="store_true")
+    push_env_p.add_argument("--overwrite", action="store_true")
     env_p = sub.add_parser("provision-env")
     env_p.add_argument("--machines")
     env_p.add_argument("--dry-run", action="store_true")
@@ -1175,6 +1350,18 @@ def main(argv: list[str] | None = None) -> int:
         config = load_config(root, config_path, registry_path)
         if args.command == "doctor":
             doctor(config, selected_machines(config, args.machines))
+        elif args.command == "check-paths":
+            check_paths(config, config_path, registry_path)
+        elif args.command in {"repo-path", "storage-env", "push-env"}:
+            if args.machine not in config.machines:
+                raise RigSyncError(f"unknown machine: {args.machine}")
+            machine = config.machines[args.machine]
+            if args.command == "repo-path":
+                print_repo_path(machine)
+            elif args.command == "storage-env":
+                print_storage_env(machine)
+            else:
+                push_env(config, machine, args.dry_run, args.confirm, args.overwrite)
         elif args.command == "provision-env":
             provision_env(
                 config,

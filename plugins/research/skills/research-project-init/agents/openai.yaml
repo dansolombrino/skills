@@ -1,4 +1,4 @@
 interface:
   display_name: "Research Project Init"
   short_description: "Scaffold a fresh Research 2.0 repository"
-  default_prompt: "Use $research-project-init to scaffold a fresh Research 2.0 project, asking for its uv environment name and explicit operating modes."
+  default_prompt: "Use $research-project-init to scaffold a fresh Research 2.0 project, asking for its uv environment name, explicit operating modes, and a machine-registry entry for every intended rig."

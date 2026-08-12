@@ -219,7 +219,10 @@ class RigSyncTests(unittest.TestCase):
         )
         hostname = subprocess.CompletedProcess([], 0, b"peer-host\n", b"")
         dependencies = subprocess.CompletedProcess([], 0, b"", b"")
-        with mock.patch.object(rigsync, "remote", side_effect=[hostname, dependencies]):
+        project_env = subprocess.CompletedProcess([], 0, b"", b"")
+        with mock.patch.object(
+            rigsync, "remote", side_effect=[hostname, dependencies, project_env]
+        ):
             rigsync.doctor(config, [machine])
 
     def test_doctor_rejects_hostname_drift(self) -> None:
@@ -231,9 +234,10 @@ class RigSyncTests(unittest.TestCase):
         )
         hostname = subprocess.CompletedProcess([], 0, b"new-host\n", b"")
         dependencies = subprocess.CompletedProcess([], 0, b"", b"")
+        project_env = subprocess.CompletedProcess([], 0, b"", b"")
         stream = io.StringIO()
         with mock.patch.object(
-            rigsync, "remote", side_effect=[hostname, dependencies]
+            rigsync, "remote", side_effect=[hostname, dependencies, project_env]
         ), redirect_stdout(stream):
             with self.assertRaisesRegex(rigsync.RigSyncError, "doctor failed"):
                 rigsync.doctor(config, [machine])
@@ -247,7 +251,10 @@ class RigSyncTests(unittest.TestCase):
         dependencies = subprocess.CompletedProcess([], 0, b"", b"")
         with mock.patch.object(rigsync, "remote", return_value=dependencies) as remote_mock:
             rigsync.doctor(config, [machine])
-        remote_mock.assert_called_once()
+        # No hostname assertion and no declared caches, so the only probes are the
+        # dependency/path check and the .env read that warns on absolute paths.
+        self.assertEqual(remote_mock.call_count, 2)
+        self.assertIn("cat /tmp/peer/.env", " ".join(remote_mock.call_args[0][1]))
 
     def test_write_requires_confirmation_after_dry_run(self) -> None:
         machine = rigsync.Machine("peer", "peer", None, Path("/tmp/peer"), False)
@@ -553,16 +560,153 @@ class MachineEnvTests(unittest.TestCase):
         self.assertNotIn("HF_TOKEN", lines[0])
 
     def test_project_env_without_machine_vars_passes(self) -> None:
-        env = b"HF_TOKEN=secret\n# HF_HOME=/commented/out\nCACHE_DIR=/large/p/storage/cache\n"
+        env = b"HF_TOKEN=secret\n# HF_HOME=/commented/out\nCACHE_DIR=storage/cache\n"
         with mock.patch.object(
             rigsync, "remote", return_value=subprocess.CompletedProcess([], 0, env, b"")
         ):
             self.assertEqual(rigsync.check_project_env(self.machine()), (0, []))
 
-    def test_project_env_check_skipped_when_registry_declares_no_caches(self) -> None:
-        with mock.patch.object(rigsync, "remote") as remote_mock:
+    def test_project_env_warns_on_an_absolute_path_without_failing(self) -> None:
+        """Repo-relative project storage is what makes one .env correct everywhere.
+
+        An absolute value is not an override of the machine environment, so it
+        does not fail the check -- but it is right on exactly one rig, and the
+        usual repair when it is wrong is to point it at $HOME.
+        """
+        env = b"HF_TOKEN=secret\nCACHE_DIR=/large/p/storage/cache\n"
+        with mock.patch.object(
+            rigsync, "remote", return_value=subprocess.CompletedProcess([], 0, env, b"")
+        ):
+            failures, lines = rigsync.check_project_env(self.machine())
+        self.assertEqual(failures, 0)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("WARN", lines[0])
+        self.assertIn("CACHE_DIR", lines[0])
+
+    def test_project_env_absolute_path_warning_survives_a_registry_without_caches(self) -> None:
+        """The override rule needs declared caches to shadow; the path rule does not."""
+        env = b"CACHE_DIR=/large/p/storage/cache\n"
+        with mock.patch.object(
+            rigsync, "remote", return_value=subprocess.CompletedProcess([], 0, env, b"")
+        ):
+            failures, lines = rigsync.check_project_env(self.machine(caches=()))
+        self.assertEqual(failures, 0)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("WARN", lines[0])
+
+    def test_project_env_override_ignored_when_registry_declares_no_caches(self) -> None:
+        env = b"HF_HOME=/somewhere\n"
+        with mock.patch.object(
+            rigsync, "remote", return_value=subprocess.CompletedProcess([], 0, env, b"")
+        ):
             self.assertEqual(rigsync.check_project_env(self.machine(caches=())), (0, []))
-        remote_mock.assert_not_called()
+
+    def declared(self, root: Path, repo_path: str, storage_root: str) -> rigsync.Config:
+        write(
+            root / "sync.toml",
+            f"""
+            version = 1
+            [artifacts.evaluations]
+            path = "evaluations"
+            depth = 2
+            [machines.peer]
+            repo_path = {repo_path!r}
+            """,
+        )
+        write(
+            root / "machines.toml",
+            f"""
+            [machines.peer]
+            ssh = "peer"
+            storage_root = {storage_root!r}
+            quota_fs = "/dev/sdb1"
+            min_free_gb = 50
+            [machines.unused-rig]
+            ssh = "unused-rig"
+            """,
+        )
+        return rigsync.load_config(root, root / "sync.toml", root / "machines.toml")
+
+    def test_check_paths_rejects_a_repo_path_off_the_declared_volume(self) -> None:
+        """The check doctor cannot make: it runs before anything is cloned.
+
+        doctor's storage check sits behind the repo_path existence probe, so a
+        path pointing at the small volume is caught there only once a checkout
+        already lives on it.
+        """
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = self.declared(root, "/home/me/project", "/large")
+            stream = io.StringIO()
+            with redirect_stdout(stream):
+                with self.assertRaisesRegex(rigsync.RigSyncError, "check-paths failed"):
+                    rigsync.check_paths(config, root / "sync.toml", root / "machines.toml")
+            self.assertIn("FAIL peer path", stream.getvalue())
+            # A rig declared on the machine but absent from the project is not an
+            # error -- it is simply unavailable for dispatch, and worth saying.
+            self.assertIn("unused-rig", stream.getvalue())
+
+    def test_check_paths_accepts_a_repo_path_on_the_declared_volume(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = self.declared(root, "/large/projects/demo", "/large")
+            stream = io.StringIO()
+            with redirect_stdout(stream):
+                rigsync.check_paths(config, root / "sync.toml", root / "machines.toml")
+            self.assertIn("OK peer path", stream.getvalue())
+
+    def test_repo_path_and_storage_env_report_the_declarations_verbatim(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = self.declared(root, "/large/projects/demo", "/large")
+            machine = config.machines["peer"]
+            stream = io.StringIO()
+            with redirect_stdout(stream):
+                rigsync.print_repo_path(machine)
+                rigsync.print_storage_env(machine)
+            printed = stream.getvalue()
+        self.assertIn("/large/projects/demo\n", printed)
+        self.assertIn("QUOTA_FS=/dev/sdb1\n", printed)
+        self.assertIn("MIN_FREE_GB=50\n", printed)
+        self.assertIn(f"MIN_FREE_KIB={50 * 1024 * 1024}\n", printed)
+
+    def test_storage_env_falls_back_to_the_default_floor(self) -> None:
+        machine = rigsync.Machine("peer", "peer", None, Path("/large/p"), False)
+        stream = io.StringIO()
+        with redirect_stdout(stream):
+            rigsync.print_storage_env(machine)
+        self.assertIn("QUOTA_FS=''\n", stream.getvalue())
+        self.assertIn(f"MIN_FREE_GB={rigsync.DEFAULT_MIN_FREE_GB:g}\n", stream.getvalue())
+
+    def test_push_env_refuses_a_dotenv_that_owns_machine_variables(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = self.declared(root, "/large/projects/demo", "/large")
+            write(root / ".env", "HF_TOKEN=secret\nUV_CACHE_DIR=/large/cache/uv\n")
+            with self.assertRaisesRegex(rigsync.RigSyncError, "UV_CACHE_DIR"):
+                rigsync.push_env(
+                    config,
+                    config.machines["peer"],
+                    dry_run=True,
+                    confirmed=False,
+                    overwrite=False,
+                )
+
+    def test_push_env_refuses_to_clobber_an_existing_peer_file(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = self.declared(root, "/large/projects/demo", "/large")
+            write(root / ".env", "HF_TOKEN=secret\nCACHE_DIR=storage/cache\n")
+            present = subprocess.CompletedProcess([], 0, b"", b"")
+            with mock.patch.object(rigsync, "remote", return_value=present):
+                with self.assertRaisesRegex(rigsync.RigSyncError, "--overwrite"):
+                    rigsync.push_env(
+                        config,
+                        config.machines["peer"],
+                        dry_run=True,
+                        confirmed=False,
+                        overwrite=False,
+                    )
 
     def test_env_parser_handles_export_quotes_and_blanks(self) -> None:
         parsed = rigsync.parse_env_assignments(

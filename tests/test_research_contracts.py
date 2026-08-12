@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
+import sys
 import tempfile
 import time
 import unittest
@@ -10,6 +12,18 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).parents[1]
+RIGSYNC = ROOT / "plugins/research/skills/rig-sync/scripts/rigsync.py"
+
+
+def machine_env_vars() -> frozenset[str]:
+    """MACHINE_ENV_VARS as rigsync.py defines it -- the one authority for that list."""
+    spec = importlib.util.spec_from_file_location("_rigsync_for_contracts", RIGSYNC)
+    module = importlib.util.module_from_spec(spec)
+    # dataclasses resolves field types through sys.modules, so the module has to
+    # be registered before it executes.
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module.MACHINE_ENV_VARS
 
 
 class ResearchContractTests(unittest.TestCase):
@@ -17,7 +31,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "3.4.1")
+        self.assertEqual(manifest["version"], "3.5.0")
         self.assertTrue((ROOT / "plugins/research/skills/rig-sync/SKILL.md").is_file())
         self.assertTrue(
             (ROOT / "plugins/research/skills/integrate-reference-code/SKILL.md").is_file()
@@ -170,17 +184,19 @@ class ResearchContractTests(unittest.TestCase):
         # Machine-varying cache paths must NOT be assigned in a project .env: the
         # file is loaded after the shell environment and silently overrides a
         # correctly configured rig, sending downloads to whatever volume it names.
-        for key in ("HF_HOME", "HF_DATASETS_CACHE", "HF_HUB_CACHE", "TORCH_HOME", "UV_CACHE_DIR"):
+        for key in machine_env_vars():
             self.assertNotRegex(templates, rf"(?m)^{key}=\S", key)
         # No rig's absolute layout, and no other project's paths, may be baked in.
         self.assertNotIn("/mnt/KS_2TB", templates)
         self.assertNotIn("qat-transfer", templates)
-        # Project-scoped storage stays absolute but is derived from the rig's
-        # declared storage root and this project -- never another project's path.
-        self.assertIn("OPENCLIP_CACHE_DIR=<storage_root>/", templates)
-        self.assertIn("CACHE_DIR=<storage_root>/", templates)
-        self.assertIn("storage/openclip", templates)
-        self.assertIn("storage/cache", templates)
+        # Project-scoped storage is repo-relative, so one .env is correct on every
+        # rig and no personal directory layout leaks into a distributed template.
+        self.assertIn("OPENCLIP_CACHE_DIR=storage/openclip", templates)
+        self.assertIn("CACHE_DIR=storage/cache", templates)
+        self.assertNotIn("<storage_root>/", templates)
+        self.assertNotIn("PARA/Projects", templates)
+        self.assertIn("## code/common/paths.py", templates)
+        self.assertIn("def project_path(", templates)
         self.assertIn("TORCH_NUM_WORKERS=16", templates)
         self.assertIn("never copy or commit a token", templates)
         self.assertIn("Do not create this file with placeholders", templates)
@@ -188,6 +204,86 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("Ask which single directory name", skill)
         self.assertIn('name = "{{ENVIRONMENT_NAME}}"', templates)
         self.assertIn("{{ENVIRONMENT_NAME}}/", templates)
+
+    def test_project_init_bootstraps_the_machine_registry_before_any_rig_write(self) -> None:
+        """A scaffold that skips the registry leaves every rig on ~/.cache.
+
+        The caches a rig uses are declared in the user registry and installed by
+        `provision-env`; nothing else puts them there. Init predated that model
+        and never mentioned either, so a fresh project fell back to $HOME -- the
+        small quota'd volume on a shared machine.
+        """
+        init_root = ROOT / "plugins/research/skills/research-project-init"
+        skill = (init_root / "SKILL.md").read_text()
+        conventions = (init_root / "references/conventions.md").read_text()
+
+        for token in (
+            "~/.config/rigsync/machines.toml",
+            "storage_root",
+            "[machines.<rig>.caches]",
+            "check-paths",
+            "provision-env",
+            "push-env",
+        ):
+            self.assertIn(token, skill, token)
+        # The order is the contract: a path validated after the clone, or caches
+        # installed after the first run, are checks that arrive too late.
+        gate = skill.split("Bring up every intended rig")[1]
+        positions = [
+            gate.index(f"rig-sync {name}")
+            for name in ("check-paths", "provision-env", "prepare", "push-env", "doctor")
+        ]
+        self.assertEqual(positions, sorted(positions))
+        # The pre-3.5.0 prose pointed at a cache profile the templates no longer
+        # carry, which is how cache vars ended up back in .env.
+        self.assertNotIn("standard cache profile", skill)
+        self.assertNotIn("standard cache paths verbatim", skill)
+        self.assertIn("prerequisite for scaffolding", conventions)
+        self.assertNotIn("such as the shared cache paths", conventions)
+
+    def test_rig_paths_and_storage_are_read_back_never_retyped(self) -> None:
+        rig_root = ROOT / "plugins/research/skills/rig-sync"
+        rig_skill = (rig_root / "SKILL.md").read_text()
+        rig_config = (rig_root / "references/configuration.md").read_text()
+        dispatch = (
+            ROOT / "plugins/research/skills/sweep-dispatch/references/templates.md"
+        ).read_text()
+        dispatch_skill = (
+            ROOT / "plugins/research/skills/sweep-dispatch/SKILL.md"
+        ).read_text()
+
+        for command in ("check-paths", "repo-path", "storage-env", "push-env"):
+            self.assertIn(command, rig_skill, command)
+            self.assertIn(command, rig_config, command)
+        # Dispatch must resolve the project path from sync.toml rather than
+        # spelling a second copy of it into every launch command.
+        self.assertNotIn("<project path", dispatch)
+        self.assertIn("rig-sync repo-path --machine <rig>", dispatch)
+        self.assertIn("rig-sync storage-env --machine <rig>", dispatch)
+        self.assertIn("rig-sync repo-path --machine <rig>", dispatch_skill)
+        # Every rig in the canonical fleet must be configurable, not just the
+        # three that happened to appear in the examples.
+        for rig in ("rig-4090", "rig-3090-ti", "rig-3080-ti", "behemoth"):
+            self.assertIn(rig, rig_config, rig)
+
+    def test_machine_env_var_list_matches_the_code_that_enforces_it(self) -> None:
+        """The prose list and the enforced list drifted apart once already."""
+        config = (
+            ROOT / "plugins/research/skills/rig-sync/references/configuration.md"
+        ).read_text()
+        section = config.split("### `[machines.<rig>.caches]`")[1].split("##")[0]
+        documented = set(re.findall(r"`([A-Z][A-Z0-9_]+)`", section))
+        self.assertEqual(documented & machine_env_vars(), machine_env_vars())
+
+    def test_no_distributed_skill_carries_a_personal_absolute_path(self) -> None:
+        offenders = []
+        for path in (ROOT / "plugins").rglob("*"):
+            if not path.is_file() or path.suffix not in {".md", ".py", ".yaml", ".json"}:
+                continue
+            text = path.read_text(errors="replace")
+            if "PARA/Projects" in text or "/mnt/KS_2TB" in text:
+                offenders.append(str(path.relative_to(ROOT)))
+        self.assertEqual(offenders, [])
 
     def test_flywheel_family_preserves_logging_and_index_authority(self) -> None:
         log = (ROOT / "plugins/research/skills/flywheel-log/SKILL.md").read_text()

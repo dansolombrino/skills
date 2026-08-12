@@ -37,11 +37,17 @@ repo_path = "/absolute/path/on/rig-4090"
 [machines.rig-3090-ti]
 repo_path = "/absolute/path/on/rig-3090-ti"
 
+[machines.rig-3080-ti]
+repo_path = "/absolute/path/on/rig-3080-ti"
+
 [machines.behemoth]
 repo_path = "/absolute/path/on/behemoth"
 ```
 
-`repo_path` must be absolute. Machine keys must match the canonical names used by dispatch.
+`repo_path` must be absolute, and it must sit on that rig's declared `storage_root`. It is
+supplied by hand — nothing derives it — so declare every rig the project will ever dispatch to
+at once and run `check-paths` before any remote step. Machine keys must match the canonical names
+used by dispatch.
 `git.remote` names the GitHub remote already configured on the hub; every rig must expose the
 same URL under that name. `git.branch` is the branch that dispatch commits are pushed to and that
 rigs may fast-forward. Revision deployment stops rather than switching branches or rewriting a
@@ -52,7 +58,10 @@ selection drive both revision and runtime parity. `rigsync.py` preserves but doe
 
 ## User registry
 
-Keep SSH identity in `~/.config/rigsync/machines.toml`:
+Keep SSH identity in `~/.config/rigsync/machines.toml`. This file is written **once per user, per
+machine**, and every project on that rig reuses it — so it is a prerequisite for scaffolding a
+project, not a step inside one. A rig with no entry here cannot be declared in any `sync.toml`:
+`load_config` stops rather than inventing an SSH alias or a volume.
 
 ```toml
 [machines.rig-4090]
@@ -63,6 +72,11 @@ storage_root = "/absolute/large-volume/path"
 [machines.rig-3090-ti]
 ssh = "rig-3090-ti"
 hostname = "rig-3090-ti"
+storage_root = "/absolute/large-volume/path"
+
+[machines.rig-3080-ti]
+ssh = "rig-3080-ti"
+hostname = "rig-3080-ti"
 storage_root = "/absolute/large-volume/path"
 
 [machines.behemoth]
@@ -117,10 +131,12 @@ rather than inventing a default.
 ### `[machines.<rig>.caches]` — the machine environment
 
 This table is the **single source of truth for a rig's shared caches and scratch**: `HF_HOME`,
-`HF_HUB_CACHE`, `HF_DATASETS_CACHE`, `TORCH_HOME`, `UV_CACHE_DIR`, `TRITON_CACHE_DIR`,
-`XDG_CACHE_HOME`, `TMPDIR`, `WANDB_CACHE_DIR`, `WANDB_DIR`. Keys must be valid environment names
-and every value must be an absolute path. Different rigs mount different volumes, so the values
-differ per machine while the variable names do not.
+`HF_HUB_CACHE`, `HF_DATASETS_CACHE`, `HUGGINGFACE_HUB_CACHE`, `TORCH_HOME`, `UV_CACHE_DIR`,
+`TRITON_CACHE_DIR`, `XDG_CACHE_HOME`, `TMPDIR`, `WANDB_CACHE_DIR`, `WANDB_DIR`. That list is
+`MACHINE_ENV_VARS` in `scripts/rigsync.py`, which is authoritative; this prose reproduces it and a
+test fails when the two drift. Keys must be valid environment names and every value must be an
+absolute path. Different rigs mount different volumes, so the values differ per machine while the
+variable names do not.
 
 `rigsync provision-env --machines <rigs> --confirm` writes them to `~/.config/rigsync/env.sh` on
 each rig and wires that file into the shell startup so **every** shell sees it:
@@ -147,8 +163,62 @@ see is reported as drift. And it reads the project's `.env` on that rig and **fa
 any machine-level variable. Secrets (`HF_TOKEN`), project-scoped storage, and runtime settings
 stay in `.env` and are untouched.
 
+The probe prefers `zsh -c`, because `~/.zshenv` is read by every zsh whether or not anyone is at a
+prompt. On a rig with no zsh it falls back to the bare SSH command, which is the equivalent
+mechanism: sshd invokes the login shell as the remote shell, and bash reads `~/.bashrc` in exactly
+that case — which is what `provision-env`'s prepend targets. A **local** machine with no zsh has no
+such substitute, since nothing wraps the call in a shell at all; `doctor` reports the probe as
+impossible rather than passing a check it did not make.
+
 Omit `caches` on rigs whose environment is managed some other way; `doctor` then skips both checks
 and `.env` remains a legitimate place to set these values.
+
+## Project-scoped storage is repo-relative
+
+Machine-level caches are only half the rule. The other half is that a project's own storage —
+its scratch directories, its per-project caches — is declared **relative to the project root**:
+
+```bash
+CACHE_DIR=storage/cache
+OPENCLIP_CACHE_DIR=storage/openclip
+```
+
+`doctor` already requires `repo_path` to resolve under the rig's `storage_root`, so a repo-relative
+path lands on the large volume on every rig, automatically and without anyone writing a mount point
+down. The consequence is that `.env` contains no rig-specific value at all: the same file is
+correct on `rig-4090`, on `behemoth`, and on a rig that does not exist yet, which is what makes
+`push-env` a copy rather than a per-rig rendering.
+
+Writing these absolute instead reintroduces the problem the registry solved: the value is right on
+the machine it was typed on, names a nonexistent mount on the next, and the natural repair is to
+retarget it at `$HOME` — the small volume on a quota'd rig. `doctor` therefore **warns** on any
+absolute path in `.env`, machine-level variables aside, and `push-env` repeats the warning before
+it copies.
+
+Code reads these through `code/common/paths.py`, which resolves a relative value against the
+project root and leaves an absolute one alone.
+
+## Reading the declarations back
+
+Four commands exist so that no path is ever typed twice. Every one of them reads the two files
+above and nothing else.
+
+- `check-paths` — offline, no SSH. Confirms each `repo_path` sits on that rig's `storage_root`,
+  and lists registry rigs missing from `sync.toml`. `doctor` makes the same comparison, but only
+  after the repo exists on the rig, so a mistyped path is caught there only once something has
+  been cloned into it. Run this **before** `prepare`. Its comparison is lexical; `doctor` still
+  resolves both sides with `readlink -f` on the rig, and that division is deliberate — a symlink
+  can defeat the lexical check and not the resolved one.
+- `repo-path --machine <rig>` — prints that rig's declared project location. `sweep-dispatch`
+  substitutes it into the dispatch, monitor, and recovery commands instead of spelling a path
+  a second time.
+- `storage-env --machine <rig>` — prints `QUOTA_FS`, `MIN_FREE_GB`, and `MIN_FREE_KIB` for a wave
+  script's pre-flight guard. A wave may raise the floor for its own checkpoint footprint; it must
+  not sink below the registry's.
+- `push-env --machine <rig> --dry-run|--confirm` — copies the hub's `.env` to a peer. `.env` is
+  ignored by Git, so a freshly `prepare`d peer has none; nothing else puts one there. It is a
+  protected write that **carries secrets**, it refuses a `.env` that assigns machine-level
+  variables, and it will not overwrite a peer's existing file without `--overwrite`.
 
 ## Environment overrides
 

@@ -28,12 +28,18 @@ values, and material the user supplies explicitly. See "Directives are closed" i
    patch, exact uv version, bounded GPU smoke command, and whether evaluations/plots are committed.
    Ask which single directory name the uv virtual environment should have; suggest `.venv` only as
    an option, and never infer or silently default the name. Reject project-surface collisions.
-   Use the standard cache profile from the templates unless the user explicitly supplies different
-   machine paths or worker count.
-4. Require explicit `scientific_mode: manual|auto` and `engineering_mode: manual|auto`. Never
+4. Confirm the rig set this project will ever dispatch to, and require an entry in the user
+   registry `~/.config/rigsync/machines.toml`
+   (`rig-sync` → `references/configuration.md`) for each one before scaffolding: `ssh`, `hostname`,
+   `storage_root`, plus `quota_fs`/`min_free_gb` on a quota'd rig and `[machines.<rig>.caches]`
+   wherever the rig owns its shared caches. The registry is written once per machine and reused by
+   every project, so a missing entry is a setup step, not a project decision. When one is absent,
+   walk the user through declaring it and never infer a volume, never default a cache or `TMPDIR`
+   to `$HOME` or `~/.cache`, and never copy another project's values.
+5. Require explicit `scientific_mode: manual|auto` and `engineering_mode: manual|auto`. Never
    infer a default. Capture the initial scientific scope, engineering repo/rig/GPU/budget envelope,
    approved destinations, and protected choices.
-5. Ask whether a canonical Flywheel root already exists. Verify an explicit root id/title before
+6. Ask whether a canonical Flywheel root already exists. Verify an explicit root id/title before
    creating `.flywheel.json`; otherwise leave Flywheel setup incomplete and make its write gate
    visible without blocking the local scaffold.
 
@@ -55,14 +61,19 @@ values, and material the user supplies explicitly. See "Directives are closed" i
    scaffold that stops before that gate legitimately has no lock file yet. Never hand-write one.
    `AGENTS.md` holds the project notes; `CLAUDE.md` only points at it, so both hosts read one
    canonical file. Never duplicate the notes across the two.
-   `.env` contains only secrets, machine-varying paths, and machine-local runtime settings. Use the
-   standard cache paths verbatim so projects reuse the same model and dataset caches. Keep token
+   `.env` contains only secrets, repo-relative project-scoped storage, and machine-local runtime
+   settings. Never write an absolute path into it and never write a machine-level cache variable:
+   the rig's shared caches are the registry's to declare and `provision-env`'s to install, and a
+   `.env` line silently overrides them. Written this way `.env` holds nothing rig-specific, which
+   is what lets `rig-sync push-env` copy one file to every peer. Keep token
    values empty unless the user supplies them through an authorized secret source. Mirror every
    key in `.env.example` with empty values and explanatory comments; put Flywheel root placeholders
    there. Create `.flywheel.json` only from a verified root.
 4. Install `.githooks/pre-commit`. It requires a journal update when experiment-relevant files are
    committed; the active layer's mode determines whether the entry is user-approved or delegated.
-5. Create `code/common/run_id.py`, `code/common/status.py`, and `code/common/environment_smoke.py`
+5. Create `code/common/run_id.py`, `code/common/status.py`, `code/common/paths.py` (which resolves
+   the repo-relative storage values in `.env` against the project root), and
+   `code/common/environment_smoke.py`
    (the default `gpu_smoke` target named in `sync.toml`), and copy the canonical
    `assets/environment.py` from the environment-sync skill's own installed directory (the folder
    holding its SKILL.md, not this project) to `code/common/environment.py`.
@@ -75,9 +86,23 @@ values, and material the user supplies explicitly. See "Directives are closed" i
    or overwrite remote history.
 2. Configure `environment-sync`, run doctor, and require the exact environment plus GPU smoke
    gate. Manual mode requires its preview approval; auto mode may confirm inside the envelope.
-3. Configure `rig-sync`, prepare only approved empty rig paths, and run doctor for every intended
-   peer. Preserve non-empty paths and report them blocked. Manual mode requires preview approval;
-   auto mode may confirm inside the envelope.
+3. Bring up every intended rig in this order; each step's failure stops the ones after it.
+   Manual mode requires preview approval; auto mode may confirm inside the envelope.
+   1. Confirm the user registry declares every intended rig (admission above). A rig with no entry
+      cannot be declared in `sync.toml` at all.
+   2. Write `sync.toml` with one hand-supplied absolute `repo_path` per rig, each on that rig's
+      declared `storage_root`. Declare every rig the project will dispatch to, not only the hub —
+      adding one later is a hand edit that no gate prompts for.
+   3. Run `rig-sync check-paths` and require it to pass. This is the only check that catches a
+      `repo_path` off the rig's large volume *before* something is cloned into it.
+   4. Run `rig-sync provision-env --dry-run` then `--confirm` for each rig that declares caches.
+      Without this a rig has no `HF_HOME`/`UV_CACHE_DIR` and falls back to `~/.cache` — the small
+      quota'd volume on a shared machine. It edits shell startup files, so it is a protected write;
+      on a shared machine say aloud that it affects that account's every future shell.
+   5. Run `rig-sync prepare` for each peer. Preserve non-empty paths and report them blocked.
+   6. Run `rig-sync push-env` for each peer. `.env` is ignored by Git, so a fresh clone has none
+      and nothing else will put one there. It moves secrets; treat it as a protected write.
+   7. Run `rig-sync doctor` and the `environment-sync` gates for every intended peer.
 4. Finish the local scaffold when remote setup is unavailable, but report remote execution and
    Flywheel publication as blocked until their independent gates pass.
 

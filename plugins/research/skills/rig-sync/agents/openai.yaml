@@ -1,4 +1,4 @@
 interface:
   display_name: "Rig Sync"
-  short_description: "Deploy exact revisions and synchronize artifacts"
-  default_prompt: "Use $rig-sync to deploy an authorized Research 2.0 revision or synchronize selected artifacts, paired with $environment-sync."
+  short_description: "Declare rig paths, deploy revisions, sync artifacts"
+  default_prompt: "Use $rig-sync to validate declared rig paths, deploy an authorized Research 2.0 revision, or synchronize selected artifacts, paired with $environment-sync."

@@ -23,9 +23,10 @@ by the approved envelope. New destinations and any destructive recovery remain p
 
 ## Safety contract
 
-- Run `doctor` before dispatch, `verify-revision` before every initial/recovery launch, and
-  `status` before artifact movement. Run `environment-sync verify` separately after revision
-  deployment; Git consistency does not prove installed-environment consistency.
+- Run `check-paths` before the first remote step on a project, `doctor` before dispatch,
+  `verify-revision` before every initial/recovery launch, and `status` before artifact movement.
+  Run `environment-sync verify` separately after revision deployment; Git consistency does not
+  prove installed-environment consistency.
 - Show a `--dry-run` before every remote write, then authorize it under the active engineering
   mode for the named source, destination, and selector. The engineering envelope may authorize its commit, tag,
   push, and fast-forward deployment to the named rigs.
@@ -43,6 +44,11 @@ by the approved envelope. New destinations and any destructive recovery remain p
 - `provision-env` edits shell startup files on the rig, so it is a protected write: show its
   `--dry-run` and authorize under the active engineering mode before `--confirm`. On a shared
   machine, say so explicitly — the change affects that account's every future shell.
+- `push-env` places the hub's `.env` on a peer that Git left without one. It is a protected write
+  that **moves secrets**: say so, show the `--dry-run`, and never pass `--overwrite` to clobber a
+  peer's existing file without explicit approval.
+- Never spell a rig's project path or storage floor by hand. Read them back with `repo-path` and
+  `storage-env`; a second copy of a declared fact is a second thing that can be wrong.
 - Stop dispatch when `doctor` fails for an assigned rig.
 - Refuse revision changes when execution paths are dirty, the branch/remote differs, another
   revision has active tmux lanes or `running` statuses, or the repository uses unconfigured
@@ -54,11 +60,16 @@ Set `RIGSYNC_SCRIPT` to the absolute path of this skill's own `scripts/rigsync.p
 "Resolving this skill's own files" above — then run:
 
 ```bash
-python3 "$RIGSYNC_SCRIPT" doctor --machines rig-4090,rig-3090-ti,behemoth
+python3 "$RIGSYNC_SCRIPT" check-paths
+python3 "$RIGSYNC_SCRIPT" repo-path --machine behemoth
+python3 "$RIGSYNC_SCRIPT" storage-env --machine behemoth
+python3 "$RIGSYNC_SCRIPT" doctor --machines rig-4090,rig-3090-ti,rig-3080-ti,behemoth
 python3 "$RIGSYNC_SCRIPT" provision-env --machines rig-4090,rig-3090-ti,behemoth --dry-run
 python3 "$RIGSYNC_SCRIPT" provision-env --machines rig-4090,rig-3090-ti,behemoth --confirm
 python3 "$RIGSYNC_SCRIPT" prepare --machine rig-3090-ti --dry-run
 python3 "$RIGSYNC_SCRIPT" prepare --machine rig-3090-ti --confirm
+python3 "$RIGSYNC_SCRIPT" push-env --machine rig-3090-ti --dry-run
+python3 "$RIGSYNC_SCRIPT" push-env --machine rig-3090-ti --confirm
 python3 "$RIGSYNC_SCRIPT" deploy-revision --wave 20260802-120000 \
   --revision <40-char-sha> --branch main --machines rig-4090,rig-3090-ti --dry-run
 python3 "$RIGSYNC_SCRIPT" deploy-revision --wave 20260802-120000 \
@@ -82,9 +93,14 @@ Artifact selectors are `<group>` or `<group>/<relative/path>`, where `<group>` i
 
 ## Setup and stop conditions
 
-- Require project-local `sync.toml` and user-local `~/.config/rigsync/machines.toml`. For a new
-  destination, preview and authorize `prepare` under the active engineering mode; with `[git]` configured it clones the hub remote
-  into an absent/empty path and refuses a non-empty non-Git directory.
+- Require project-local `sync.toml` and user-local `~/.config/rigsync/machines.toml`. The registry
+  is written once per machine and shared by every project on it, so a rig with no entry cannot be
+  declared at all. Require `check-paths` to pass before `prepare`: it catches a `repo_path` off the
+  rig's `storage_root` while that is still a one-line edit rather than a misplaced clone.
+- For a new destination, preview and authorize `prepare` under the active engineering mode; with
+  `[git]` configured it clones the hub remote into an absent/empty path and refuses a non-empty
+  non-Git directory. Follow it with `push-env`: `.env` is ignored by Git, so the fresh clone has
+  none and nothing else will put one there.
 - Preserve existing registry entries. Add canonical rig aliases only from discovered SSH config
   and hostname facts or explicit user input.
 - Keep project locations only in `sync.toml`; keep SSH identity only in the user registry.
