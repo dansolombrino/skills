@@ -1,6 +1,6 @@
 ---
 name: visualizations
-description: Create or update Research 2.0 plots and figures from provenance-valid experiment evaluation outputs, preserve each single producer's complete numbered hierarchy, run plotting directly on rig-4090 without orchestration or wave machinery, and require user approval of exact titles plus visible metric explanations before every plotting-code edit. Use when the user asks to plot, visualize, chart, make figures from results, or add or modify scripts under visualizations/; do not use to recompute missing evaluation data.
+description: Create or update Research 2.0 plots and figures from provenance-valid experiment evaluation outputs, preserve each single producer's complete numbered hierarchy, run plotting directly on rig-4090 without orchestration or wave machinery, and require user approval of exact titles, metric explanations, and complete export paths before every plotting-code edit. Use when the user asks to plot, visualize, chart, make figures from results, or add or modify scripts under visualizations/; do not use to recompute missing evaluation data.
 ---
 
 # visualizations
@@ -65,17 +65,24 @@ obtain explicit user authorization before moving code or artifacts; never migrat
 - Propose one exact communication specification per plot. Include the title wording, punctuation,
   formatting, and each fixed RUN_ID param as `key={value}` in elected order. Also propose visible
   in-figure text that explains what every plotted metric measures, its higher/lower/target/range/no-
-  universal-direction interpretation, and the text's exact placement. Omit aggregated RUN_ID
-  params; describe aggregation semantically only when it helps interpretation. If none are fixed,
-  state that the semantic title contains no RUN_ID part rather than fabricating one.
+  universal-direction interpretation, the text's exact placement, and every complete
+  project-relative export path rooted at `plots/` and ending in its leaf filename. Omit aggregated
+  RUN_ID params; describe aggregation semantically only when it helps interpretation. If none are
+  fixed, state that the semantic title contains no RUN_ID part rather than fabricating one.
+- If runtime values prevent a concrete path before the code edit, propose the complete path template
+  and identify every placeholder explicitly. Before rendering, show every fully resolved concrete
+  export path, including its leaf filename, and wait for explicit user approval. An approved template
+  does not approve any concrete destination. A new or changed resolved path always reopens approval,
+  even when it conforms to the approved template; do not render before that approval.
 - Cover multiple axes, panels, derived metrics, and visual encodings separately unless one shared
   explanation is unambiguous. Stop rather than guess when metric semantics are not grounded. Put
   the explanation in an axis label, subtitle, legend, annotation, or in-figure caption; surrounding
   prose alone does not satisfy the requirement.
 - Propose only. Wait for the user's explicit acceptance before editing plotting code.
   Re-propose and obtain approval on every later plotting-code edit even when the specification is
-  unchanged. Neither scientific-auto nor engineering-auto may bypass this gate. Repeated renders
-  of unchanged approved code need no new approval.
+  unchanged. Neither scientific-auto nor engineering-auto may bypass this gate. An unchanged-code
+  rerender may reuse approval only when every resolved concrete export path is byte-for-byte
+  identical to the previously explicitly approved concrete path.
 - After rendering, inspect the figure and verify that the accepted text is present, legible, and
   unchanged. Do not silently repair wording or placement; propose any correction and reopen the
   approval gate before editing.

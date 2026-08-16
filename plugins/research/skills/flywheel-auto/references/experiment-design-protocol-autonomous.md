@@ -22,10 +22,17 @@ non-interactive after the control contract is coherent.
 - Require explicit stop recording before any termination.
 - Treat newly authored plot communication as an exception to non-interactivity. Before creating or
   modifying plot-producing code, propose the exact title, visible metric meaning/direction text,
-  units or relevant ranges, and in-figure placement, then wait for explicit user acceptance. Ground
-  the proposal in the control contract or evaluation schema and stop rather than infer missing
-  metric semantics. Persist the accepted specification in control-node `content`; unchanged
-  rerenders do not reopen the gate.
+  units or relevant ranges, in-figure placement, and every complete project-relative `plots/` export
+  path including its leaf filename, then wait for explicit user acceptance. If runtime values prevent
+  a concrete path before the edit, identify every placeholder in the complete path template. Before
+  rendering, show every fully resolved concrete export path, including its leaf filename, and wait
+  for explicit user approval. An approved template does not approve any concrete destination. A new
+  or changed resolved path always reopens approval, even when it conforms to the approved template;
+  do not render before that approval. Ground the proposal in the control contract or evaluation
+  schema and stop rather than infer missing metric semantics. Persist the accepted specification and
+  approved concrete path in control-node `content`. An unchanged-code rerender may reuse approval
+  only when every resolved concrete export path is byte-for-byte identical to the previously
+  explicitly approved concrete path.
 
 ## Required Gate Checks
 

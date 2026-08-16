@@ -66,12 +66,13 @@ Before execution, recover or establish these inputs:
 - Do not rely on fresh user feedback to decide whether the flywheel-auto skill should continue, so later replans can resume from node state alone in a fresh chat.
 - If a branch will author a plot, load the protected plot communication rules in
   [the autonomous experiment gate](references/experiment-design-protocol-autonomous.md). Propose the
-  exact title, visible metric meaning/direction text, and in-figure placement, then wait for explicit
-  user acceptance before creating or modifying plot-producing code. Ground metric meaning,
+  exact title, visible metric meaning/direction text, in-figure placement, and every complete
+  project-relative `plots/` export path including its leaf filename, then wait for explicit user
+  acceptance before creating or modifying plot-producing code. Ground metric meaning,
   direction, units, and relevant ranges in the control contract or evaluation schema; stop rather
   than infer missing semantics. Persist the accepted specification in control-node `content`. This
-  gate overrides autonomy; unchanged rerenders may reuse it, while extracted source figures and
-  external artifacts are exempt.
+  gate overrides autonomy; unchanged-code rerenders may reuse it only for identical resolved export
+  paths, while extracted source figures and external artifacts are exempt.
 
 ## Workflow
 
@@ -192,7 +193,13 @@ match `Budget ceiling`. If the user budgets in another unit, keep both values so
 later continuations can recover the user-facing constraint and the executable
 approval cap from node state alone.
 Replace `none` only after explicit user acceptance, recording each plot's identifier, exact title,
-visible metric explanation, and in-figure placement.
+visible metric explanation, in-figure placement, and approved export path or path template with all
+placeholders identified. Before rendering, show every fully resolved concrete export path, including
+its leaf filename, and wait for explicit user approval. An approved template does not approve any
+concrete destination. A new or changed resolved path always reopens approval, even when it conforms
+to the approved template; do not render before that approval. An unchanged-code rerender may reuse
+approval only when every resolved concrete export path is byte-for-byte identical to the previously
+explicitly approved concrete path.
 
 ## Guardrails
 

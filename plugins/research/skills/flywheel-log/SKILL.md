@@ -209,11 +209,21 @@ satisfy a template.
 
 For every newly agent-authored plot governed by the research plot communication gate, verify before
 upload that the figure visibly and legibly matches the user-accepted specification: exact title,
-metric meaning and directional interpretation, and in-figure placement. If the plot omits or changes
-that text, or the producing workflow cannot establish explicit user acceptance, stop and route the
-correction to the owning plotting workflow; never invent retrospective approval. Do not apply this
-check retroactively to extracted source figures, user-supplied plots, or historical external
-artifacts.
+metric meaning and directional interpretation, in-figure placement, and complete project-relative
+`plots/` export path including its leaf filename. Require evidence that before the plotting-code edit
+the user explicitly approved either that complete concrete path or, when runtime values prevented a
+concrete destination, the complete project-relative `plots/` path template including its
+leaf-filename template and every identified placeholder. Only explicit user approval satisfies this
+gate; scientific-auto and engineering-auto cannot bypass it. Require evidence that every fully
+resolved concrete export path, including its leaf filename, received explicit user approval before
+rendering. An approved template does not approve any concrete destination. A new or changed resolved
+path always reopens approval, even when it conforms to the approved template; do not render before
+that approval. Accept reused approval for an unchanged-code rerender only when every resolved
+concrete export path is byte-for-byte identical to the previously explicitly approved concrete path.
+If the plot omits or changes the accepted text or path, or the producing workflow cannot establish
+explicit user acceptance, stop and route the correction to the owning plotting workflow; never
+invent retrospective approval. Do not apply this check retroactively to extracted source figures,
+user-supplied plots, or historical external artifacts.
 
 For an insight node, require only self-contained `content` with the mandatory TL;DR,
 claim, evidence-node references, reasoning chain, caveats, and implication. Artifacts,

@@ -1,4 +1,4 @@
 interface:
   display_name: "Research Visualizations"
-  short_description: "Create plots from experiment evaluation outputs"
-  default_prompt: "Use $visualizations to preserve the full numbered producer hierarchy and propose exact RUN_ID-aware titles plus visible metric explanations for my approval before editing or rendering changed plotting code."
+  short_description: "Create approved plots from evaluation outputs"
+  default_prompt: "Use $visualizations to preserve the full numbered producer hierarchy and propose exact RUN_ID-aware titles, visible metric explanations, and complete export paths for my approval before editing plotting code."

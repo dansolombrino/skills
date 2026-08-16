@@ -198,7 +198,17 @@ engineering_mode: <manual|auto — required>
 - Delegable fields:
 - Protected choices:
   - Plot communication: approve each exact title, fixed RUN_ID_PARAMS, visible metric explanation,
-    and in-figure placement before every plotting-code edit.
+    in-figure placement, and complete project-relative `plots/` export path including its leaf
+    filename before every plotting-code edit. If runtime values require a path template, the user
+    must explicitly approve before the plotting-code edit the complete project-relative `plots/`
+    path template, including its leaf-filename template and every identified placeholder. Only the
+    user may approve these protected path choices; scientific-auto and engineering-auto cannot
+    bypass them. Before rendering, show every fully resolved concrete export path, including its
+    leaf filename, and wait for explicit user approval. An approved template does not approve any
+    concrete destination. A new or changed resolved path always reopens approval, even when it
+    conforms to the approved template; do not render before that approval. An unchanged-code
+    rerender may reuse approval only when every resolved concrete export path is byte-for-byte
+    identical to the previously explicitly approved concrete path.
   - Additional project-specific choices:
 
 ## Approval

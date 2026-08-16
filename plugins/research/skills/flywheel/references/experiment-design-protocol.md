@@ -120,15 +120,21 @@ If the run is expensive or high-risk, ask for explicit confirmation.
 When the artifact plan includes a newly authored plot, propose its complete communication
 specification before creating or modifying plot-producing code: the exact title, visible in-figure
 text defining every plotted metric and its higher/lower/target/range/no-universal-direction
-interpretation, and exact placement. Cover separate axes, panels, derived metrics, and visual
-encodings unless one shared explanation is unambiguous. Ground the proposal in the experiment brief
-and metric definition; stop rather than guess.
+interpretation, exact placement, and every complete project-relative `plots/` export path including
+its leaf filename. If runtime values prevent a concrete path before the edit, identify every
+placeholder in the complete path template. Before rendering, show every fully resolved concrete
+export path, including its leaf filename, and wait for explicit user approval. An approved template
+does not approve any concrete destination. A new or changed resolved path always reopens approval,
+even when it conforms to the approved template; do not render before that approval. Cover separate
+axes, panels, derived metrics, and visual encodings unless one shared explanation is unambiguous.
+Ground the proposal in the experiment brief and metric definition; stop rather than guess.
 
-The agent proposes only. Wait for the user's explicit acceptance before editing the plot-producing code,
-even in an automatic workflow. Any later code edit reopens the gate; an unchanged rerender does not.
-After rendering, verify that the accepted text is present and legible inside the figure. Extracted
-source figures and pre-existing external artifacts are exempt because this workflow did not author
-them.
+The agent proposes only. Wait for the user's explicit acceptance before editing the plot-producing
+code, even in an automatic workflow. Any later code edit reopens the gate. An unchanged-code
+rerender may reuse approval only when every resolved concrete export path is byte-for-byte
+identical to the previously explicitly approved concrete path. After rendering, verify that the
+accepted text is present and legible inside the figure. Extracted source figures and pre-existing
+external artifacts are exempt because this workflow did not author them.
 
 ## Phase 5: Drive Flywheel
 

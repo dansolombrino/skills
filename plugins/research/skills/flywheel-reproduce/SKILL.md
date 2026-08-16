@@ -68,7 +68,8 @@ Before execution, recover or establish these inputs:
   gate before creating or modifying plot-producing code. Propose the complete specification and
   wait for explicit user acceptance; neither scientific-auto nor engineering-auto may approve it.
   Persist the accepted specification in the validation control node. Reuse it only for unchanged
-  rerenders. Do not apply the gate retroactively to extracted source figures or external artifacts.
+  code whose resolved export paths are identical. Do not apply the gate retroactively to extracted
+  source figures or external artifacts.
 
 ## Workflow
 
@@ -171,7 +172,14 @@ Canonical contract shape:
 
 The `Source or claim nodes under test` line is the recovery anchor for later validation passes. If multiple claim nodes are in scope, list the governing node ids or slugs explicitly.
 Replace `none` only after explicit user acceptance, recording each plot's identifier, exact title,
-visible metric explanation, and in-figure placement.
+visible metric explanation, in-figure placement, and complete project-relative `plots/` export path
+including its leaf filename. When runtime values require a path template, identify every placeholder
+before the code edit. Before rendering, show every fully resolved concrete export path, including its
+leaf filename, and wait for explicit user approval. An approved template does not approve any
+concrete destination. A new or changed resolved path always reopens approval, even when it conforms
+to the approved template; do not render before that approval. An unchanged-code rerender may reuse
+approval only when every resolved concrete export path is byte-for-byte identical to the previously
+explicitly approved concrete path.
 
 ## Source Type Routing
 

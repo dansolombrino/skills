@@ -199,7 +199,14 @@ specification for every plot the code produces:
 - visible in-figure text explaining what every plotted metric measures and whether higher, lower,
   a target/range, or no universal direction is preferable; and
 - the exact placement of that text in an axis label, subtitle, legend, annotation, or in-figure
-  caption.
+  caption; and
+- every complete project-relative export path rooted at `plots/` and ending in its leaf filename.
+
+If runtime values prevent a concrete path before the code edit, propose the complete path template
+and identify every placeholder explicitly. Before rendering, show every fully resolved concrete
+export path, including its leaf filename, and wait for explicit user approval. An approved template
+does not approve any concrete destination. A new or changed resolved path always reopens approval,
+even when it conforms to the approved template; do not render before that approval.
 
 Omit aggregated RUN_ID params and describe aggregation semantically only when useful. When no
 RUN_ID param is fixed, propose a semantic title with no fabricated RUN_ID part and state that fact.
@@ -208,12 +215,14 @@ explanation is unambiguous. Stop rather than guess when metric semantics cannot 
 producer, evaluation schema, or scientific contract. External or historical figures that the
 workflow did not author are not retroactively subject to this gate.
 
-The agent proposes the exact wording, punctuation, formatting, and placement, but only the user may
-accept them. Wait for explicit user approval before the code edit. This is always protected:
-scientific-auto and engineering-auto cannot approve it, and a prior approval does not carry across
-a later plotting-code edit even when the proposed specification remains unchanged. Repeated renders
-of already-approved, unchanged code need no new approval. After rendering, verify that the accepted
-text is present, legible, and unchanged inside the figure; external prose alone is insufficient.
+The agent proposes the exact wording, punctuation, formatting, placement, and export paths, but only
+the user may accept them. Wait for explicit user approval before the code edit. This is always
+protected: scientific-auto and engineering-auto cannot approve it, and a prior approval does not
+carry across a later plotting-code edit even when the proposed specification remains unchanged. An
+unchanged-code rerender may reuse approval only when every resolved concrete export path is
+byte-for-byte identical to the previously explicitly approved concrete path.
+After rendering, verify that the accepted text is present, legible, and unchanged inside the figure;
+external prose alone is insufficient.
 
 ### Plot execution
 
@@ -225,8 +234,8 @@ checkout cannot be identified or reached.
 Do not invoke `scientific-orchestrator`, `sweep-dispatch`, `rig-sync`, or
 `experiments-tracking` for plotting. Do not create orchestration control state, mint a wave id,
 generate a launch script, dispatch work, start tmux, or add/update `EXPERIMENTS.md` rows. Plot
-title approval and the applicable engineering-mode decisions remain in force; this fast path only
-removes experiment-launch machinery from plotting.
+plot-specification approval and the applicable engineering-mode decisions remain in force; this
+fast path only removes experiment-launch machinery from plotting.
 
 ### run_id schema evolution
 

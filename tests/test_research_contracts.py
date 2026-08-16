@@ -56,7 +56,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "3.9.0")
+        self.assertEqual(manifest["version"], "3.9.1")
         self.assertTrue((ROOT / "plugins/research/skills/rig-sync/SKILL.md").is_file())
         self.assertTrue(
             (ROOT / "plugins/research/skills/integrate-reference-code/SKILL.md").is_file()
@@ -104,6 +104,156 @@ class ResearchContractTests(unittest.TestCase):
             self.assertIn("mint a wave id", contract)
             self.assertIn("start tmux", contract)
             self.assertIn("`EXPERIMENTS.md` rows", contract)
+
+    def test_plot_export_paths_are_always_user_owned_and_fully_resolved(self) -> None:
+        skills = ROOT / "plugins/research/skills"
+        contracts = {
+            "visualizations": skills / "visualizations/SKILL.md",
+            "conventions": skills / "research-project-init/references/conventions.md",
+            "execution agreement": (
+                skills / "research-project-init/references/templates.md"
+            ),
+            "orchestrator": (
+                skills / "scientific-orchestrator/references/control-contract.md"
+            ),
+            "flywheel auto": skills / "flywheel-auto/SKILL.md",
+            "autonomous protocol": (
+                skills
+                / "flywheel-auto/references/experiment-design-protocol-autonomous.md"
+            ),
+            "experiment protocol": (
+                skills / "flywheel/references/experiment-design-protocol.md"
+            ),
+            "scientific audit": skills / "critical-scientific-audit/SKILL.md",
+            "flywheel logging": skills / "flywheel-log/SKILL.md",
+            "flywheel reproduction": skills / "flywheel-reproduce/SKILL.md",
+        }
+
+        for name, path in contracts.items():
+            contract = " ".join(path.read_text().lower().split())
+            with self.subTest(contract=name):
+                self.assertIn("project-relative", contract)
+                self.assertIn("`plots/`", contract)
+                self.assertIn("leaf filename", contract)
+                self.assertIn("placeholder", contract)
+                self.assertIn("resolved", contract)
+                self.assertIn("before rendering", contract)
+                self.assertRegex(
+                    contract,
+                    r"fully resolved concrete export path.{0,100}"
+                    r"(?:wait for|received) explicit user approval",
+                )
+                self.assertIn(
+                    "approved template does not approve any concrete destination",
+                    contract,
+                )
+                self.assertIn(
+                    "new or changed resolved path always reopens approval",
+                    contract,
+                )
+                self.assertIn(
+                    "even when it conforms to the approved template",
+                    contract,
+                )
+                self.assertRegex(
+                    contract,
+                    r"do not (?:accept a )?render before that approval",
+                )
+                self.assertIn("byte-for-byte identical", contract)
+                self.assertIn("previously explicitly approved concrete path", contract)
+                self.assertNotRegex(
+                    contract,
+                    r"reopen approval (?:only )?if .{0,60}(?:does not|doesn't) conform",
+                )
+
+        pre_edit_evidence = {
+            "visualizations": (
+                "propose the complete path template",
+                "explicit acceptance before editing plotting code",
+            ),
+            "conventions": (
+                "propose the complete path template",
+                "explicit user approval before the code edit",
+            ),
+            "execution agreement": (
+                "user must explicitly approve before the plotting-code edit",
+                "leaf-filename template and every identified placeholder",
+            ),
+            "orchestrator": (
+                "require user approval of the complete plot communication specification before every plotting-code creation or modification",
+                "complete path template",
+            ),
+            "flywheel auto": (
+                "explicit user acceptance before creating or modifying plot-producing code",
+                "approved export path or path template with all placeholders identified",
+            ),
+            "autonomous protocol": (
+                "before creating or modifying plot-producing code, propose",
+                "path including its leaf filename, then wait for explicit user acceptance",
+                "complete path template",
+            ),
+            "experiment protocol": (
+                "specification before creating or modifying plot-producing code",
+                "complete path template",
+                "explicit acceptance before editing the plot-producing code",
+            ),
+            "scientific audit": (
+                "require evidence that before the plotting-code edit the user explicitly approved either",
+                "leaf-filename template and every identified placeholder",
+            ),
+            "flywheel logging": (
+                "require evidence that before the plotting-code edit the user explicitly approved either",
+                "leaf-filename template and every identified placeholder",
+            ),
+            "flywheel reproduction": (
+                "gate before creating or modifying plot-producing code",
+                "wait for explicit user acceptance",
+                "replace `none` only after explicit user acceptance",
+                "when runtime values require a path template, identify every placeholder before the code edit",
+            ),
+        }
+        ownership_evidence = {
+            "visualizations": (
+                "neither scientific-auto nor engineering-auto may bypass this gate",
+            ),
+            "conventions": (
+                "only the user may accept them",
+                "scientific-auto and engineering-auto cannot approve it",
+            ),
+            "execution agreement": (
+                "only the user may approve these protected path choices",
+                "scientific-auto and engineering-auto cannot bypass them",
+            ),
+            "orchestrator": ("auto modes cannot approve it",),
+            "flywheel auto": ("this gate overrides autonomy",),
+            "autonomous protocol": (
+                "the agent cannot approve its own proposal or derive acceptance from autonomous mode",
+            ),
+            "experiment protocol": (
+                "the agent proposes only",
+                "even in an automatic workflow",
+            ),
+            "scientific audit": (
+                "only explicit user approval satisfies this gate",
+                "scientific-auto and engineering-auto cannot bypass it",
+            ),
+            "flywheel logging": (
+                "only explicit user approval satisfies this gate",
+                "scientific-auto and engineering-auto cannot bypass it",
+            ),
+            "flywheel reproduction": (
+                "neither scientific-auto nor engineering-auto may approve it",
+            ),
+        }
+
+        for name, path in contracts.items():
+            contract = " ".join(path.read_text().lower().split())
+            with self.subTest(contract=name, rule="pre-edit approval"):
+                for evidence in pre_edit_evidence[name]:
+                    self.assertIn(evidence, contract)
+            with self.subTest(contract=name, rule="user ownership"):
+                for evidence in ownership_evidence[name]:
+                    self.assertIn(evidence, contract)
 
     def test_single_producer_plots_preserve_full_experiment_hierarchy(self) -> None:
         skills = ROOT / "plugins/research/skills"

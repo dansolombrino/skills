@@ -109,10 +109,20 @@ No audit verdict grants execution permission. Leakage, contaminated evaluation, 
 - canonical prompt rendering, generation prefix, scoring span, and special tokens for LLM or VLM work;
 - mismatch between the command, config, data path, metric, and reported method;
 - artifact overwrite, fabricated or inconsistent plots, silently skipped failures, or summary-number mismatch;
-- for a newly agent-authored plot, missing explicit user approval of its exact title, visible metric
-  meaning/direction text, and in-figure placement, or a rendered figure that does not legibly match
-  that accepted specification; treat this as a protected-contract violation rather than optional
-  polish, without retroactively applying it to extracted, user-supplied, or historical figures;
+- for a newly agent-authored plot, require evidence that before the plotting-code edit the user
+  explicitly approved either its complete project-relative `plots/` export path including its leaf
+  filename or, when runtime values prevented a concrete destination, the complete project-relative
+  `plots/` path template including its leaf-filename template and every identified placeholder.
+  Only explicit user approval satisfies this gate; scientific-auto and engineering-auto cannot
+  bypass it. Require evidence that every fully resolved concrete export path, including its leaf
+  filename, received explicit user approval before rendering. An approved template does not approve
+  any concrete destination. A new or changed resolved path always reopens approval, even when it
+  conforms to the approved template; do not accept a render before that approval. Approval reused
+  for unchanged code is valid only when every resolved concrete export path is byte-for-byte
+  identical to the previously explicitly approved concrete path. Also reject a rendered figure that
+  does not legibly match the accepted specification. Treat these as protected-contract violations
+  rather than optional polish, without retroactively applying them to extracted, user-supplied, or
+  historical figures;
 - missing information needed to reproduce the decisive result;
 - plan drift, stale versions, unauthorized choices, unresolved protected blanks,
   or execution outside allowed scope.
