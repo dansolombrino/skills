@@ -1,6 +1,6 @@
 ---
 name: scientific-orchestrator
-description: Coordinate a complete scientific research loop by framing the question, grounding assumptions in literature, delegating bounded analysis, handing approved research steps to the research engineering skills, auditing returned evidence, and selecting the next branch. Use for nontrivial multi-stage research programs or autonomous scientific iteration; do not use for a single already-specified experiment or routine sweep execution.
+description: "Coordinate nontrivial scientific research through persisted control state and bounded subagents: frame the question, ground literature, challenge assumptions, hand approved steps to engineering skills, audit evidence, and choose the next branch. Use for multi-stage programs or autonomous scientific iteration, not a single specified experiment or routine sweep."
 ---
 
 # Scientific Orchestrator
@@ -40,14 +40,29 @@ Use `research-housekeeping` to establish and reconcile the records. Keep:
 Link records with experiment name, run id, wave id, source revision, artifact path, and Flywheel
 node id. Do not copy raw logs or factual run tables into program files.
 
+## Main-thread control plane
+
+Keep the main orchestrator focused on the user, control state, delegation, decisions, approvals,
+and synthesis. Delegate every bounded work package that requires substantive repository
+exploration, implementation, testing, external research, log analysis, monitoring, or independent
+verification. The main orchestrator may directly read applicable skill contracts and canonical
+control records, update those records, inspect concise worker returns, resolve cross-worker
+conflicts, and perform small integration checks needed to choose the next assignment.
+
+Before every delegation, update `program.md` and append a pending assignment to the active
+`orchestration/<phase_id>/agent-trace.jsonl`. Immediately after the worker returns, persist its
+status, evidence and artifact paths, material risks, and exact next action before delegating again
+or reporting to the user. Treat these records, not the chat transcript, as the continuity source
+after compaction, resume, or orchestrator replacement.
+
 ## Scientific loop
 
 1. **Frame.** Record the question, active claim, hypothesis, plausible alternatives, evidence
    stage, evaluation boundary, decisive evidence, success/kill criteria, budget, and stop rule.
-2. **Ground.** Invoke `science-literature-plan` for material external uncertainty. For a
+2. **Ground.** Delegate `science-literature-plan` for material external uncertainty. For a
    nontrivial question, delegate 4-5 bounded paper-explorer assignments in concurrency-safe waves,
    then reconcile them rather than voting.
-3. **Challenge.** Invoke `assumption-breaker-plan` before an expensive, confirmatory, or
+3. **Challenge.** Delegate `assumption-breaker-plan` before an expensive, confirmatory, or
    irreversible branch and whenever the current explanation is weak or repeatedly failing.
 4. **Choose.** Rank the smallest experiments that discriminate among live explanations. In
    scientific-manual mode, preview the recommendation and wait for approval. In scientific-auto
@@ -57,7 +72,7 @@ node id. Do not copy raw logs or factual run tables into program files.
    `sweep-dispatch` as required. Do not choose their technical representation here.
 6. **Receive.** Require the engineering return packet. Treat `EXPERIMENTS.md`, provenance-valid
    status, and artifacts as evidence; do not accept a prose success claim without them.
-7. **Audit.** Invoke `critical-scientific-audit` when evidence is decisive, confirmatory, final,
+7. **Audit.** Delegate `critical-scientific-audit` when evidence is decisive, confirmatory, final,
    claim-promoting, materially expensive, or validity is uncertain. Apply its allowed claim and
    minimum closure path.
 8. **Decide.** Mark the hypothesis supported, falsified, narrowed, or unresolved; select the next
@@ -70,8 +85,18 @@ Repeat only while the approved stop rule, budget, scope, and terminal condition 
 
 ## Delegation and concurrency
 
-Delegate only bounded tasks with explicit inputs, output schema, write scope, stop conditions, and
-source limits. The orchestrator remains the sole synthesizer and decision-register writer.
+Delegate with a fresh or minimal-context worker whenever the host supports it; do not copy or fork
+the full main transcript. Give each worker the assignment packet in
+[references/subagent-roles.md](references/subagent-roles.md), full freedom inside that packet, and
+a disjoint write scope when it may edit. Workers must not update `program.md`, the decision
+register, or shared control traces, and must not recursively delegate unless the assignment
+explicitly authorizes it. The orchestrator remains their sole reconciler, synthesizer, and
+decision-register writer.
+
+Require detailed findings to land at stable artifact or report paths and require only the concise
+return envelope in the main thread. Use source-read-only workers for exploration and verification,
+granting each only its assigned report path outside project sources and shared control records.
+Run overlapping source write scopes sequentially; parallelize only independent scopes.
 
 Run at most `available concurrent subagents minus one` workers, reserving the remainder for the
 orchestrator itself; never assume a fixed slot count, and never stop merely because concurrency is
@@ -79,6 +104,10 @@ limited. When the ceiling is unknown, treat it as the number the host actually s
 Satisfy larger literature coverage in waves, and run explorers sequentially rather than skipping
 them. Rig-monitoring subagents hold their slots for the whole wave, so when a wave is live, defer
 literature explorers and say so instead of silently dropping them.
+
+If no worker slot is available, wait for one or schedule a later wave. Do not silently execute the
+substantive assignment in the main thread. Before completing the loop, delegate an independent
+verification pass and reconcile its evidence into the canonical records.
 
 ## Mode behavior
 

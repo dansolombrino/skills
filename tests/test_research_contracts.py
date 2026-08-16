@@ -56,7 +56,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "3.8.0")
+        self.assertEqual(manifest["version"], "3.9.0")
         self.assertTrue((ROOT / "plugins/research/skills/rig-sync/SKILL.md").is_file())
         self.assertTrue(
             (ROOT / "plugins/research/skills/integrate-reference-code/SKILL.md").is_file()
@@ -226,6 +226,43 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("Flywheel as curated scientific lineage", orchestrator)
         self.assertIn("Never introduce a generic `outputs/` tree", housekeeping)
         self.assertIn("Never edit it from this skill", housekeeping)
+
+    def test_orchestrator_is_a_compaction_safe_control_plane(self) -> None:
+        skill_root = ROOT / "plugins/research/skills/scientific-orchestrator"
+        orchestrator = (skill_root / "SKILL.md").read_text()
+        roles = (skill_root / "references/subagent-roles.md").read_text()
+        housekeeping = (
+            ROOT / "plugins/research/skills/research-housekeeping/SKILL.md"
+        ).read_text()
+        orchestrator_words = " ".join(orchestrator.split())
+        roles_words = " ".join(roles.split())
+        housekeeping_words = " ".join(housekeeping.split())
+
+        self.assertIn("## Main-thread control plane", orchestrator)
+        self.assertIn("do not copy or fork the full main transcript", orchestrator_words)
+        self.assertIn(
+            "Do not silently execute the substantive assignment", orchestrator_words
+        )
+        self.assertIn(
+            "sole reconciler, synthesizer, and decision-register writer",
+            orchestrator_words,
+        )
+        self.assertIn("## Assignment packet", roles)
+        self.assertIn("Do not pass the main transcript", roles_words)
+        self.assertIn("Do not return raw logs", roles_words)
+        self.assertIn("first recovery read after compaction", housekeeping_words)
+        self.assertIn("sole writer of `program.md`", housekeeping_words)
+        self.assertIn("Source-read-only workers may write only", roles_words)
+        for trace_field in (
+            '"assignment_id"',
+            '"success_condition"',
+            '"report_path"',
+            '"stop_condition"',
+            '"conclusion"',
+            '"validation"',
+            '"next_action"',
+        ):
+            self.assertIn(trace_field, housekeeping)
 
     def test_project_init_is_fresh_only_and_scaffolds_research_2_records(self) -> None:
         init_root = ROOT / "plugins/research/skills/research-project-init"

@@ -1,6 +1,6 @@
 ---
 name: research-housekeeping
-description: Maintain Research 2.0 scientific program records and local orchestration hygiene without owning experiment state or publishing results. Use when initializing, reconciling, compacting, or checking program.md, program phase reports, decision history, subagent traces, failure notes, and Flywheel logger handoffs during a nontrivial research workflow.
+description: "Maintain compaction-safe Research 2.0 control records: program.md, phase reports, decision history, subagent traces, failure notes, and logger handoffs. Use when initializing, reconciling, resuming, or checking a nontrivial research workflow; do not own experiment state or publish results."
 ---
 
 # Research Housekeeping
@@ -27,9 +27,15 @@ Use these roles:
 - `EXPERIMENTS.md`: sole factual run-state authority. Never edit it from this skill.
 - `JOURNAL.md`: append-only narrative owned by `research-journal`; do not duplicate it here.
 
-Keep the compact `program.md` block to: active request, current phase, agreement version,
-scientific/engineering modes, scientific question, next decision, active engineering handoff,
-subagent plan, short checklist/backlog, Flywheel disposition, and links to detailed records.
+Keep the compact `program.md` block to: last update, active request, current phase, agreement
+version, scientific/engineering modes, scientific question, next decision, active engineering
+handoff, active and queued subagents, short checklist/backlog, exact next action, Flywheel
+disposition, and links to detailed records.
+
+Treat `program.md` as the first recovery read after compaction, resume, or orchestrator
+replacement. Follow its links only for the active agreement, material decisions, current phase,
+and unresolved worker assignments. Reconcile factual run claims from `EXPERIMENTS.md` and
+provenance-valid artifacts; never reconstruct state from the chat transcript or raw logs.
 
 ## Start Or Update
 
@@ -47,6 +53,12 @@ subagent plan, short checklist/backlog, Flywheel disposition, and links to detai
 - If `program.md` is stale, rewrite it as the current execution index rather than appending a journal.
 - If phase detail would make `program.md` long, move it into `program/<phase_id>-<slug>.md` and link it from `program.md`.
 - If parallel agents or long-running runs are planned, create or update `orchestration/<phase_id>/summary.md` and `orchestration/<phase_id>/agent-trace.jsonl`.
+- Before spawning a worker, make `program.md` current and append its pending assignment to the
+  phase trace. Immediately after its return, record the outcome, stable evidence or artifact paths,
+  unresolved risks, and exact next action before any new delegation or user-facing synthesis.
+- During an active orchestrated program, keep the main orchestrator as the sole writer of
+  `program.md`, `program/decision-register.md`, and shared control traces. A delegated housekeeper
+  audits those records read-only and returns proposed corrections; it never applies them itself.
 - Before marking a task launchable, verify that its agreement and plan versions are current, blocking decisions are resolved or delegated, and that exact plan version has execution permission. Record mismatches as blockers; do not silently repair ownership or permission.
 - Treat only blank fields explicitly tagged `delegable` in an approved contract, or choices owned
   by the applicable auto mode inside its approved scope, as delegation. Treat blank
@@ -113,10 +125,14 @@ Each item must include enough detail to verify it later: agent/thread name or di
 For each delegated chunk, record:
 
 ```json
-{"agent":"<role/name>","objective":"<task>","agreement_version":"<version>","phase_id":"<phase>","decision_ids":[],"write_scope":"<paths or read-only>","commands":[],"files_touched":[],"outputs":[],"status":"pending|completed|failed|blocked","risks":[]}
+{"assignment_id":"<id>","agent":"<role/name>","objective":"<task>","success_condition":"<condition>","agreement_version":"<version>","phase_id":"<phase>","decision_ids":[],"write_scope":"<source paths or source-read-only>","report_path":"<path>","stop_condition":"<condition>","commands":[],"files_touched":[],"outputs":[],"conclusion":"<concise result or null while pending>","validation":"<result or null while pending>","next_action":"<exact action or null while pending>","status":"pending|completed|failed|blocked","risks":[]}
 ```
 
-Keep traces small and factual. Do not duplicate full logs; point to stable output paths and summarize decisions. Append decision, progress, and deviation events to `orchestration/control/events.jsonl` with the applicable agreement version, phase id, triggering fact, action taken, and whether the orchestrator must notify the user; never rewrite prior control events.
+Keep traces small and factual. Do not duplicate full logs or worker prose; point to stable output
+paths and summarize only the conclusion, material evidence, risks, and stop status. Append decision,
+progress, and deviation events to `orchestration/control/events.jsonl` with the applicable
+agreement version, phase id, triggering fact, action taken, and whether the orchestrator must
+notify the user; never rewrite prior control events.
 
 For an operational incident, record the tier, causal failure, failed run ids,
 affected runtime contract, smallest fix, targeted checks, preflight outcome, and

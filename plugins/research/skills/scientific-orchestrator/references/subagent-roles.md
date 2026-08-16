@@ -4,6 +4,21 @@ Use these contracts when dedicated installed agent profiles are unavailable. Pas
 task, relevant repository paths, and required sources; do not leak the orchestrator's preferred
 answer.
 
+## Assignment packet
+
+Give every worker:
+
+- assignment id, objective, and success condition;
+- agreement version, phase id, relevant decision ids, and only the constraints needed locally;
+- exact input paths, allowed sources, and source-read-only or disjoint source write scope;
+- required skill, sole report or artifact path, validation, and stop condition;
+- permission and resource boundaries inherited from the active agreement.
+
+Start the worker with fresh or minimal conversation context. Do not pass the main transcript.
+Source-read-only workers may write only their assigned report path. Workers execute directly
+inside the packet, do not mutate shared control records, and do not delegate again unless the
+packet explicitly authorizes nested delegation.
+
 ## Paper explorer
 
 Assign at most 3-4 primary sources or one narrow method family. Require: source identity and links,
@@ -25,11 +40,13 @@ It must not run experiments, change code, fabricate evidence, or publish incompl
 
 ## Housekeeper
 
-Give the active agreement/phase and record paths. Require use of `research-housekeeping`, factual
-referential updates only, no `EXPERIMENTS.md` mutation, no Flywheel publication, and no rewriting of
-append-only records.
+Give the active agreement/phase and record paths. Require use of `research-housekeeping`, a
+read-only audit, proposed factual corrections, no shared-record or `EXPERIMENTS.md` mutation, no
+Flywheel publication, and no rewriting of append-only records.
 
 ## Required return envelope
 
-Every worker returns: assignment, conclusion, supporting evidence/paths, assumptions, unresolved
-risks, files touched, tools/commands used, and whether its stop condition was reached.
+Put detailed findings in the assigned artifact or report path. Return only a concise envelope to
+the orchestrator: assignment id, conclusion, supporting evidence or artifact paths, files touched,
+validation result, unresolved material risks, and whether the stop condition was reached. Do not
+return raw logs, long excerpts, or a chronological tool narrative.
