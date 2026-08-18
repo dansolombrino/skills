@@ -35,9 +35,31 @@ Integrity gates and protected choices never become delegable.
 1. List the experiment's config params and propose which subset (and order) uniquely identifies a run, with reasoning.
 2. In manual mode, iterate until the user approves. In auto mode, elect the smallest ordered subset
    that prevents collisions, record the reasoning in the handoff/decision register, and proceed.
-3. Record it as `RUN_ID_PARAMS = [...]` in the experiment's `.py` — and make ALL artifact paths go through `code/common/run_id.py` helpers (`run_id_path` for checkpoints/evaluations/plots, `run_id_flat` for scripts/logs/wandb). The helpers percent-encode unsafe components by default. Any path-form deviation is owned by the active engineering mode.
-4. Wire `guard_run_config(cfg, RUN_ID_PARAMS, <eval run dir>)` into every training/eval script, **before the StatusWriter starts and before any artifact is written** — it snapshots the full config to `.run_config.json` and hard-fails on run_id collisions (same run_id, different config).
-5. Mirror the decision in the experiment's EXPERIMENTS.md section header (see the `experiments-tracking` skill).
+3. Construct and show the complete current canonical `nested` path templates first for
+   checkpoints, evaluations, and every run-ID-derived plot. Immediately afterward, and separately,
+   show exactly one `collapsed-v1` alternative that collapses all eligible ordered
+   `RUN_ID_PARAMS` into one component using the exact existing percent-encoded `run_id_flat`
+   pairs. Do not construct or show an alternative when fewer than two params are eligible. When it
+   is eligible, showing exactly one alternative is mandatory. The
+   user must explicitly approve `collapsed-v1`; otherwise `nested` is the default regardless of
+   engineering mode. Preflight exact component and full-path limits and collisions; never silently
+   hash, truncate, drop params, fall back, or accept an ambiguous mapping.
+   For any checkpoint, evaluation, or run-ID-derived plot path with zero or one applicable fixed
+   param, `nested` and `collapsed-v1` are byte-identical: show the path once, not as a separate
+   alternative; label it as both layouts' rendering and state the experiment's selected or existing
+   pinned literal. That one path is approvable under the pin. This does not relax
+   the exactly-one alternative rule for any path with two or more applicable fixed params.
+4. Record `RUN_ID_PARAMS = [...]` and the one authoritative experiment-wide
+   `RUN_ID_PATH_LAYOUT = "nested"|"collapsed-v1"` beside it in the experiment's `.py`; mirror
+   both in the experiment's EXPERIMENTS.md section header. Make ALL artifact paths go through
+   `code/common/run_id.py`: checkpoints, evaluations, and run-ID-derived plots call
+   `run_id_path(..., layout=RUN_ID_PATH_LAYOUT)` with their applicable ordered params, while
+   scripts/logs/WandB and EXPERIMENTS.md row identity keep using `run_id_flat` unchanged. Never
+   mix layouts across the authoritative artifact surfaces.
+5. Wire `guard_run_config(cfg, RUN_ID_PARAMS, <eval run dir>)` into every training/eval script,
+   **before the StatusWriter starts and before any artifact is written** — it snapshots the full
+   config to `.run_config.json` and hard-fails on run_id collisions (same run_id, different
+   config).
 
 ## 2b. run_id evolution — config changes to an EXISTING experiment
 
@@ -46,11 +68,22 @@ Any change that adds/removes/renames a behavior-affecting config param (integrat
 1. **STOP before any new run launches** and re-run the election: does the new param join
    `RUN_ID_PARAMS`? The active engineering-mode owner may keep it out only by explicitly recording
    why it is non-identifying.
-2. If it joins, choose between **backfill-rename** within this supported project (insert
-   `param=<old implicit value>` into existing artifact dirs) and freezing the old tree for a new
-   sub-experiment. Manual mode waits for approval; auto mode records and executes the safe choice
-   inside the envelope.
-3. Same turn: update the `RUN_ID_PARAMS` constant, the EXPERIMENTS.md section header + rows (`experiments-tracking` skill), and suggest a JOURNAL.md entry for the schema change.
+2. Inspect checkpoints, evaluations, plots, and wave records for this experiment.
+   If none exists, update `RUN_ID_PARAMS` and the EXPERIMENTS.md section header normally before the
+   first launch.
+3. Once any checkpoint, evaluation, or plot output or wave README/script exists,
+   `RUN_ID_PARAMS` is immutable under both `nested` and `collapsed-v1`. Never change the identity
+   schema in place. Create a new numbered sub-experiment with the re-elected params and its own
+   pinned layout; leave the old experiment and all of its records untouched.
+
+## 2c. layout immutability for an EXISTING experiment
+
+Inspect checkpoints, evaluations, plots, and wave records before offering a layout
+choice. If none exists, present `nested` then the eligible `collapsed-v1` alternative under section
+2 and record the chosen literal. Once any output or wave record exists, preserve the checked-in
+renderer and `RUN_ID_PATH_LAYOUT` forever. Never propose or perform an in-place layout change, even
+when zero/one-param renderings are byte-identical. To use another layout, create a new numbered
+sub-experiment and leave the old experiment untouched.
 
 ## 3. Config
 
@@ -107,13 +140,13 @@ display-only status contract makes the repository unsupported; do not upgrade it
 
 1. Use wandb for this experiment?
 2. **The ENTIRE resolved config is logged** — `wandb.init(config=wandb_config(cfg), ...)` from
-   `code/common/run_id.py`, which returns the same full payload as the `.run_config.json`
-   snapshot plus a `provenance` namespace (`wave_id`, `gpu`, `source_revision`, `source_tag`,
-   `environment_fingerprint`, from wave env vars). Never a hand-picked subset, never
-   `RUN_ID_PARAMS` only: a run's config, like its run name, **cannot be backfilled**, so a
-   partial config leaves the sweep permanently unfilterable on exactly the params nobody thought
-   to log — and provenance is what lets you filter by tested commit, rig/GPU, and environment.
-   Not a mode decision; no owner may narrow it.
+   `code/common/run_id.py`, which returns the same full payload as the `.run_config.json` snapshot
+   plus a `provenance` namespace (`wave_id`, `gpu`, `source_revision`, `source_tag`,
+   `environment_fingerprint`, from wave env vars). Never a hand-picked subset, never `RUN_ID_PARAMS`
+   only: a run's config, like its run name, **cannot be changed retroactively**, so a partial config
+   leaves the sweep permanently unfilterable on exactly the params nobody thought to log — and
+   provenance is what lets you filter by tested commit, rig/GPU, and environment. Not a mode
+   decision; no owner may narrow it.
 3. Resolve metrics and their names/keys with the applicable engineering-mode owner.
 4. Use project = research project, group = `NNN_experiment`, run name = flat run_id as the proposal.
    Manual mode waits for approval; auto mode may adopt or safely refine it inside the envelope.

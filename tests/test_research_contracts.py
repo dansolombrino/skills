@@ -33,6 +33,17 @@ def run_id_template() -> str:
     return template_block("code/common/run_id.py")
 
 
+def markdown_template_block(heading: str) -> str:
+    """The Markdown body templates.md publishes under one named section."""
+    match = re.search(
+        rf"## {re.escape(heading)}\n\n```markdown\n(.*?)\n```",
+        PROJECT_TEMPLATES.read_text(),
+        re.DOTALL,
+    )
+    assert match is not None, heading
+    return match.group(1)
+
+
 def status_provenance_fields() -> frozenset[str]:
     """Wave provenance as the canonical StatusWriter records it -- the one authority."""
     block = template_block("code/common/status.py")
@@ -56,7 +67,20 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "3.9.1")
+        self.assertEqual(manifest["version"], "3.10.0")
+        claude_manifest = json.loads(
+            (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
+        )
+        claude_marketplace = json.loads(
+            (ROOT / ".claude-plugin/marketplace.json").read_text()
+        )
+        research_entry = next(
+            plugin
+            for plugin in claude_marketplace["plugins"]
+            if plugin["name"] == "research"
+        )
+        self.assertEqual(claude_manifest["version"], manifest["version"])
+        self.assertEqual(research_entry["version"], manifest["version"])
         self.assertTrue((ROOT / "plugins/research/skills/rig-sync/SKILL.md").is_file())
         self.assertTrue(
             (ROOT / "plugins/research/skills/integrate-reference-code/SKILL.md").is_file()
@@ -288,10 +312,803 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn(nested, visualization)
         self.assertIn(nested, conventions)
         self.assertNotIn("plots/NNN_exp/<script_stem>/", visualization)
-        self.assertIn("never migrate it silently", visualization)
+        self.assertIn("stop; do not move or rewrite artifacts", visualization)
+        self.assertIn("new numbered sub-experiment", visualization)
         self.assertIn("preserve it unchanged", design)
         self.assertIn("complete numbered `<experiment_path>`", housekeeping)
         self.assertIn("full numbered producer hierarchy", metadata)
+
+    def test_run_id_path_layout_renderings_are_compatible_and_lossless(self) -> None:
+        namespace: dict[str, object] = {}
+        exec(compile(run_id_template(), "run_id.py", "exec"), namespace)
+        run_id_path = namespace["run_id_path"]
+        run_id_flat = namespace["run_id_flat"]
+
+        cfg = {
+            "seed value": 7,
+            "model/type": "wide, residual/net",
+            "structured": {"z": "x/y", "a": [1, 2]},
+        }
+        params = ["seed value", "model/type", "structured"]
+
+        nested = run_id_path(cfg, params)
+        explicit_nested = run_id_path(cfg, params, layout="nested")
+        flat = run_id_flat(cfg, params)
+        collapsed = run_id_path(cfg, params, layout="collapsed-v1")
+
+        # Omitting layout retains the long-standing nested behavior exactly.
+        self.assertEqual(nested, explicit_nested)
+        self.assertEqual(nested.parts, tuple(flat.split(",")))
+
+        # collapsed-v1 is one component containing exactly run_id_flat: same
+        # elected order, same delimiters, and the same canonical encoding.
+        self.assertEqual(collapsed.parts, (flat,))
+        self.assertEqual(str(collapsed), flat)
+        self.assertTrue(flat.startswith("seed%20value=7,model%2Ftype="))
+        self.assertIn("wide%2C%20residual%2Fnet", flat)
+        self.assertIn(
+            "structured=%7B%22a%22%3A%5B1%2C2%5D%2C%22z%22%3A%22x%2Fy%22%7D",
+            flat,
+        )
+        self.assertNotIn("wide, residual/net", flat)
+
+        with self.assertRaisesRegex(ValueError, "invalid run_id path layout"):
+            run_id_path(cfg, params, layout="collapsed")
+
+    def test_run_path_layout_is_one_choice_across_artifact_surfaces(self) -> None:
+        skills = ROOT / "plugins/research/skills"
+        design = (skills / "experiment-design/SKILL.md").read_text()
+        conventions = (
+            skills / "research-project-init/references/conventions.md"
+        ).read_text()
+        dispatch = (skills / "sweep-dispatch/SKILL.md").read_text()
+        dispatch_templates = (
+            skills / "sweep-dispatch/references/templates.md"
+        ).read_text()
+
+        for name, contract in {
+            "experiment design": design,
+            "project conventions": conventions,
+            "dispatch": dispatch,
+        }.items():
+            with self.subTest(contract=name):
+                self.assertIn("RUN_ID_PATH_LAYOUT", contract)
+                self.assertIn("checkpoints", contract)
+                self.assertIn("evaluations", contract)
+                self.assertIn("plots", contract)
+                self.assertIn("run_id_path", contract)
+                self.assertIn("run_id_flat", contract)
+
+        compact_design = " ".join(design.split())
+        self.assertIn("one authoritative experiment-wide", compact_design)
+        self.assertIn("Never mix layouts", compact_design)
+        self.assertIn(
+            "Do not construct or show an alternative when fewer than two params are eligible",
+            compact_design,
+        )
+        compact_conventions = " ".join(conventions.split())
+        self.assertIn("one experiment-wide layout", compact_conventions)
+        self.assertIn("must all call `run_id_path", compact_conventions)
+        self.assertIn("show exactly one separately labeled", compact_conventions)
+        self.assertIn("show none when fewer than two are eligible", compact_conventions)
+        self.assertIn("must use the same selected layout", dispatch)
+        for field in (
+            "CHECKPOINT_DIR",
+            "EVAL_DIR",
+            "STATUS_PATH",
+            "ARTIFACT",
+        ):
+            self.assertIn(field, dispatch_templates)
+        self.assertIn("materialize the resulting exact", dispatch_templates)
+        self.assertIn("from the same selected `RUN_ID_PATH_LAYOUT`", dispatch_templates)
+
+    def test_path_layout_never_changes_flat_run_identity(self) -> None:
+        skills = ROOT / "plugins/research/skills"
+        design = " ".join((skills / "experiment-design/SKILL.md").read_text().split())
+        conventions = " ".join(
+            (skills / "research-project-init/references/conventions.md")
+            .read_text()
+            .split()
+        )
+        dispatch = " ".join((skills / "sweep-dispatch/SKILL.md").read_text().split())
+        tracking = " ".join(
+            (skills / "experiments-tracking/SKILL.md").read_text().split()
+        )
+
+        self.assertIn(
+            "scripts/logs/WandB and EXPERIMENTS.md row identity keep using `run_id_flat` unchanged",
+            design,
+        )
+        self.assertIn(
+            "`scripts/` and `logs/` folders, WandB run names, log-line identity, and EXPERIMENTS.md row identity continue to use `run_id_flat`",
+            conventions,
+        )
+        self.assertIn(
+            "never changes scripts, logs, or wandb naming: those remain flat",
+            dispatch.lower(),
+        )
+        self.assertIn("run identity is semantic", tracking.lower())
+        self.assertIn("independent of whether", tracking.lower())
+
+    def test_identifying_param_schema_evolution_before_outputs_respects_the_pin(self) -> None:
+        namespace: dict[str, object] = {}
+        exec(compile(run_id_template(), "run_id.py", "exec"), namespace)
+        run_id_path = namespace["run_id_path"]
+        run_id_flat = namespace["run_id_flat"]
+
+        old_cfg = {"model": "vit/base", "seed": 3}
+        backfilled_cfg = {"model": "vit/base", "precision": "bf16", "seed": 3}
+        old_params = ["model", "seed"]
+        new_params = ["model", "precision", "seed"]
+        old_plot_params = ["model"]
+        new_plot_params = ["model", "precision"]
+
+        expected = {
+            "nested": {
+                "old": Path("model=vit%2Fbase/seed=3"),
+                "new": Path("model=vit%2Fbase/precision=bf16/seed=3"),
+                "old_plot": Path("model=vit%2Fbase"),
+                "new_plot": Path("model=vit%2Fbase/precision=bf16"),
+            },
+            "collapsed-v1": {
+                "old": Path("model=vit%2Fbase,seed=3"),
+                "new": Path("model=vit%2Fbase,precision=bf16,seed=3"),
+                "old_plot": Path("model=vit%2Fbase"),
+                "new_plot": Path("model=vit%2Fbase,precision=bf16"),
+            },
+        }
+
+        prefixes = {
+            "checkpoint": Path("checkpoints/009_schema"),
+            "evaluation": Path("evaluations/009_schema"),
+        }
+        for layout in ("nested", "collapsed-v1"):
+            with self.subTest(layout=layout):
+                old_suffix = run_id_path(old_cfg, old_params, layout=layout)
+                new_suffix = run_id_path(backfilled_cfg, new_params, layout=layout)
+                old_plot_suffix = run_id_path(
+                    old_cfg, old_plot_params, layout=layout
+                )
+                new_plot_suffix = run_id_path(
+                    backfilled_cfg, new_plot_params, layout=layout
+                )
+
+                self.assertEqual(old_suffix, expected[layout]["old"])
+                self.assertEqual(new_suffix, expected[layout]["new"])
+                self.assertEqual(old_plot_suffix, expected[layout]["old_plot"])
+                self.assertEqual(new_plot_suffix, expected[layout]["new_plot"])
+                for prefix in prefixes.values():
+                    self.assertEqual(prefix / old_suffix, prefix / expected[layout]["old"])
+                    self.assertEqual(prefix / new_suffix, prefix / expected[layout]["new"])
+                plot_root = Path("plots/009_schema/plot_precision")
+                self.assertEqual(
+                    plot_root / new_plot_suffix,
+                    plot_root / expected[layout]["new_plot"],
+                )
+
+                if layout == "nested":
+                    self.assertEqual(
+                        new_suffix.parts,
+                        ("model=vit%2Fbase", "precision=bf16", "seed=3"),
+                    )
+                    self.assertEqual(len(new_suffix.parts), len(old_suffix.parts) + 1)
+                else:
+                    self.assertEqual(len(old_suffix.parts), 1)
+                    self.assertEqual(len(new_suffix.parts), 1)
+                    self.assertEqual(
+                        new_suffix.parts,
+                        ("model=vit%2Fbase,precision=bf16,seed=3",),
+                    )
+
+        old_flat = run_id_flat(old_cfg, old_params)
+        new_flat = run_id_flat(backfilled_cfg, new_params)
+        self.assertEqual(old_flat, "model=vit%2Fbase,seed=3")
+        self.assertEqual(new_flat, "model=vit%2Fbase,precision=bf16,seed=3")
+        self.assertEqual(
+            Path("scripts/009_schema") / old_flat,
+            Path("scripts/009_schema/model=vit%2Fbase,seed=3"),
+        )
+        self.assertEqual(Path("scripts/009_schema") / new_flat, Path(
+            "scripts/009_schema/model=vit%2Fbase,precision=bf16,seed=3"
+        ))
+        self.assertEqual(
+            Path("logs/009_schema") / old_flat,
+            Path("logs/009_schema/model=vit%2Fbase,seed=3"),
+        )
+        self.assertEqual(Path("logs/009_schema") / new_flat, Path(
+            "logs/009_schema/model=vit%2Fbase,precision=bf16,seed=3"
+        ))
+
+    def test_run_id_schema_can_change_only_before_outputs(self) -> None:
+        skills = ROOT / "plugins/research/skills"
+        design = " ".join((skills / "experiment-design/SKILL.md").read_text().split())
+        conventions = " ".join(
+            (skills / "research-project-init/references/conventions.md")
+            .read_text()
+            .split()
+        )
+        dispatch = " ".join((skills / "sweep-dispatch/SKILL.md").read_text().split())
+
+        design_schema = design.split("## 2b. run_id evolution", 1)[1].split("## 2c.", 1)[0]
+        self.assertIn("Inspect checkpoints, evaluations, plots, and wave records", design_schema)
+        self.assertIn("If none exists, update `RUN_ID_PARAMS`", design_schema)
+        self.assertIn("normally before the first launch", design_schema)
+        self.assertIn("immutable under both `nested` and `collapsed-v1`", design_schema)
+        self.assertIn("Never change the identity schema in place", design_schema)
+        self.assertRegex(design_schema, r"(?i)create a new numbered sub-experiment")
+
+        self.assertIn("Before any checkpoint, evaluation, or plot output or wave README/script exists", conventions)
+        self.assertIn("After any one of those surfaces exists", conventions)
+        self.assertIn("immutable under both `nested` and `collapsed-v1`", conventions)
+        self.assertIn("new numbered sub-experiment", conventions)
+        self.assertIn("any identity-schema change under `nested` or `collapsed-v1` requires a new numbered sub-experiment", dispatch)
+
+        def schema_decision(layout: str, surfaces: set[str]) -> str:
+            if layout not in {"nested", "collapsed-v1"}:
+                raise ValueError("unsupported layout")
+            return (
+                "update-before-first-launch"
+                if not surfaces
+                else "new-numbered-sub-experiment"
+            )
+
+        for layout in ("nested", "collapsed-v1"):
+            with self.subTest(layout=layout, surfaces="none"):
+                self.assertEqual(schema_decision(layout, set()), "update-before-first-launch")
+            for surface in ("checkpoint", "evaluation", "plot", "wave"):
+                with self.subTest(layout=layout, surfaces=surface):
+                    self.assertEqual(
+                        schema_decision(layout, {surface}),
+                        "new-numbered-sub-experiment",
+                    )
+
+    def test_experiments_format_durably_records_both_run_id_decisions(self) -> None:
+        tracking = (
+            ROOT / "plugins/research/skills/experiments-tracking/SKILL.md"
+        ).read_text()
+        format_section = tracking.split("## Format", 1)[1].split(
+            "## ETA calculation", 1
+        )[0]
+        example_match = re.search(
+            r"```markdown\n(?P<example>.*?)\n```", format_section, re.DOTALL
+        )
+        self.assertIsNotNone(example_match)
+        example = example_match.group("example")
+
+        params_match = re.search(
+            r"^run_id params:\s*(?P<params>[^\n(]+?)\s+"
+            r"\(mirrors RUN_ID_PARAMS in (?P<source>[^)]+)\)$",
+            example,
+            re.MULTILINE,
+        )
+        layout_match = re.search(
+            r"^run_id path layout:\s*(?P<layout>nested|collapsed-v1)\s+"
+            r"\(mirrors RUN_ID_PATH_LAYOUT in (?P<source>[^)]+)\)$",
+            example,
+            re.MULTILINE,
+        )
+        self.assertIsNotNone(params_match)
+        self.assertIsNotNone(layout_match)
+        self.assertEqual(params_match.group("source"), layout_match.group("source"))
+
+        ordered_params = [
+            value.strip() for value in params_match.group("params").split(",")
+        ]
+        table_header = next(line for line in example.splitlines() if line.startswith("|"))
+        table_fields = [field.strip() for field in table_header.strip("|").split("|")]
+        self.assertEqual(table_fields[: len(ordered_params)], ordered_params)
+
+        compact_format = " ".join(format_section.split())
+        self.assertIn("restates both authoritative source decisions", compact_format)
+        self.assertIn("layout line is durable experiment metadata", compact_format)
+        self.assertIn("not a run-row identity field", compact_format)
+
+        immutable_section = tracking.split(
+            "`RUN_ID_PARAMS` may change only while", 1
+        )[1].split("## Who writes what", 1)[0]
+        compact_immutable = " ".join(immutable_section.split())
+        self.assertIn("recorded `RUN_ID_PATH_LAYOUT` is immutable", compact_immutable)
+        self.assertIn("exact wave paths remain authoritative", compact_immutable)
+        self.assertIn("new numbered sub-experiment", compact_immutable)
+        self.assertIn("fresh EXPERIMENTS section", compact_immutable)
+
+    def test_scaffold_guidance_names_both_authoritative_run_id_constants(self) -> None:
+        readme = markdown_template_block("README.md")
+        agents = markdown_template_block("AGENTS.md")
+        experiments = markdown_template_block("EXPERIMENTS.md (initial)")
+
+        for name, scaffold in {
+            "README": readme,
+            "AGENTS": agents,
+            "EXPERIMENTS": experiments,
+        }.items():
+            with self.subTest(scaffold=name):
+                self.assertIn("RUN_ID_PARAMS", scaffold)
+                self.assertIn("RUN_ID_PATH_LAYOUT", scaffold)
+                self.assertLess(
+                    scaffold.index("RUN_ID_PARAMS"),
+                    scaffold.index("RUN_ID_PATH_LAYOUT"),
+                )
+
+        self.assertIn("experiment's `.py` is authoritative for both", readme)
+        self.assertIn("authoritative ordered run identity", agents)
+        self.assertIn("authoritative literal", agents)
+        self.assertIn("header mirrors the experiment .py's ordered RUN_ID_PARAMS", experiments)
+        self.assertIn("exact literal pin", experiments)
+        self.assertIn("`RUN_ID_PATH_LAYOUT: nested`", experiments)
+        self.assertIn("`RUN_ID_PATH_LAYOUT: collapsed-v1`", experiments)
+
+    def test_existing_output_layout_is_immutable(self) -> None:
+        skills = ROOT / "plugins/research/skills"
+        contracts = {
+            "experiment design": skills / "experiment-design/SKILL.md",
+            "project conventions": skills / "research-project-init/references/conventions.md",
+            "dispatch": skills / "sweep-dispatch/SKILL.md",
+            "tracking": skills / "experiments-tracking/SKILL.md",
+            "housekeeping": skills / "research-housekeeping/SKILL.md",
+        }
+        for name, path in contracts.items():
+            contract = " ".join(path.read_text().lower().split())
+            with self.subTest(contract=name):
+                self.assertIn("new numbered sub-experiment", contract)
+        self.assertIn("preserve the checked-in renderer and `run_id_path_layout` forever", " ".join(contracts["experiment design"].read_text().lower().split()))
+        for name in ("project conventions", "dispatch", "tracking", "housekeeping"):
+            contract = " ".join(contracts[name].read_text().lower().split())
+            self.assertIn("immutable", contract)
+        for name in ("dispatch", "tracking", "housekeeping"):
+            contract = " ".join(contracts[name].read_text().lower().split())
+            self.assertRegex(contract, r"(?:mismatch|disagreement|mixed)")
+            self.assertRegex(contract, r"never (?:move|rename|rewrite)")
+
+        agreement = " ".join(PROJECT_TEMPLATES.read_text().lower().split())
+        self.assertIn("offer this choice only before any checkpoint, evaluation, plot output, or wave readme/script exists", agreement)
+        self.assertIn("preserve the checked-in renderer and literal pin forever", agreement)
+        self.assertIn("never propose or perform an in-place layout change", agreement)
+        self.assertIn("another layout requires a new numbered sub-experiment", agreement)
+
+    def test_layout_election_closes_at_first_artifact_or_wave(self) -> None:
+        def elect_layout(
+            recorded: str,
+            proposed: str,
+            existing_surfaces: dict[str, tuple[str, ...]],
+        ) -> str:
+            if proposed not in {"nested", "collapsed-v1"}:
+                raise ValueError("unsupported layout")
+            if not any(existing_surfaces.values()):
+                return proposed
+            if proposed != recorded:
+                raise RuntimeError("create a new numbered sub-experiment")
+            return recorded
+
+        empty = {name: () for name in ("checkpoints", "evaluations", "plots", "waves")}
+        self.assertEqual(elect_layout("nested", "collapsed-v1", empty), "collapsed-v1")
+
+        exact_paths = {
+            "checkpoint": "checkpoints/009_schema/model=vit/seed=3",
+            "evaluation": "evaluations/009_schema/model=vit/seed=3",
+            "plot": "plots/009_schema/plot_loss/model=vit/seed=3/loss.pdf",
+        }
+        for surface in empty:
+            with self.subTest(first_existing_surface=surface):
+                existing = dict(empty)
+                existing[surface] = (
+                    exact_paths.get(surface[:-1], "scripts/009_schema/model=vit,seed=3/wave_20260816-120000/README.md"),
+                )
+                self.assertEqual(elect_layout("nested", "nested", existing), "nested")
+                with self.assertRaisesRegex(RuntimeError, "new numbered sub-experiment"):
+                    elect_layout("nested", "collapsed-v1", existing)
+
+        self.assertEqual(
+            exact_paths,
+            {
+                "checkpoint": "checkpoints/009_schema/model=vit/seed=3",
+                "evaluation": "evaluations/009_schema/model=vit/seed=3",
+                "plot": "plots/009_schema/plot_loss/model=vit/seed=3/loss.pdf",
+            },
+        )
+
+    def test_immutable_layout_and_schema_boundary_aligns_across_consumers(self) -> None:
+        skills = ROOT / "plugins/research/skills"
+        contracts = {
+            "experiment design": skills / "experiment-design/SKILL.md",
+            "conventions": skills / "research-project-init/references/conventions.md",
+            "execution agreement": skills / "research-project-init/references/templates.md",
+            "tracking": skills / "experiments-tracking/SKILL.md",
+            "dispatch": skills / "sweep-dispatch/SKILL.md",
+            "dispatch templates": skills / "sweep-dispatch/references/templates.md",
+            "housekeeping": skills / "research-housekeeping/SKILL.md",
+        }
+        compact = {
+            name: " ".join(path.read_text().lower().split())
+            for name, path in contracts.items()
+        }
+        for name, contract in compact.items():
+            with self.subTest(contract=name):
+                self.assertIn("run_id_path_layout", contract)
+                self.assertRegex(contract, r"(?:artifact|output).{0,100}(?:wave|wave record)")
+                self.assertIn("new numbered sub-experiment", contract)
+
+        self.assertIn("preserve the checked-in renderer and `run_id_path_layout` forever", compact["experiment design"])
+        self.assertIn("preserve the checked-in renderer and literal pin forever", compact["execution agreement"])
+        for name in ("conventions", "tracking", "dispatch", "dispatch templates", "housekeeping"):
+            self.assertIn("immutable", compact[name])
+        for name in ("tracking", "dispatch", "dispatch templates", "housekeeping"):
+            self.assertRegex(compact[name], r"(?:mismatch|disagreement|mixed)")
+
+        joined = "\n".join(compact.values())
+        for forbidden in (
+            "path-" + "migration",
+            "abandoned-" + "frozen",
+            "cutover_" + "state",
+        ):
+            self.assertNotIn(forbidden, joined)
+
+        design = compact["experiment design"]
+        self.assertIn("only while the experiment has no checkpoint, evaluation, or plot", compact["conventions"])
+        self.assertIn("once any output or wave record exists", design)
+        self.assertIn("never propose or perform an in-place layout change", design)
+        self.assertIn("collapsed-v1", design)
+        self.assertNotRegex(design, r"nested.{0,120}backfill|backfill.{0,120}nested")
+        self.assertIn("create a new numbered sub-experiment", design)
+
+    def test_same_wave_recovery_reuses_unchanged_identity_and_paths(self) -> None:
+        original = {
+            "wave_id": "20260816-120000",
+            "source_tag": "wave--20260816-120000",
+            "source_revision": "a" * 40,
+            "layout": "collapsed-v1",
+            "checkpoint": "checkpoints/009_schema/model=vit,seed=3",
+            "status": "evaluations/009_schema/model=vit,seed=3/.status.json",
+            "artifact": "evaluations/009_schema/model=vit,seed=3/result.json",
+        }
+
+        def recover(record: dict[str, str], observed: dict[str, str]) -> dict[str, str]:
+            if observed != record:
+                raise RuntimeError("recovery identity or path mismatch")
+            return dict(record)
+
+        self.assertEqual(recover(original, dict(original)), original)
+        for field in ("source_tag", "source_revision", "layout", "status", "artifact"):
+            with self.subTest(mismatch=field):
+                changed = dict(original)
+                changed[field] += "-changed"
+                with self.assertRaisesRegex(RuntimeError, "mismatch"):
+                    recover(original, changed)
+
+        dispatch = " ".join(
+            (ROOT / "plugins/research/skills/sweep-dispatch/SKILL.md")
+            .read_text()
+            .lower()
+            .split()
+        )
+        templates = " ".join(
+            (ROOT / "plugins/research/skills/sweep-dispatch/references/templates.md")
+            .read_text()
+            .lower()
+            .split()
+        )
+        self.assertIn("with the same wave id", dispatch)
+        self.assertIn("same paths, session names, tag, and commit", dispatch)
+        self.assertIn("unchanged wave readme/script, pin, tag, and revision", dispatch)
+        self.assertIn("same wave id", templates)
+        self.assertIn("paths and session names are unchanged", templates)
+
+    def test_tracking_status_vocabulary_remains_closed(self) -> None:
+        tracking = (
+            ROOT / "plugins/research/skills/experiments-tracking/SKILL.md"
+        ).read_text()
+        match = re.search(
+            r"Statuses:\s*`(?P<todo>todo)`\s*→\s*`(?P<inpr>inpr)`\s*→\s*"
+            r"`(?P<done>done)`\s*\|\s*`(?P<failed>failed)`",
+            tracking,
+        )
+        self.assertIsNotNone(match)
+        self.assertEqual(set(match.groupdict().values()), {"todo", "inpr", "done", "failed"})
+        format_section = tracking.split("## Format", 1)[1].split("## ETA calculation", 1)[0]
+        status_cells = set(
+            re.findall(r"\|\s*(todo|inpr|done|failed)\s*\|", format_section)
+        )
+        self.assertLessEqual(status_cells, {"todo", "inpr", "done", "failed"})
+
+    def test_producer_layout_drives_evaluation_input_and_plot_output(self) -> None:
+        namespace: dict[str, object] = {}
+        exec(compile(run_id_template(), "run_id.py", "exec"), namespace)
+        run_id_path = namespace["run_id_path"]
+
+        cfg = {"model": "vit/base", "lr": 0.001, "seed": 3}
+        producer_params = ["model", "lr", "seed"]
+        fixed_plot_params = ["model", "seed"]
+
+        def artifact_paths(layout: str) -> tuple[Path, Path]:
+            evaluation = Path("evaluations/007_probe") / run_id_path(
+                cfg, producer_params, layout=layout
+            )
+            plot = Path("plots/007_probe/plot_loss") / run_id_path(
+                cfg, fixed_plot_params, layout=layout
+            )
+            return evaluation, plot
+
+        nested_eval, nested_plot = artifact_paths("nested")
+        self.assertEqual(
+            nested_eval,
+            Path("evaluations/007_probe/model=vit%2Fbase/lr=0.001/seed=3"),
+        )
+        self.assertEqual(
+            nested_plot,
+            Path("plots/007_probe/plot_loss/model=vit%2Fbase/seed=3"),
+        )
+
+        collapsed_eval, collapsed_plot = artifact_paths("collapsed-v1")
+        self.assertEqual(
+            collapsed_eval,
+            Path("evaluations/007_probe/model=vit%2Fbase,lr=0.001,seed=3"),
+        )
+        self.assertEqual(
+            collapsed_plot,
+            Path("plots/007_probe/plot_loss/model=vit%2Fbase,seed=3"),
+        )
+        self.assertEqual(len(collapsed_eval.relative_to("evaluations/007_probe").parts), 1)
+        self.assertEqual(len(collapsed_plot.relative_to("plots/007_probe/plot_loss").parts), 1)
+
+        visualization = " ".join(
+            (
+                ROOT / "plugins/research/skills/visualizations/SKILL.md"
+            ).read_text().split()
+        )
+
+        self.assertNotIn("producer's ordinary nested run-id path", visualization)
+        self.assertIn("Read the producer's recorded experiment-wide `RUN_ID_PATH_LAYOUT`", visualization)
+        self.assertIn("`run_id_path(..., layout=RUN_ID_PATH_LAYOUT)`", visualization)
+        self.assertIn("same recorded `RUN_ID_PATH_LAYOUT` as the producer", visualization)
+        self.assertIn("after aggregated params are elided", visualization)
+        self.assertIn("replaces all fixed-param path segments", visualization)
+        for protected in (
+            "`plots/`",
+            "complete `<experiment_path>`",
+            "`<script_stem>`",
+            "leaf filename",
+        ):
+            self.assertIn(protected, visualization)
+        self.assertIn("Elide every aggregated param in both layouts", visualization)
+
+    def test_collapsed_pin_degenerate_plot_paths_are_directly_approvable(self) -> None:
+        namespace: dict[str, object] = {}
+        exec(compile(run_id_template(), "run_id.py", "exec"), namespace)
+        run_id_path = namespace["run_id_path"]
+
+        cfg = {"model": "vit", "seed": 3}
+        plot_root = Path("plots/007_probe/plot_loss")
+
+        def proposal(params: list[str], pinned: str) -> dict[str, object]:
+            nested = plot_root / run_id_path(cfg, params, layout="nested")
+            collapsed = plot_root / run_id_path(cfg, params, layout="collapsed-v1")
+            if nested == collapsed:
+                return {
+                    "paths": (nested,),
+                    "separate_alternatives": (),
+                    "labels": ("nested", "collapsed-v1"),
+                    "pinned": pinned,
+                    "approvable": True,
+                    "boundary_crossed": False,
+                }
+            return {
+                "paths": (nested, collapsed),
+                "separate_alternatives": (collapsed,),
+                "labels": ("nested", "collapsed-v1"),
+                "pinned": pinned,
+                "approvable": pinned in {"nested", "collapsed-v1"},
+                "boundary_crossed": False,
+            }
+
+        for params, expected in (
+            ([], plot_root),
+            (["seed"], plot_root / "seed=3"),
+        ):
+            with self.subTest(fixed_params=params):
+                nested = plot_root / run_id_path(cfg, params, layout="nested")
+                collapsed = plot_root / run_id_path(
+                    cfg, params, layout="collapsed-v1"
+                )
+                self.assertEqual(nested, expected)
+                self.assertEqual(collapsed, expected)
+                self.assertEqual(
+                    str(nested).encode("utf-8"), str(collapsed).encode("utf-8")
+                )
+
+                presented = proposal(params, pinned="collapsed-v1")
+                self.assertEqual(presented["paths"], (expected,))
+                self.assertEqual(presented["separate_alternatives"], ())
+                self.assertEqual(presented["labels"], ("nested", "collapsed-v1"))
+                self.assertEqual(presented["pinned"], "collapsed-v1")
+                self.assertIs(presented["approvable"], True)
+                self.assertIs(presented["boundary_crossed"], False)
+
+        distinct = proposal(["model", "seed"], pinned="collapsed-v1")
+        self.assertEqual(len(distinct["separate_alternatives"]), 1)
+        self.assertNotEqual(distinct["paths"][0], distinct["paths"][1])
+
+    def test_every_layout_proposal_handles_degenerate_and_distinct_paths(self) -> None:
+        skills = ROOT / "plugins/research/skills"
+        contracts = {
+            "experiment design": (
+                skills / "experiment-design/SKILL.md",
+                "## 2. run_id election",
+            ),
+            "visualizations": (
+                skills / "visualizations/SKILL.md",
+                "for every export proposal",
+            ),
+            "project conventions": (
+                skills / "research-project-init/references/conventions.md",
+                "### run-output path layout approval",
+            ),
+            "execution agreement": (
+                skills / "research-project-init/references/templates.md",
+                "- plot communication:",
+            ),
+            "orchestrator": (
+                skills / "scientific-orchestrator/references/control-contract.md",
+                "identify the experiment-wide pinned",
+            ),
+            "flywheel auto": (
+                skills / "flywheel-auto/SKILL.md",
+                "identify the experiment-wide pinned",
+            ),
+            "autonomous protocol": (
+                skills
+                / "flywheel-auto/references/experiment-design-protocol-autonomous.md",
+                "the experiment-wide pinned",
+            ),
+            "experiment protocol": (
+                skills / "flywheel/references/experiment-design-protocol.md",
+                "identify the experiment-wide pinned",
+            ),
+            "scientific audit": (
+                skills / "critical-scientific-audit/SKILL.md",
+                "verify that the proposal identified",
+            ),
+            "flywheel logging": (
+                skills / "flywheel-log/SKILL.md",
+                "verify that the proposal identified",
+            ),
+            "flywheel reproduction": (
+                skills / "flywheel-reproduce/SKILL.md",
+                "identify the experiment-wide pinned",
+            ),
+        }
+
+        for name, (path, marker) in contracts.items():
+            text = " ".join(path.read_text().lower().split())
+            self.assertIn(marker, text, name)
+            section = text[text.index(marker) :]
+            if name == "execution agreement":
+                section = section.split("- additional project-specific choices:", 1)[0]
+            with self.subTest(contract=name):
+                self.assertRegex(section, r"(?:show|require|display) exactly one")
+                self.assertIn("collapsed-v1", section)
+                self.assertRegex(section, r"zero or one (?:fixed param|item|applicable fixed param)")
+                self.assertRegex(section, r"(?:show|require) (?:the path|that path|its byte-identical .+ path|one path).{0,40}(?:once|and no separate alternative)")
+                self.assertRegex(
+                    section,
+                    r"(?:no|not as a) separate alternative|show the path once",
+                )
+                self.assertIn("byte-identical", section)
+                self.assertRegex(section, r"pinned literal|selected or existing pinned literal")
+                self.assertRegex(section, r"(?:approvable|accept that path)")
+                self.assertRegex(
+                    section,
+                    r"(?:two or more|at least two).{0,160}exactly one|"
+                    r"exactly-one.{0,80}two or more",
+                )
+
+    def test_execution_agreement_plot_contract_matches_every_propagated_surface(self) -> None:
+        skills = ROOT / "plugins/research/skills"
+        template = " ".join(PROJECT_TEMPLATES.read_text().lower().split())
+        agreement = template.split("- plot communication:", 1)[1].split(
+            "- additional project-specific choices:", 1
+        )[0]
+        propagated = {
+            "visualizations": skills / "visualizations/SKILL.md",
+            "orchestrator": skills / "scientific-orchestrator/references/control-contract.md",
+            "flywheel auto": skills / "flywheel-auto/SKILL.md",
+            "autonomous protocol": skills / "flywheel-auto/references/experiment-design-protocol-autonomous.md",
+            "experiment protocol": skills / "flywheel/references/experiment-design-protocol.md",
+            "scientific audit": skills / "critical-scientific-audit/SKILL.md",
+            "flywheel logging": skills / "flywheel-log/SKILL.md",
+            "flywheel reproduction": skills / "flywheel-reproduce/SKILL.md",
+        }
+
+        def assert_plot_contract(name: str, section: str) -> None:
+            with self.subTest(contract=name):
+                nested = re.search(
+                    r"(?:complete )?(?:canonical )?`nested`.{0,80}(?:first|without optimizing)|"
+                    r"first (?:display|showed) the complete (?:canonical )?`nested`",
+                    section,
+                )
+                collapsed = re.search(r"exactly one.{0,100}`collapsed-v1`", section)
+                self.assertIsNotNone(nested)
+                self.assertIsNotNone(collapsed)
+                self.assertLess(nested.start(), collapsed.start())
+                self.assertRegex(section, r"(?:two or more|at least two)")
+                self.assertRegex(section, r"zero or one.{0,180}(?:one path|show the path once)")
+                self.assertIn("byte-identical", section)
+                self.assertRegex(section, r"pinned literal|which literal is pinned")
+                self.assertRegex(
+                    section,
+                    r"only (?:its |the |that )?matching form is approvable|"
+                    r"only that form is an approvable plot path|"
+                    r"only the form matching that pin is approvable|"
+                    r"only (?:that form|the form matching the pinned literal) is approvable|"
+                    r"accepted only (?:its matching form|the form matching the pinned literal)|"
+                    r"accept only its matching form",
+                )
+                self.assertIn("new numbered sub-experiment", section)
+                self.assertNotRegex(section, r"show only.{0,80}pinned|only show.{0,80}pinned")
+
+        assert_plot_contract("execution agreement", agreement)
+        for name, path in propagated.items():
+            assert_plot_contract(name, " ".join(path.read_text().lower().split()))
+
+    def test_plot_workflows_approve_only_the_pinned_layout(self) -> None:
+        skills = ROOT / "plugins/research/skills"
+        contracts = {
+            "visualizations": skills / "visualizations/SKILL.md",
+            "orchestrator": skills / "scientific-orchestrator/references/control-contract.md",
+            "flywheel auto": skills / "flywheel-auto/SKILL.md",
+            "autonomous protocol": (
+                skills
+                / "flywheel-auto/references/experiment-design-protocol-autonomous.md"
+            ),
+            "experiment protocol": skills / "flywheel/references/experiment-design-protocol.md",
+            "scientific audit": skills / "critical-scientific-audit/SKILL.md",
+            "flywheel logging": skills / "flywheel-log/SKILL.md",
+            "flywheel reproduction": skills / "flywheel-reproduce/SKILL.md",
+        }
+
+        def disposition(pinned: str, proposed: str) -> str:
+            return "approvable" if proposed == pinned else "new-numbered-sub-experiment"
+
+        for pinned in ("nested", "collapsed-v1"):
+            self.assertEqual(disposition(pinned, pinned), "approvable")
+            other = "collapsed-v1" if pinned == "nested" else "nested"
+            self.assertEqual(disposition(pinned, other), "new-numbered-sub-experiment")
+
+        for name, path in contracts.items():
+            contract = " ".join(path.read_text().lower().split())
+            with self.subTest(contract=name):
+                self.assertIn("pinned", contract)
+                self.assertIn("new numbered sub-experiment", contract)
+                self.assertRegex(
+                    contract,
+                    r"only (?:its |the |that )?matching form is approvable|"
+                    r"only that form is an approvable plot path|"
+                    r"only (?:that form|the form matching the pinned literal) is approvable|"
+                    r"accepted only (?:its matching form|the form matching the pinned literal)|"
+                    r"accept only its matching form",
+                )
+                self.assertRegex(
+                    contract,
+                    r"(?:other(?: form)?|layout revision).{0,160}"
+                    r"new numbered sub-experiment",
+                )
+                self.assertRegex(
+                    contract,
+                    r"never (?:permit )?per-plot approval|"
+                    r"not per-plot approval|never approve or select a layout per plot",
+                )
+
+    def test_every_launch_and_recovery_loop_stops_on_reserved_exits(self) -> None:
+        templates = (
+            ROOT / "plugins/research/skills/sweep-dispatch/references/templates.md"
+        ).read_text()
+        lane_loops = [line for line in templates.splitlines() if "for s in scripts/" in line]
+
+        self.assertEqual(len(lane_loops), 3)
+        for index, loop in enumerate(lane_loops):
+            with self.subTest(loop=index):
+                handled = {int(code) for code in re.findall(r"-eq\\?\s+(8[678])", loop)}
+                self.assertEqual(handled, {86, 87, 88})
+                self.assertIn("exit", loop)
 
     def test_tests_tree_mirrors_source_root_then_experiment_hierarchy(self) -> None:
         skills = ROOT / "plugins/research/skills"
@@ -915,7 +1732,7 @@ class ResearchContractTests(unittest.TestCase):
             self.assertFalse(writer.path.with_suffix(".json.tmp").exists())
 
     def test_experiment_design_mandates_the_whole_config_reaches_wandb(self) -> None:
-        """A run's config cannot be backfilled, so a subset is an unrecoverable loss."""
+        """A run's config cannot change retroactively, so a subset is permanent loss."""
         skill = (
             ROOT / "plugins/research/skills/experiment-design/SKILL.md"
         ).read_text()
@@ -926,7 +1743,7 @@ class ResearchContractTests(unittest.TestCase):
 
         self.assertIn("wandb.init(config=wandb_config(cfg)", section)
         self.assertIn("ENTIRE resolved config", section)
-        self.assertIn("cannot be backfilled", section)
+        self.assertIn("cannot be changed retroactively", section)
         self.assertIn("provenance", section)
         self.assertIn("wandb_config(cfg)", conventions)
 

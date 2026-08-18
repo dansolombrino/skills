@@ -32,8 +32,9 @@ commit; the `.gitignore` exceptions below preserve placeholders in ignored trees
 Experiments are named `NNN_experiment_name` and mirrored across the folders above — except
 `tests/`, which mirrors the source root first: tests for `<root>/<path>/<stem>.py` live at
 `tests/<root>/<path>/<stem>/test_*.py`, and are optional per script.
-Each run is identified by its **run_id** (an ordered subset of config params, declared
-per experiment in its `.py` as `RUN_ID_PARAMS`).
+Each run is identified by its **run_id**. The experiment's `.py` is authoritative for both its
+ordered identity params (`RUN_ID_PARAMS`) and its literal output-path layout pin
+(`RUN_ID_PATH_LAYOUT = "nested"|"collapsed-v1"`).
 
 ## Tracking
 
@@ -95,8 +96,9 @@ stated, ask rather than imitate. External source code enters only through
 - `index.md` — local Flywheel mirror; Flywheel remains authoritative.
 - `orchestration/` — ignored local traces; never stage or treat them as scientific results.
 - `README.md` — structure + setup.
-- Deepen further by reading `config/NNN_*/` and the experiment's `.py` (its
-  `RUN_ID_PARAMS` is the authoritative run identity).
+- Deepen further by reading `config/NNN_*/` and the experiment's `.py`: `RUN_ID_PARAMS` is the
+  authoritative ordered run identity and `RUN_ID_PATH_LAYOUT` is the authoritative literal
+  `nested` or `collapsed-v1` output-path pin.
 
 ## Project-specific quirks
 
@@ -119,7 +121,9 @@ Project notes live in `AGENTS.md`. Read @AGENTS.md before doing anything.
 ```markdown
 # Experiments
 
-<!-- state only; the story lives in JOURNAL.md. One section per NNN_experiment.
+<!-- state only; the story lives in JOURNAL.md. One section per NNN_experiment; each section
+     header mirrors the experiment .py's ordered RUN_ID_PARAMS and exact literal pin,
+     `RUN_ID_PATH_LAYOUT: nested` or `RUN_ID_PATH_LAYOUT: collapsed-v1`.
      Run tables, one row per (run, wave):
      | <run_id params...> | wave | rig | gpu | status | started | progress | eta | ended | elapsed | notes |
      (schema: experiments-tracking skill) -->
@@ -197,9 +201,33 @@ engineering_mode: <manual|auto — required>
 - Soft preferences:
 - Delegable fields:
 - Protected choices:
+  - Run-output path layout: at experiment design, first show the complete `nested` checkpoint,
+    evaluation, and run-ID-derived plot templates through their leaf names. Immediately afterward,
+    when at least two ordered RUN_ID_PARAMS are eligible, show exactly one separately labeled
+    `collapsed-v1` alternative; show none otherwise. When an applicable fixed-param list has zero
+    or one item, show its byte-identical `nested`/`collapsed-v1` path once, not as a separate
+    alternative; label it as both layouts' rendering and state the experiment's pinned literal.
+    That path is approvable under the pin. Wait for explicit user layout selection;
+    neither automatic mode may select it. Record one experiment-wide RUN_ID_PATH_LAYOUT and use it
+    for all three artifact surfaces. Offer this choice only before any checkpoint, evaluation,
+    plot output, or wave README/script exists. After that boundary, preserve the checked-in
+    renderer and literal pin forever; never propose or perform an in-place layout change, including
+    a byte-identical zero/one-param change. Another layout requires a new numbered sub-experiment.
   - Plot communication: approve each exact title, fixed RUN_ID_PARAMS, visible metric explanation,
     in-figure placement, and complete project-relative `plots/` export path including its leaf
-    filename before every plotting-code edit. If runtime values require a path template, the user
+    filename before every plotting-code edit. Resolve every proposed plot path with the recorded
+    experiment-wide RUN_ID_PATH_LAYOUT; plot communication cannot select an independent layout.
+    With zero or one fixed param after aggregation elision, show the path once, label it as the
+    byte-identical rendering of `nested` and `collapsed-v1`, and state the experiment's pinned
+    literal; that destination is approvable under the existing pin. With two or more fixed params,
+    first display the complete `nested` path or template through its leaf filename, then immediately
+    display exactly one separately labeled complete `collapsed-v1` comparison that collapses all
+    fixed-param segments after aggregation elision, never a partial group. State which literal is
+    pinned. Only the form matching that pin is approvable; the other form requires a new numbered
+    sub-experiment and cannot be selected for the established experiment. Plot communication never
+    reopens layout choice.
+    Reject any destination that would collide with or overwrite an existing output. If runtime
+    values require a path template, the user
     must explicitly approve before the plotting-code edit the complete project-relative `plots/`
     path template, including its leaf-filename template and every identified placeholder. Only the
     user may approve these protected path choices; scientific-auto and engineering-auto cannot
@@ -463,9 +491,10 @@ def storage_path(var: str, default: str) -> Path:
 """Shared run_id helpers.
 
 Each experiment declares, in its own .py, the authoritative ordered list of config
-params that uniquely identify a run (elected by the active engineering-mode owner):
+params that uniquely identify a run and its approved experiment-wide path layout:
 
     RUN_ID_PARAMS = ["model", "lr", "seed"]
+    RUN_ID_PATH_LAYOUT = "nested"
 
 and uses these helpers for ALL artifact paths and run names. Never hand-build them.
 
@@ -498,13 +527,35 @@ def run_id_dict(cfg, params):
     return {p: cfg[p] for p in params}
 
 
-def run_id_path(cfg, params) -> Path:
-    """Nested path form, e.g. model=mlp/lr=0.001/seed=0.
+def _run_id_pairs(cfg, params) -> list[str]:
+    """Ordered, percent-encoded ``key=value`` pairs shared by every rendering."""
+    return [f"{_run_id_component(p)}={_run_id_component(cfg[p])}" for p in params]
 
-    Used under checkpoints/, evaluations/, plots/. Segment formatting (e.g. bare
-    values for some params) may be customized per experiment under the active engineering mode.
+
+def run_id_path(cfg, params, *, layout="nested") -> Path:
+    """Run-output path in the experiment's authoritative layout.
+
+    ``nested`` renders ``model=mlp/lr=0.001/seed=0``. ``collapsed-v1`` renders
+    the exact same ordered, percent-encoded pairs in one component:
+    ``model=mlp,lr=0.001,seed=0``. The latter is opt-in and must be recorded as
+    the experiment's RUN_ID_PATH_LAYOUT only after explicit user approval.
+
+    With zero or one pair the two layouts are byte-identical (``.`` or the one
+    ``key=value`` component). Presentation code shows that path once, labels it
+    as both layouts' rendering plus the pinned literal.
+
+    Use one layout consistently under checkpoints/, evaluations/, and for
+    run-ID-derived plots/. Do not truncate, hash, or otherwise rewrite pairs to
+    evade a collision or filesystem limit.
     """
-    return Path(*[f"{_run_id_component(p)}={_run_id_component(cfg[p])}" for p in params])
+    pairs = _run_id_pairs(cfg, params)
+    if layout == "nested":
+        return Path(*pairs)
+    if layout == "collapsed-v1":
+        return Path(",".join(pairs))
+    raise ValueError(
+        f"invalid run_id path layout {layout!r}; expected 'nested' or 'collapsed-v1'"
+    )
 
 
 def run_id_flat(cfg, params) -> str:
@@ -512,9 +563,7 @@ def run_id_flat(cfg, params) -> str:
 
     Used for scripts/ and logs/ run-folder names, wandb run names, EXPERIMENTS.md rows.
     """
-    return ",".join(
-        f"{_run_id_component(p)}={_run_id_component(cfg[p])}" for p in params
-    )
+    return ",".join(_run_id_pairs(cfg, params))
 
 
 def hydra_override_arg(param, value) -> str:
@@ -589,8 +638,8 @@ def guard_run_config(cfg, params, run_dir: Path) -> None:
             raise RuntimeError(
                 f"run_id collision at {run_dir}: same run_id "
                 f"({run_id_flat(cfg, params)}) but the config differs:\n{lines}\n"
-                "Add the offending param(s) to RUN_ID_PARAMS (re-elect under the "
-                "active engineering mode) or migrate supported-project artifacts. See conventions.md, "
+                "Re-elect RUN_ID_PARAMS only before any output or wave record exists; "
+                "otherwise create a new numbered sub-experiment. See conventions.md, "
                 "'run_id schema evolution'."
             )
     else:

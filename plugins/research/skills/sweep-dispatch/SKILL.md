@@ -18,13 +18,32 @@ Vocabulary (canon): a **wave** is one dispatch decision, identified by `YYYYMMDD
 
 ## Before anything launches — mandatory gates
 
-1. **run_id coverage check** — every param varied in the sweep grid, AND every behavior-affecting config param added/changed since this experiment's last runs, must be in `RUN_ID_PARAMS`. If not, **halt** and route through the `experiment-design` skill's run_id evolution protocol (re-election + migration) before generating anything — otherwise new runs collide with old artifacts: overwritten, or silently skipped as "done". The artifact guard is only sound under this gate: `guard_run_config` catches collisions after Python starts, but an artifact-skipped run never enters Python.
+1. **run_id coverage check** — every param varied in the sweep grid, AND every behavior-affecting
+config param added/changed since this experiment's last runs, must be in `RUN_ID_PARAMS`. If not,
+**halt** and route through `experiment-design` before generating anything — otherwise new runs
+collide with old artifacts: overwritten, or silently skipped as "done". `RUN_ID_PARAMS` may change
+only while no checkpoint, evaluation, or plot output and no wave README or script exists. After the
+first such surface, any identity-schema change under `nested` or `collapsed-v1` requires a new
+numbered sub-experiment; never backfill, rename, move, or rewrite the established tree. The artifact
+guard is only sound under this gate: `guard_run_config` catches collisions after Python starts, but
+an artifact-skipped run never enters Python.
 1b. **helper safety check** — verify `code/common/run_id.py` provides the canonical percent-encoded
-`run_id_path`/`run_id_flat` renderers, `hydra_override_arg`, and the single config resolver
+`run_id_path(cfg, params, *, layout='nested')`/`run_id_flat` renderers, `hydra_override_arg`, and
+the single config resolver
 `resolved_config`/`wandb_config` (a wandb run whose config is anything less than the whole
 resolved config is unfixable after the fact). Any older helper makes the project
 unsupported; halt without upgrading it in place.
-1c. **environment contract check** — require exact uv/Python pins, current `uv.lock`, the standard
+1c. **run-path layout check** — read the experiment's literal `RUN_ID_PATH_LAYOUT`; it must be
+`nested` or `collapsed-v1`. Treat that record as pinned for the project, pass it to the canonical
+`run_id_path` helper, and resolve the checkpoint and evaluation run directories before generating
+the wave. They must use the same selected layout. Plot paths use the same helper and recorded layout
+after their plot-specific prefix. Never infer the layout from directory depth, reconstruct it from a
+flat id, or silently adopt a different layout. A missing, unsupported, or mixed layout blocks
+dispatch. Once any checkpoint, evaluation, or plot output or any wave README/script exists, its
+recorded `RUN_ID_PATH_LAYOUT` is immutable. Any disagreement or mixed tree blocks dispatch and
+routes new work to a new numbered sub-experiment with a fresh layout/schema decision; never move,
+rename, or rewrite the existing artifacts, README files, or scripts.
+1d. **environment contract check** — require exact uv/Python pins, current `uv.lock`, the standard
 `code/common/environment.py`, and the project GPU smoke. Use `environment-sync` to verify the hub
 fingerprint before the experiment smoke. Dependency-contract changes must be committed and
 verified before wave generation; read `[environment].name` from `sync.toml` and never let a
@@ -35,7 +54,7 @@ launch-time command repair or relock the configured environment.
 dispatch, monitor, and recovery commands. Never type a project path or a quota filesystem by
 hand: both are declared once, and a second copy is what goes stale. A rig missing from `sync.toml`
 or the machine registry is not assignable — stop rather than guessing its layout.
-1d. **telemetry contract check** — require schema-v2 `code/common/status.py` from
+1f. **telemetry contract check** — require schema-v2 `code/common/status.py` from
 `research-project-init` and structured progress call sites in every target training/eval entrypoint.
 The helper must provide timezone-aware timestamps, live elapsed time, and its automatic
 60-second heartbeat; entrypoints call
@@ -72,9 +91,18 @@ scripts/NNN_exp/<run_id_flat>/wave_<wave_id>/
   also checks storage headroom first, exiting `88` rather than dying mid-checkpoint and leaving a
   truncated artifact that looks real. It captures its own
   timestamped log under the mirror path in `logs/`.
-- Folder names come from `run_id_flat` (via `code/common/run_id.py`) — identical strings to EXPERIMENTS.md rows and wandb run names. `ls scripts/NNN_exp/<run_id_flat>/` is that run's execution history.
-- **The filesystem encodes the assignment**: a run is on that rig and those GPUs precisely because `wave_<rig>_gpu<ids>.sh` exists in its wave folder. No separate manifest to drift.
-- Only `scripts/` and `logs/` are wave-scoped. `checkpoints/`, `evaluations/`, `plots/` stay run-scoped in path form — artifacts must keep a stable per-run path or the self-guard and `guard_run_config` both break.
+- Folder names come from `run_id_flat` (via `code/common/run_id.py`) — identical strings to the
+  semantic run identity represented by EXPERIMENTS.md rows and to wandb run names.
+  `ls scripts/NNN_exp/<run_id_flat>/` is that run's execution history. The selected
+  `RUN_ID_PATH_LAYOUT` never changes scripts, logs, or wandb naming: those remain flat.
+- **The filesystem encodes the assignment**: a run is on that rig and those GPUs precisely because
+  `wave_<rig>_gpu<ids>.sh` exists in its wave folder. No separate assignment record may drift.
+- Only `scripts/` and `logs/` are wave-scoped. `checkpoints/`, `evaluations/`, and `plots/` stay
+  run-scoped at paths produced by the canonical helper for the experiment's recorded layout.
+  Materialize the exact checkpoint directory, evaluation directory, status path, and expected
+  final artifact path into each generated wave script; never leave a monitor or recovery step to
+  infer how many path segments the run id occupies. Artifacts must keep a stable per-run path or
+  the self-guard and `guard_run_config` both break.
 - `scripts/` contains shell only. **Never put yaml under scripts/** — the grid lives in the generation conversation, the wave README, and EXPERIMENTS.md rows.
 
 ## Test, commit, and deploy one revision
@@ -119,9 +147,15 @@ Each rig subagent:
    lane** as its own named tmux session — `<project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>` — running
    a glob loop over that lane's wave scripts (exact one-liner in
    [references/templates.md](references/templates.md)). Each queued script repeats the Git guard
-   before Python. Source-drift `86`, environment-drift `87`, or insufficient storage `88` stops the lane; ordinary run failures continue the queue.
+   before Python. Every launch and recovery loop treats the complete reserved set as lane-stopping:
+   source-drift `86`, environment-drift `87`, and insufficient storage `88`; ordinary run failures
+   continue the queue.
    Sequencing remains a shell loop so it survives subagent death, compaction, and multi-day queues.
-2. **Monitors** its queues to completion, judging each run by the three signals (hierarchy in `conventions.md` — artifacts are golden). Batch all lanes/status files for that rig into bounded probes; in normal operation obtain at least one fresh snapshot every five minutes so a scheduled chat update never depends on an arbitrarily old poll:
+2. **Monitors** its queues to completion, judging each run by the three signals (hierarchy in
+`conventions.md` — artifacts are golden). Read each run's exact status and artifact paths from its
+generated wave record; do not recreate paths from the flat id or slash depth. Batch all lanes/status
+files for that rig into bounded probes; in normal operation obtain at least one fresh snapshot every
+five minutes so a scheduled chat update never depends on an arbitrarily old poll:
    - **expected final artifact** on disk (final checkpoint / final eval output) ⇒ truly done;
    - **`.status.json`** (`schema_version`, `state`, `heartbeat`, display + numeric progress,
     timing, `wave_id`, `gpu`, source tag/SHA, environment fingerprint);
@@ -152,9 +186,14 @@ Each rig subagent is also its rig's watchdog. A machine-level failure (crash, re
   session names, tag, and commit). Completed runs skip; interrupted ones re-execute.
 - **Recovery never re-decides GPU placement** — a relaunch re-executes the *same* wave script, so it inherits that wave's authorization (including its `# GPU auth:` header and guard) unchanged. Never widen a lane's GPU set during recovery, and never move a lane to a different card on `behemoth` to work around a busy GPU 0. If placement genuinely must change, that is a new wave, needing authorization under the active engineering mode and — for anything past gpu0 on `behemoth` — a fresh grant from the user.
 - **Never double-launch** — immediately before relaunching a lane, check `tmux has-session -t <lane session>` again; if it exists, just monitor it.
-- **Unsupported layouts** — any noncanonical script/status layout blocks recovery. Do not migrate
-  or execute it.
-- **Autonomous, not silent** — relaunching already-approved work is not a new dispatch decision: don't ask permission, recover and report — which runs were already done (skipped), which were interrupted and relaunched, in which lanes, and whether each resumes or restarts.
+- **Unsupported layouts** — any noncanonical or mixed checkpoint/evaluation layout, or any wave
+  whose recorded status/artifact paths disagree with the experiment's pinned `RUN_ID_PATH_LAYOUT`,
+  blocks recovery. Never infer slash depth or substitute different paths. Route changed work to a
+  new numbered sub-experiment; otherwise ordinary recovery continues only from the unchanged wave
+  README/script, pin, tag, and revision.
+- **Autonomous, not silent** — relaunching already-approved work is not a new dispatch decision:
+  don't ask permission, recover and report — which runs were already done (skipped), which were
+  interrupted and relaunched, in which lanes, and whether each resumes or restarts.
 
 ## Ten-minute status and ETA updates to the user
 

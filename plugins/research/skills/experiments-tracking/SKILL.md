@@ -16,6 +16,12 @@ in every scientific/engineering mode and does not require a narrative or scienti
 - **Single-writer: EXPERIMENTS.md is only ever edited on rig-4090.** On any other rig, report statuses verbally but never edit the file. During a launch session, only the orchestrator chat writes it — monitoring subagents never do.
 - Ground truth is NOT the md — it is the three on-disk signals (hierarchy in `conventions.md`): the per-run status first proves the current wave's Git revision/tag and environment fingerprint; after that, the **expected final artifact** is golden for completion, followed by `.status.json` state/timing/progress and the latest run log. A missing `.status.json`/dir means the run never started (or its outputs were deleted ⇒ it is no longer done).
 - **One (run, wave) = one table row = one line.** A run re-launched in a later wave gets a **new row**, never an in-place update — the table itself carries the execution history. One line per row keeps parallel-session git merges clean.
+- A row's run identity is semantic: the ordered `RUN_ID_PARAMS` values, independent of whether
+  `RUN_ID_PATH_LAYOUT` is `nested` or `collapsed-v1`. Read the experiment's recorded selection
+  and consume the exact checkpoint, evaluation, status, and final-artifact paths materialized in
+  the generated wave record. Never derive identity from path segment count, reconstruct an
+  artifact path from the flat id, or treat the two layouts as different runs. Scripts, logs, and
+  wandb remain keyed by the unchanged flat rendering.
 - **Every status report to the user opens with its message-written time** — obtain a local
   timezone-bearing timestamp immediately before sending (for example
   `date '+%Y-%m-%dT%H:%M:%S%:z'`) and lead exactly with
@@ -24,11 +30,16 @@ in every scientific/engineering mode and does not require a narrative or scienti
 
 ## Format
 
-One section per `NNN_experiment`; header restates the run_id decision; table has **one column per run_id param** (dict form — never a single flat-string column), then placement, status, and timing:
+One section per `NNN_experiment`; its preamble restates both authoritative source decisions: the
+ordered `RUN_ID_PARAMS` and the literal `RUN_ID_PATH_LAYOUT` (`nested` or `collapsed-v1`). The
+table has **one column per run_id param** (dict form — never a single flat-string column), then
+placement, status, and timing. The layout line is durable experiment metadata, not a run-row
+identity field:
 
 ```markdown
 ## 000_grokking
 run_id params: model, lr, seed   (mirrors RUN_ID_PARAMS in code/000_grokking/train.py)
+run_id path layout: nested   (mirrors RUN_ID_PATH_LAYOUT in code/000_grokking/train.py)
 smoke command: <environment.name>/bin/python code/000_grokking/train.py smoke=true steps=1 seed=smoke
 smoke pass: exit 0 and evaluations/000_grokking/smoke/result.json says one step completed
 
@@ -42,7 +53,10 @@ smoke pass: exit 0 and evaluations/000_grokking/smoke/result.json says one step 
 - `wave` — the dispatch this execution belonged to (`YYYYMMDD-HHMMSS`, canon), whose annotated
   Git tag is `wave--<wave>`. `gpu` — the GPU set it occupied, opaque identity. Both are read from
   `.status.json`; before the run starts they come from the generated script's path.
-- Statuses: `todo` → `inpr` → `done` | `failed`. `started`/`ended` as `MM-DD HH:MM` (year only if ambiguous), `elapsed` compact (`45m`, `1h45m`, `2d3h`) from `elapsed_s`. **Elapsed values are the project's reference runtimes** — use them to estimate wall-clock and split temporal budgets when planning future waves.
+- Statuses: `todo` → `inpr` → `done` | `failed`. `started`/`ended` use `MM-DD HH:MM` (year only if
+  ambiguous), and `elapsed` is compact (`45m`, `1h45m`, `2d3h`) from `elapsed_s`. **Elapsed values
+  are the project's reference runtimes** — use them to estimate wall-clock and split temporal
+  budgets when planning future waves.
 - `progress` — render schema-v2 `progress_unit progress_completed/progress_total`.
 - `eta` — the **only computed column**. Recompute it on **every** reconciliation pass, and leave
   it blank for `todo`/`done`/`failed` rows and whenever there is no sound basis. Never write ETA
@@ -71,7 +85,14 @@ the wave ETA as unavailable and name the blocking lane(s). Do not put queued-run
 their `eta` table cells: lane/wave roll-ups belong in chat reports, while the table's `eta` stays
 an active-run field.
 
-On a run_id re-election (a param joins `RUN_ID_PARAMS` — `experiment-design` skill, "run_id evolution"): update the section header **and** add the new column to existing rows, backfilled with the old implicit value — same turn as the artifact migration, so rows and on-disk paths never disagree.
+`RUN_ID_PARAMS` may change only while no checkpoint, evaluation, or plot output and no wave README
+or script exists. After the first such surface, any identity-schema change under `nested` or
+`collapsed-v1` requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the
+established tree. The recorded `RUN_ID_PATH_LAYOUT` is immutable after the same boundary, and exact
+wave paths remain authoritative. A layout mismatch or mixed checkpoint/evaluation tree blocks
+reconciliation and routes changed work to a new numbered sub-experiment; never move, rename, or
+rewrite old artifacts or wave records. The new sub-experiment gets a fresh EXPERIMENTS section with
+no edits to historical rows.
 
 ## Who writes what (same turn as the action)
 
@@ -83,4 +104,23 @@ On a run_id re-election (a param joins `RUN_ID_PARAMS` — `experiment-design` s
 
 ## Reconciliation (mandatory)
 
-Whenever a session on rig-4090 touches the project — and always when asked about statuses — sweep the signals and fix any stale rows. Match a `.status.json` to its row by **(run_id, `wave_id`)**; a run with several rows only ever has one live one (its latest wave). Missing `wave_id` or schema-v2 provenance makes the project unsupported. Resolve `wave--<wave_id>` and require `.status.json`'s `source_tag` and `source_revision` to match it, then require `environment_fingerprint` to match the value in that wave's README/scripts. A missing or mismatched source/environment value is an integrity error: flag it prominently and do not reconcile that row automatically or accept its artifact for comparisons. Then: `inpr` whose `.status.json` says `done`/`failed` **and** whose artifacts agree ⇒ flip and fill `ended`/`elapsed`; `done` in `.status.json` but expected final artifact missing ⇒ artifacts win, flag it to the user instead of marking done; `inpr` whose `.status.json` is stuck at `running` with a frozen heartbeat **because of a machine fault** — the rig's boot time (`uptime -s`) postdates the heartbeat, or the lane's tmux session is gone — ⇒ the run is **interrupted**, not failed-by-code: keep `inpr` if a relaunched lane is (or is about to be) re-executing it, otherwise flip back to `todo` with a note; when reporting, always distinguish "failed (code error)" from "interrupted (machine fault — safe to relaunch, wave scripts are self-guarded)"; rows whose evaluations dir vanished ⇒ back to `todo` (outputs were deleted, timing cleared). Recompute `eta` for every `inpr` row while you are here. Reconciliation is deterministic: md always converges to the signals.
+Whenever a session on rig-4090 touches the project — and always when asked about statuses — sweep
+the signals and fix any stale rows. Match a status to its row by **(semantic run identity,
+`wave_id`)**, reading the exact status path from that wave's generated record; a run with several
+rows only ever has one live one (its latest wave). Missing `wave_id` or schema-v2 provenance makes
+the project unsupported. Resolve `wave--<wave_id>` and require the status's `source_tag` and
+`source_revision` to match it, then require `environment_fingerprint` to match the value in that
+wave's README/scripts. A missing or mismatched source/environment value is an integrity error: flag
+it prominently and do not reconcile that row automatically or accept its artifact for comparisons.
+Then: `inpr` whose status says `done`/`failed` **and** whose exact recorded artifacts agree ⇒ flip
+and fill `ended`/`elapsed`; `done` in status but the exact recorded final artifact is missing ⇒
+artifacts win, flag it to the user instead of marking done; `inpr` whose status is stuck at
+`running` with a frozen heartbeat **because of a machine fault** — the rig's boot time (`uptime -s`)
+postdates the heartbeat, or the lane's tmux session is gone — ⇒ the run is **interrupted**, not
+failed-by-code: keep `inpr` if a relaunched lane is (or is about to be) re-executing it, otherwise
+flip back to `todo` with a note; when reporting, always distinguish "failed (code error)" from
+"interrupted (machine fault — safe to relaunch, wave scripts are self-guarded)"; rows whose exact
+recorded evaluation directory vanished ⇒ back to `todo` (outputs were deleted, timing cleared). Any
+path disagreement or mixed tree blocks instead of substituting different paths. Recompute `eta` for
+every `inpr` row while you are here. Reconciliation is deterministic: md always converges to the
+recorded signals without inferring slash depth.

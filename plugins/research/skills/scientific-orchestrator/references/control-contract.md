@@ -38,15 +38,28 @@ external publication outside the approved root, and every source-to-target devia
 specification before every plotting-code creation or modification: exact title and fixed
 `RUN_ID_PARAMS`, visible text defining every plotted metric and its directional interpretation,
 exact in-figure placement, and every complete project-relative `plots/` export path including its
-leaf filename. If runtime values prevent a concrete path before the edit, identify every placeholder
-in the complete path template. Before rendering, show every fully resolved concrete export path,
-including its leaf filename, and wait for explicit user approval. An approved template does not
-approve any concrete destination. A new or changed resolved path always reopens approval, even when
-it conforms to the approved template; do not render before that approval. The agent may only propose
-this specification. Auto modes cannot approve it, and a previous approval does not carry across a
-later plotting-code edit even when the proposed specification would remain unchanged. An
-unchanged-code rerender may reuse approval only when every resolved concrete export path is
-byte-for-byte identical to the previously explicitly approved concrete path.
+leaf filename. Identify the experiment-wide pinned `RUN_ID_PATH_LAYOUT`; construct and show the
+complete canonical `nested` path or template first without optimizing it. When two or more fixed
+params remain after aggregated params are elided, immediately show exactly one separate
+`collapsed-v1` alternative that combines all fixed params, never a partial group, in elected order
+as comma-joined, canonically percent-encoded `key=value` components. With zero or one fixed param,
+show one path and no separate alternative; label it as the byte-identical rendering of `nested` and
+`collapsed-v1` plus the experiment's pinned literal. That path is approvable under either pin
+without treating it as a layout change. With two or more, only the form matching the pinned literal
+is approvable. Before any output artifact or wave exists, `experiment-design` owns layout election
+through the canonical `nested`-first comparison. Once any artifact or wave exists, the pin is
+immutable; wanting the other form requires a new numbered sub-experiment, never per-plot approval or
+an in-place layout change. Protect `plots/`, the complete experiment path, script stem, and leaf.
+Reject collisions and overwrites. If runtime values prevent a concrete path before the edit,
+identify every placeholder in the complete path template. Before rendering, show every fully
+resolved concrete export path matching the pinned layout, including its leaf filename, and wait for
+explicit user approval. An approved template does not approve any concrete destination. A new or
+changed resolved path always reopens approval, even when it conforms to the approved template; do
+not render before that approval. The agent may only propose this specification. Auto modes cannot
+approve it, and a previous approval does not carry across a later plotting-code edit even when the
+proposed specification would remain unchanged. An unchanged-code rerender may reuse approval only
+when every resolved concrete export path is byte-for-byte identical to the previously explicitly
+approved concrete path.
 
 System or sandbox approvals remain independent and always apply.
 
@@ -74,6 +87,9 @@ Require:
 - source tag/revision and environment fingerprint;
 - exact commands/config snapshots and placement;
 - status and expected final-artifact paths;
+- for newly authored plots, persist the experiment-wide pinned `RUN_ID_PATH_LAYOUT`, approved
+  complete path templates, and every explicitly approved matching concrete export path in the
+  packet;
 - measured metrics, uncertainty, failures, exclusions, and deviations;
 - resource/time spend and recovery actions;
 - links to `EXPERIMENTS.md`, `JOURNAL.md`, logs, evaluations, plots, and checkpoints.

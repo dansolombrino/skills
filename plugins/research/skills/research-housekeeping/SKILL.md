@@ -86,6 +86,11 @@ Each check should verify:
 - Every active experiment has a visible claim, hypothesis, decision criterion, and metric/evidence before launch.
 - `program/` and `orchestration/` contain the active phase plans, traces, agent assignments, and logger handoff notes.
 - Elected run paths are unique and no artifacts from older runs were overwritten.
+- Every experiment records one supported `RUN_ID_PATH_LAYOUT` (`nested` or `collapsed-v1`), and
+  checkpoint, evaluation, and plot paths agree with the canonical helper for that pinned
+  selection. Scripts, logs, and wandb identities remain flat. Detect mixed layouts, mismatched
+  checkpoint/evaluation paths, or paths whose slash depth was guessed; record and route the
+  discrepancy without moving, renaming, or rewriting any artifact.
 - Metrics, plots, reports, summaries, scheduler logs, and failure traces use the standard taxonomy.
 - Every single-producer visualization and plot root preserves the producer's complete numbered
   experiment/sub-experiment hierarchy. Record and route any flattened or mismatched path; do not
@@ -100,6 +105,16 @@ The housekeeper must not launch experiments, mutate Flywheel, edit `EXPERIMENTS.
 artifacts, rewrite scientific conclusions, change mode, resolve scientific decisions, grant
 execution permission, or act as the user-facing progress reporter. Record discrepancies and route
 them to `scientific-orchestrator`; only that orchestrator consolidates user notifications.
+
+`RUN_ID_PARAMS` may change only while no checkpoint, evaluation, or plot output and no wave README
+or script exists. After the first such surface, any identity-schema change under `nested` or
+`collapsed-v1` requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the
+established tree. Treat the recorded
+`RUN_ID_PATH_LAYOUT`, exact artifact paths, README files, scripts, and logs as immutable after the
+same boundary. Detect any mixed or mismatched tree,
+record it as a blocker, and route changed work to a new numbered sub-experiment; never move,
+rename, or rewrite the old tree from this skill. Ordinary recovery of an existing wave remains
+valid only under its unchanged recorded paths, pin, tag, and revision.
 
 ## Required Checklist
 

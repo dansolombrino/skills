@@ -23,9 +23,14 @@ the scientific layer. Plot communication approval is always user-owned and overr
   `000_qat_ptq_metric_equivalence/002_weight_error`.
 - Viz code lives at `visualizations/<experiment_path>/<script_stem>.py`, mirroring the complete
   producer hierarchy. `code/` stays purely experiment code.
-- Input: **`evaluations/` only** — viz never reads checkpoints or recomputes; if a quantity isn't in evaluations, the producer experiment must export it first.
+- Input: **`evaluations/` only**. Read the producer's recorded experiment-wide
+  `RUN_ID_PATH_LAYOUT` and resolve inputs with
+  `run_id_path(..., layout=RUN_ID_PATH_LAYOUT)` from the canonical helper. Never infer layout from
+  slash depth or force `nested`. Viz never reads checkpoints or recomputes; if a quantity is absent
+  from evaluations, the producer experiment must export it first.
 - Output: under `plots/<experiment_path>/<script_stem>/<partial_run_id path>/` — one subfolder per
-  script (stem = filename without `.py`) after the complete producer hierarchy.
+  script (stem = filename without `.py`) after the complete producer hierarchy. Resolve its
+  fixed-param portion with the same recorded `RUN_ID_PATH_LAYOUT` as the producer.
 - If a visualization consumes multiple producer experiment paths, stop without inferring its
   placement; that taxonomy requires a separate user decision.
 - Unit tests for a plotting script are optional and create-on-demand. When one is written, it
@@ -53,15 +58,39 @@ plots/000_grokking/plot_acc_vs_lr/acc_vs_lr_by_model.pdf               # aggrega
 plots/001_compression/002_weight_error/plot_layers/model=vit/seed=0/layer_error.pdf  # nested producer
 ```
 
+For every export proposal, identify the experiment-wide pinned `RUN_ID_PATH_LAYOUT` and construct
+the complete canonical `nested` output path or template first, without optimizing it. If two or
+more fixed `RUN_ID_PARAMS` remain after aggregated params are elided, immediately afterward show
+exactly one separately labeled `collapsed-v1` alternative. It replaces all fixed-param path
+segments, never a partial group, with one segment in elected order using the canonical helper's
+comma-joined, percent-encoded `key=value` representation. With zero or one fixed param, show one
+path and no separate alternative; label it as the byte-identical rendering of `nested` and
+`collapsed-v1`, and state the producer experiment's pinned literal. That one concrete path is
+approvable under either pin; do not treat the byte-identical rendering as a layout change.
+
+With two or more fixed params, label which displayed form matches the pinned literal `nested` or
+`collapsed-v1`; only that form is approvable. Before any output artifact or wave exists,
+`experiment-design` owns layout election through the canonical `nested`-first comparison. Once any
+artifact or wave exists, the pin is immutable. Wanting the other form requires a new numbered
+sub-experiment, never per-plot approval or selection or an in-place layout change.
+
+Both layouts protect `plots/`, the complete `<experiment_path>`, `<script_stem>`, and the leaf
+filename: collapse only the intervening fixed-param segments. Elide every aggregated param in both
+layouts. Reject any candidate that collides with another export or would overwrite an existing
+artifact; propose a new leaf or stop for direction. An approved template does not approve any
+concrete destination.
+
 Before modifying an existing single-producer plotter, verify that its code and output roots preserve
 the producer's complete `<experiment_path>`. Report a flattened or otherwise mismatched layout and
-obtain explicit user authorization before moving code or artifacts; never migrate it silently.
+stop; do not move or rewrite artifacts. Use a new numbered sub-experiment when a different layout is
+required after any artifact or wave exists.
 
 ## Design & execution
 
 - Before every creation or modification of plotting code, read the producer's authoritative
-  ordered `RUN_ID_PARAMS`, metric definitions, evaluation schema, and scientific contract. Classify
-  each RUN_ID parameter as fixed or aggregated for every plot the script produces.
+  ordered `RUN_ID_PARAMS`, `RUN_ID_PATH_LAYOUT`, metric definitions, evaluation schema, and
+  scientific contract. Classify each RUN_ID parameter as fixed or aggregated for every plot the
+  script produces.
 - Propose one exact communication specification per plot. Include the title wording, punctuation,
   formatting, and each fixed RUN_ID param as `key={value}` in elected order. Also propose visible
   in-figure text that explains what every plotted metric measures, its higher/lower/target/range/no-
@@ -71,9 +100,10 @@ obtain explicit user authorization before moving code or artifacts; never migrat
   fixed, state that the semantic title contains no RUN_ID part rather than fabricating one.
 - If runtime values prevent a concrete path before the code edit, propose the complete path template
   and identify every placeholder explicitly. Before rendering, show every fully resolved concrete
-  export path, including its leaf filename, and wait for explicit user approval. An approved template
-  does not approve any concrete destination. A new or changed resolved path always reopens approval,
-  even when it conforms to the approved template; do not render before that approval.
+  export path matching the pinned layout, including its leaf filename, and wait for explicit user
+  approval. An approved template does not approve any concrete destination. A new or changed
+  resolved path always reopens approval, even when it conforms to the approved template; do not
+  render before that approval. Recheck collisions and overwrite risk after resolution.
 - Cover multiple axes, panels, derived metrics, and visual encodings separately unless one shared
   explanation is unambiguous. Stop rather than guess when metric semantics are not grounded. Put
   the explanation in an axis label, subtitle, legend, annotation, or in-figure caption; surrounding

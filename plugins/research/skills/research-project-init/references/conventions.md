@@ -104,10 +104,11 @@ logs/NNN_exp/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-<YYYYmmdd-HHMMSS>.
 ```
 
 So `logs/` mirrors `scripts/` (flat run_id form, wave-scoped) — you reach a log from its
-script — while `checkpoints/`, `evaluations/`, and `plots/` all use the nested run_id **path**
-form after their experiment-specific prefixes and stay run-scoped. Logs are timestamped per launch,
-so history is kept; logs are never overwritten, and a crash-recovery relaunch never clobbers
-the earlier attempt. Hydra projects must disable hydra's job file logging (defaults entry
+script — while `checkpoints/`, `evaluations/`, and run-ID-derived `plots/` all use the
+experiment's one authoritative run_id **path** layout after their experiment-specific prefixes and
+stay run-scoped. Logs are timestamped per launch, so history is kept; logs are never overwritten,
+and a crash-recovery relaunch never clobbers the earlier attempt. Hydra projects must disable
+hydra's job file logging (defaults entry
 `- override hydra/job_logging: none`) or explicitly point it inside `logs/` — a stray
 `<job_name>.log` must never appear in the project root.
 
@@ -179,15 +180,59 @@ The per-experiment **ordered** set of config params that uniquely identifies a r
   path-building code actually uses; mirrored in the experiment's EXPERIMENTS.md section header.
 - Config yamls stay pure hydra params — **no run_id metadata in yaml**.
 - Two renderings via `code/common/run_id.py`:
-  - **path form** — nested subfolders, e.g. `model=mlp/lr=1e-3/seed=0/` → used under
-    `checkpoints/`, `evaluations/`, `plots/`. `param=value` segments are the default; keys and
-    values are percent-encoded by the shared helper so `/`, spaces, commas, shell metacharacters,
-    and structured values cannot alter the hierarchy. Any shortening (e.g. bare `mlp/`) is a
-    per-experiment deviation decided by the applicable engineering-mode owner.
+  - **path form** → used under `checkpoints/`, `evaluations/`, and for run-ID-derived
+    `plots/` paths. Every experiment records one authoritative
+    `RUN_ID_PATH_LAYOUT = "nested"|"collapsed-v1"` beside `RUN_ID_PARAMS` and passes it as the
+    keyword-only `layout` argument to `run_id_path`. The default and canonical proposal is
+    `nested`, e.g. `model=mlp/lr=1e-3/seed=0/`. `collapsed-v1` is the opt-in rendering
+    `model=mlp,lr=1e-3,seed=0/`: it collapses all eligible ordered `RUN_ID_PARAMS` into one path
+    component using the exact same percent-encoded `key=value` pairs and comma separators as
+    `run_id_flat`. Keys and values are percent-encoded by the shared helper so `/`, spaces,
+    commas, shell metacharacters, and structured values cannot alter the hierarchy.
   - **flat form** — e.g. `model=mlp,lr=1e-3,seed=0` → uses the same percent-encoded components
     and is used for `scripts/` and `logs/`
     run-folder names, wandb run names, and log lines. Flat name ≡ wandb run, 1:1; it maps to
     one EXPERIMENTS.md row **per wave** the run took part in (see below).
+
+### run-output path layout approval
+
+At experiment design time, first construct and show the complete `nested` templates through their
+leaf names for checkpoints, evaluations, and every run-ID-derived plot. Immediately afterward,
+when at least two ordered `RUN_ID_PARAMS` are eligible, show exactly one separately labeled
+`collapsed-v1` alternative built from those same params; show none when fewer than two are
+eligible. The alternative collapses all applicable ordered params after aggregated plot params are
+elided, never a partial group. Wait for explicit user layout selection; neither automatic mode may
+select `collapsed-v1`. Without explicit user approval, record `RUN_ID_PATH_LAYOUT = "nested"`.
+
+For any proposed path whose applicable fixed-param list has zero or one item, `nested` and
+`collapsed-v1` render byte-identically. Show that path once, not as a separate alternative, and
+label it explicitly as both layouts' byte-identical rendering. Also state the experiment's pinned
+literal `RUN_ID_PATH_LAYOUT`; the one displayed path is approvable under that pin.
+This degenerate presentation does not change the experiment-wide pin. The exactly-one
+`collapsed-v1` alternative rule still applies whenever two or more applicable fixed params remain.
+
+The approved value is one experiment-wide layout, not a per-artifact preference. Checkpoints,
+evaluations (including `.run_config.json` and `.status.json`), and run-ID-derived plots must all
+call `run_id_path(..., layout=RUN_ID_PATH_LAYOUT)` with the applicable full or partial ordered
+param list. `scripts/` and `logs/` folders, WandB run names, log-line identity, and
+EXPERIMENTS.md row identity continue to use `run_id_flat`; choosing a path layout does not rename
+or redefine them. Do not introduce a second layout constant, hand-build a path, shorten a pair,
+drop a param, hash/truncate a component, or silently fall back when a rendered component or full
+path exceeds a filesystem limit. Preflight the exact proposed paths; any collision, ambiguity, or
+overflow stops for a revised explicit decision.
+
+Layout election is available only while the experiment has no checkpoint, evaluation, or plot
+output and no wave record. Inspect those surfaces before presenting the
+`nested`/`collapsed-v1` choice. Once any such output or wave README/script exists,
+`RUN_ID_PATH_LAYOUT` is immutable: preserve the literal pin and checked-in renderer, and never
+propose, approve, or perform an in-place path-layout change. This remains true when zero or one
+applicable param would make the two renderings byte-identical.
+
+An existing project with outputs is pinned to its checked-in renderer even when it predates the
+explicit constant; never reinterpret it through the helper default. If the checked-in renderer is
+ambiguous, stop. To use another layout after the boundary, create a new numbered sub-experiment
+with its own `RUN_ID_PARAMS` and `RUN_ID_PATH_LAYOUT`; leave every old artifact, wave record,
+script/log identity, WandB run, and EXPERIMENTS.md row untouched.
 
 ### Plot communication approval
 
@@ -248,19 +293,19 @@ rules it non-identifying (e.g. a pure logging knob). Otherwise, new runs varying
 would collide with old artifacts at the same `<run_id path>` — silently overwriting them, or
 worse, being skipped by an artifact-guarded wave script as "already done".
 
-- **If the param joins `RUN_ID_PARAMS`** — a migration decision is required for existing
-  artifacts. Default proposal: **backfill-rename** — insert the new `param=<old implicit
-  value>` segment at its elected position in existing dirs under
-  `checkpoints/ evaluations/ plots/` (path form) and `logs/ scripts/` (flat form), and add the
-  column to EXPERIMENTS.md rows
-  (wandb run names cannot be backfilled — note the schema change in JOURNAL.md instead).
-  Alternative: freeze the old tree and start a new sub-experiment for the new code path. The
-  applicable engineering-mode owner chooses and records the option.
+- **Before any checkpoint, evaluation, or plot output or wave README/script exists** — update and
+  re-elect `RUN_ID_PARAMS` normally under the active engineering mode. Update the constant and
+  EXPERIMENTS.md section header before the first launch.
+- **After any one of those surfaces exists** — `RUN_ID_PARAMS` is immutable under both `nested` and
+  `collapsed-v1`. Never change the identity schema in place. Create a new numbered sub-experiment
+  with the re-elected params and its own pinned layout; leave the established experiment and all of
+  its records untouched.
 - **Runtime guard (canon)** — every run writes its **full resolved config snapshot** to
   `evaluations/NNN_exp/<run_id path>/.run_config.json` via `guard_run_config` in
   `code/common/run_id.py`, called before any artifact is written. If a snapshot already exists
   and differs on any param while the run_id is identical ⇒ **hard error** naming the differing
-  params ("run_id collision — re-elect run_id or migrate"); never proceed. Same-config reruns
+  params ("run_id collision — re-elect before first output or create a new numbered
+  sub-experiment"); never proceed. Same-config reruns
   (resume/retry) pass.
 - Corollary: `guard_run_config` catches collisions only once Python starts. An artifact-guarded
   skip does not enter Python, so the mandatory sweep coverage gate must reject schema drift
@@ -269,7 +314,7 @@ worse, being skipped by an artifact-guarded wave script as "already done".
   config is `wandb_config(cfg)`: the identical `resolved_config(cfg)` payload that
   `.run_config.json` stores, plus a `provenance` namespace. One resolver, every recorder — a
   wandb run whose config is a subset of its `.run_config.json` is a defect, and it is
-  unrecoverable, because a finished run's config cannot be backfilled.
+  unrecoverable, because a finished run's config is immutable.
 
 ## Waves and GPU lanes
 

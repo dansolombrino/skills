@@ -113,10 +113,24 @@ No audit verdict grants execution permission. Leakage, contaminated evaluation, 
   explicitly approved either its complete project-relative `plots/` export path including its leaf
   filename or, when runtime values prevented a concrete destination, the complete project-relative
   `plots/` path template including its leaf-filename template and every identified placeholder.
-  Only explicit user approval satisfies this gate; scientific-auto and engineering-auto cannot
-  bypass it. Require evidence that every fully resolved concrete export path, including its leaf
-  filename, received explicit user approval before rendering. An approved template does not approve
-  any concrete destination. A new or changed resolved path always reopens approval, even when it
+  Verify that the proposal identified the experiment-wide pinned `RUN_ID_PATH_LAYOUT` and first
+  showed the complete canonical `nested` path or template without optimization. When two or more
+  fixed `RUN_ID_PARAMS` remained after aggregated-param elision, require exactly one separate
+  `collapsed-v1` alternative combining all fixed params, never a partial group, in elected order as
+  comma-joined, canonically percent-encoded `key=value` components. With zero or one fixed param,
+  require one path and no separate alternative; require evidence labeling it as the byte-identical
+  rendering of `nested` and `collapsed-v1` plus the experiment's pinned literal, and accept that
+  path under either pin without treating it as a layout change. With two or more, verify the
+  proposal accepted only the form matching the pinned literal. Verify that a pristine experiment
+  with no output artifact or wave routed election through `experiment-design` and the canonical
+  `nested`-first comparison. Once any artifact or wave exists, require the pin to remain immutable;
+  the other form requires a new numbered sub-experiment; selection is never per-plot approval and
+  never in-place. Reject any collapse of `plots/`, the complete experiment path, script stem, or
+  leaf, any included aggregated param, collision, or overwrite. Only explicit user approval
+  satisfies this gate; scientific-auto and engineering-auto cannot bypass it. Require evidence that
+  every fully resolved concrete export path matching the pinned layout, including its leaf filename,
+  received explicit user approval before rendering. An approved template does not approve any
+  concrete destination. A new or changed resolved path always reopens approval, even when it
   conforms to the approved template; do not accept a render before that approval. Approval reused
   for unchanged code is valid only when every resolved concrete export path is byte-for-byte
   identical to the previously explicitly approved concrete path. Also reject a rendered figure that

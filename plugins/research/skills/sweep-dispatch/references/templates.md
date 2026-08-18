@@ -19,16 +19,19 @@ set -uo pipefail
 cd "$(dirname "$0")/../../../.." || exit 1  # → project root; adjust for sub-experiments
 
 RUN_ID_FLAT="<flat run_id>"
-EVAL_DIR="evaluations/<NNN_exp>/<run_id path>"
+RUN_ID_PATH_LAYOUT="<nested | collapsed-v1, copied from the experiment record>"
+CHECKPOINT_DIR="<exact checkpoint directory resolved by canonical run_id_path>"
+EVAL_DIR="<exact evaluation directory resolved by canonical run_id_path>"
+STATUS_PATH="$EVAL_DIR/.status.json"
 LOG_DIR="logs/<NNN_exp>/$RUN_ID_FLAT/wave_<wave_id>"     # logs/ mirrors scripts/
-ARTIFACT="<expected final artifact path>"
+ARTIFACT="<exact expected final artifact path under CHECKPOINT_DIR or EVAL_DIR>"
 export WAVE_ID="<wave_id>"
 
 # self-guard (idempotency): the expected final artifact is the only completion signal
 if [ -e "$ARTIFACT" ]; then
   echo "[skip] $RUN_ID_FLAT already done (artifact present)"; exit 0
 fi
-if grep -q '"state": "done"' "$EVAL_DIR/.status.json" 2>/dev/null; then
+if grep -q '"state": "done"' "$STATUS_PATH" 2>/dev/null; then
   echo "[warn] status says done but expected artifact is missing; re-executing $RUN_ID_FLAT" >&2
 fi
 
@@ -131,7 +134,7 @@ fi
 
 # fallback: if python died before StatusWriter could finalize, mark the run failed
 if [ $rc -ne 0 ] && [ ! -e "$ARTIFACT" ]; then
-  "$ENVIRONMENT_DIR/bin/python" - "$EVAL_DIR/.status.json" <<'EOF'
+  "$ENVIRONMENT_DIR/bin/python" - "$STATUS_PATH" <<'EOF'
 import json, os, sys, datetime, pathlib
 p = pathlib.Path(sys.argv[1])
 s = json.loads(p.read_text()) if p.exists() else {}
@@ -154,8 +157,15 @@ Notes:
 - The overrides list is the FULL run_id (and any non-default fixed params) — explicit, so the
   script is meaningful standalone. Produce each array token with
   `code/common/run_id.py::hydra_override_arg`; never interpolate raw config values into shell.
-- `<run_id path>` / `<flat run_id>` must be produced with `code/common/run_id.py` at generation
-  time — never hand-composed.
+- Read the experiment's literal `RUN_ID_PATH_LAYOUT` (`nested` or `collapsed-v1`). Produce the
+  checkpoint and evaluation suffix once with canonical
+  `run_id_path(cfg, params, layout=RUN_ID_PATH_LAYOUT)`, and materialize the resulting exact
+  `CHECKPOINT_DIR`, `EVAL_DIR`, `STATUS_PATH`, and `ARTIFACT` in the generated script. The
+  checkpoint and evaluation directories must use the same selected layout. Never hand-compose a
+  path, infer slash depth, or reconstruct a path from `RUN_ID_FLAT`. Plot producers use the same
+  helper and layout after their plot-specific prefix.
+- Produce `<flat run_id>` with canonical `run_id_flat` at generation time. Scripts, logs, and
+  wandb names remain flat and unchanged for both path layouts.
 - The artifact guard runs **before** anything else, so re-issuing a lane's dispatch command after
   a crash re-executes only runs whose declared completion artifact is absent — resuming or
   restarting per the experiment's design-time resume decision. `.status.json` is inspected only
@@ -224,8 +234,25 @@ moving work to a freer rig, ...>
 
 This run: `model=mlp,lr=1e-3,seed=0` → rig-4090, gpu 0.
 
+Run path layout: `nested`.
+
+Checkpoint directory: `checkpoints/000_grokking/model=mlp/lr=1e-3/seed=0`.
+Evaluation directory: `evaluations/000_grokking/model=mlp/lr=1e-3/seed=0`.
+Status path: `evaluations/000_grokking/model=mlp/lr=1e-3/seed=0/.status.json`.
+Expected final artifact: `evaluations/000_grokking/model=mlp/lr=1e-3/seed=0/result.json`.
+
 Full wave: 4 runs — 3 on rig-4090 (gpu 0), 1 on behemoth (gpu 0).
 ```
+
+The four run-path fields above are concrete launch records, not templates. Generate all of them
+from the same selected `RUN_ID_PATH_LAYOUT`; for `collapsed-v1` their concrete values will differ.
+Monitoring and recovery consume these recorded paths verbatim and never infer a layout from slash
+depth. `RUN_ID_PARAMS` may change only while no checkpoint, evaluation, or plot output and no wave
+README or script exists. After the first such surface, any identity-schema change under `nested` or
+`collapsed-v1` requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the
+established tree. The experiment's layout is likewise immutable after that boundary. A mismatch or
+mixed tree blocks the wave and routes changed work to a new numbered sub-experiment; never move,
+rename, or rewrite the old README, script, log, or artifact paths.
 
 When the user has granted extra cards on `behemoth` for this wave, the README says so, in the
 same words as the script header — e.g. `Full wave: 6 runs — 3 on rig-4090 (gpu 0), 3 on
@@ -251,7 +278,7 @@ path into a dispatch, monitor, or recovery command. A path spelled by hand is a 
 declared fact, and the copy is what goes stale when a rig's checkout moves.
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <repo_path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; rc=\$?; { [ \"\$rc\" -eq 86 ] || [ \"\$rc\" -eq 87 ]; } && exit \"\$rc\"; done'"
+ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <repo_path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; rc=\$?; { [ \"\$rc\" -eq 86 ] || [ \"\$rc\" -eq 87 ] || [ \"\$rc\" -eq 88 ]; } && exit \"\$rc\"; done'"
 ```
 
 When `<rig>` is the current local hub, the hub subagent runs the inner command directly instead
@@ -259,12 +286,15 @@ of self-SSH:
 
 ```bash
 tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_rig-4090_gpu<ids> \
-  'cd <repo_path on rig-4090> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_rig-4090_gpu<ids>.sh; do bash "$s"; rc=$?; { [ "$rc" -eq 86 ] || [ "$rc" -eq 87 ]; } && exit "$rc"; done'
+  'cd <repo_path on rig-4090> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_rig-4090_gpu<ids>.sh; do bash "$s"; rc=$?; { [ "$rc" -eq 86 ] || [ "$rc" -eq 87 ] || [ "$rc" -eq 88 ]; } && exit "$rc"; done'
 ```
 
 - Glob expansion sorts lexicographically ⇒ deterministic ordering.
 - The glob **is** the assignment record: a run is in this lane precisely because
   `wave_<rig>_gpu<ids>.sh` exists in its wave folder. Nothing to keep in sync.
+- Every launch and recovery loop stops on the complete reserved exit set `{86, 87, 88}`. These
+  mean source drift, environment drift, and insufficient storage respectively; none is an
+  ordinary run failure that may fall through to the next queued script.
 - Because every wave script self-guards, re-issuing this exact command is the entire recovery
   procedure.
 
@@ -279,7 +309,7 @@ the user how to watch: for a peer, `ssh <rig>` →
 Monitoring one run via the three signals (artifacts / `.status.json` / latest run log):
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "cat <repo_path on rig>/evaluations/<NNN_exp>/<run_id path>/.status.json; tail -n 30 \$(ls -t <repo_path on rig>/logs/<NNN_exp>/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-*.log | head -1)"
+ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "test -e <repo_path on rig>/<exact expected final artifact from wave record> && echo ARTIFACT=present || echo ARTIFACT=absent; cat <repo_path on rig>/<exact status path from wave record>; tail -n 30 \$(ls -t <repo_path on rig>/logs/<NNN_exp>/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-*.log | head -1)"
 ```
 
 For the current local hub, run the quoted `cat ...; tail ...` portion directly from the project
@@ -291,7 +321,7 @@ One round-trip to diagnose a rig that stopped answering or whose heartbeat froze
 every lane on that rig + boot time + run status in a single ssh:
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux ls 2>/dev/null | grep <wave_id> || echo SESSIONS=gone; echo BOOT=\$(uptime -s); cat <repo_path on rig>/evaluations/<NNN_exp>/<run_id path>/.status.json"
+ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux ls 2>/dev/null | grep <wave_id> || echo SESSIONS=gone; echo BOOT=\$(uptime -s); test -e <repo_path on rig>/<exact expected final artifact from wave record> && echo ARTIFACT=present || echo ARTIFACT=absent; cat <repo_path on rig>/<exact status path from wave record>"
 ```
 
 For the current local hub, run the quoted diagnostic portion directly. The same boot-time,
@@ -307,7 +337,7 @@ session already exists); the self-guarded wave scripts then skip done runs and r
 interrupted ones:
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux has-session -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 2>/dev/null || tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <repo_path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; rc=\$?; { [ \"\$rc\" -eq 86 ] || [ \"\$rc\" -eq 87 ]; } && exit \"\$rc\"; done'"
+ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux has-session -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 2>/dev/null || tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <repo_path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; rc=\$?; { [ \"\$rc\" -eq 86 ] || [ \"\$rc\" -eq 87 ] || [ \"\$rc\" -eq 88 ]; } && exit \"\$rc\"; done'"
 ```
 
 For a local hub lane, run the same `tmux has-session ... || tmux new-session ...` command directly
