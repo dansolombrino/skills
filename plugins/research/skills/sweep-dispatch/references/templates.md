@@ -162,8 +162,8 @@ Notes:
   `run_id_path(cfg, params, layout=RUN_ID_PATH_LAYOUT)`, and materialize the resulting exact
   `CHECKPOINT_DIR`, `EVAL_DIR`, `STATUS_PATH`, and `ARTIFACT` in the generated script. The
   checkpoint and evaluation directories must use the same selected layout. Never hand-compose a
-  path, infer slash depth, or reconstruct a path from `RUN_ID_FLAT`. Plot producers use the same
-  helper and layout after their plot-specific prefix.
+  path, infer slash depth, or reconstruct a path from `RUN_ID_FLAT`. Plot outputs are the
+  exception: they are not run-scoped, carry no run_id segments, and never go through the helper.
 - Produce `<flat run_id>` with canonical `run_id_flat` at generation time. Scripts, logs, and
   wandb names remain flat and unchanged for both path layouts.
 - The artifact guard runs **before** anything else, so re-issuing a lane's dispatch command after
@@ -247,7 +247,7 @@ Full wave: 4 runs — 3 on rig-4090 (gpu 0), 1 on behemoth (gpu 0).
 The four run-path fields above are concrete launch records, not templates. Generate all of them
 from the same selected `RUN_ID_PATH_LAYOUT`; for `collapsed-v1` their concrete values will differ.
 Monitoring and recovery consume these recorded paths verbatim and never infer a layout from slash
-depth. `RUN_ID_PARAMS` may change only while no checkpoint, evaluation, or plot output and no wave
+depth. `RUN_ID_PARAMS` may change only while no checkpoint or evaluation and no wave
 README or script exists. After the first such surface, any identity-schema change under `nested` or
 `collapsed-v1` requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the
 established tree. The experiment's layout is likewise immutable after that boundary. A mismatch or

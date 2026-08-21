@@ -67,7 +67,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "4.0.0")
+        self.assertEqual(manifest["version"], "4.0.1")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -1036,36 +1036,51 @@ class ResearchContractTests(unittest.TestCase):
         for name, path in propagated.items():
             assert_plot_contract(name, " ".join(path.read_text().lower().split()))
 
-    def test_plot_surfaces_never_apply_the_run_id_path_layout(self) -> None:
-        """plots/ stopped being run-scoped: no plot path may embed run_id."""
-        skills = ROOT / "plugins/research/skills"
-        contracts = {
-            "visualizations": skills / "visualizations/SKILL.md",
-            "orchestrator": skills / "scientific-orchestrator/references/control-contract.md",
-            "flywheel auto": skills / "flywheel-auto/SKILL.md",
-            "autonomous protocol": (
-                skills
-                / "flywheel-auto/references/experiment-design-protocol-autonomous.md"
-            ),
-            "experiment protocol": skills / "flywheel/references/experiment-design-protocol.md",
-            "scientific audit": skills / "critical-scientific-audit/SKILL.md",
-            "flywheel logging": skills / "flywheel-log/SKILL.md",
-            "flywheel reproduction": skills / "flywheel-reproduce/SKILL.md",
-            "execution agreement": (
-                skills / "research-project-init/references/templates.md"
-            ),
-            "project conventions": (
-                skills / "research-project-init/references/conventions.md"
-            ),
-        }
+    def test_no_skill_anywhere_describes_a_run_id_derived_plot_path(self) -> None:
+        """plots/ stopped being run-scoped in research 4.0.0.
 
-        for name, path in contracts.items():
+        Swept over every distributed markdown file rather than a hand-listed
+        map: the surface most likely to still assert the old contract is the
+        one whose author forgot it existed, and such a surface would be
+        missing from a hand-maintained list for exactly the same reason.
+        """
+        skills = ROOT / "plugins/research/skills"
+        offenders: list[tuple[str, str]] = []
+
+        for path in sorted(skills.rglob("*.md")):
             contract = " ".join(path.read_text().lower().split())
-            with self.subTest(contract=name):
-                # No surface may still describe a run_id-derived plot path.
-                self.assertNotIn("run-id-derived", contract)
-                self.assertNotIn("<partial_run_id path>", contract)
-                self.assertNotRegex(contract, r"plots/[^ ]*/(?:model|lr|seed)=")
+            rel = str(path.relative_to(skills))
+            if "run-id-derived" in contract:
+                offenders.append((rel, "run-ID-derived plot path"))
+            if "<partial_run_id path>" in contract:
+                offenders.append((rel, "partial run_id plot path"))
+            embedded = re.search(r"plots/[^ ]*/(?:model|lr|seed)=", contract)
+            if embedded:
+                offenders.append((rel, f"run_id in plot path: {embedded.group(0)}"))
+
+        self.assertEqual(offenders, [], f"run_id-derived plot paths survive: {offenders}")
+
+    def test_wave_dispatch_keeps_plots_out_of_the_run_scoped_surfaces(self) -> None:
+        """sweep-dispatch generates the wave scripts that materialize artifact
+        paths, so it must not re-introduce a run-scoped plots/ destination."""
+        skills = ROOT / "plugins/research/skills"
+        dispatch = " ".join(
+            (skills / "sweep-dispatch/SKILL.md").read_text().lower().split()
+        )
+        templates = " ".join(
+            (skills / "sweep-dispatch/references/templates.md").read_text().lower().split()
+        )
+
+        self.assertIn("`plots/` is not run-scoped and never uses the helper", dispatch)
+        self.assertNotRegex(
+            dispatch, r"`checkpoints/`, `evaluations/`, and `plots/` stay run-scoped"
+        )
+        self.assertIn(
+            "not run-scoped, carry no run_id segments, and never go through the helper",
+            templates,
+        )
+        # A plot existing no longer freezes the run identity schema.
+        self.assertNotIn("no checkpoint, evaluation, or plot output", templates)
 
     def test_every_launch_and_recovery_loop_stops_on_reserved_exits(self) -> None:
         templates = (

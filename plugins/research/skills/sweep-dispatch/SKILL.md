@@ -97,8 +97,9 @@ scripts/NNN_exp/<run_id_flat>/wave_<wave_id>/
   `RUN_ID_PATH_LAYOUT` never changes scripts, logs, or wandb naming: those remain flat.
 - **The filesystem encodes the assignment**: a run is on that rig and those GPUs precisely because
   `wave_<rig>_gpu<ids>.sh` exists in its wave folder. No separate assignment record may drift.
-- Only `scripts/` and `logs/` are wave-scoped. `checkpoints/`, `evaluations/`, and `plots/` stay
-  run-scoped at paths produced by the canonical helper for the experiment's recorded layout.
+- Only `scripts/` and `logs/` are wave-scoped. `checkpoints/` and `evaluations/` stay
+  run-scoped at paths produced by the canonical helper for the experiment's recorded layout;
+  `plots/` is not run-scoped and never uses the helper.
   Materialize the exact checkpoint directory, evaluation directory, status path, and expected
   final artifact path into each generated wave script; never leave a monitor or recovery step to
   infer how many path segments the run id occupies. Artifacts must keep a stable per-run path or
