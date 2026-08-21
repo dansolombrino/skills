@@ -368,13 +368,20 @@ plots/*
 __pycache__/
 *.pyc
 .pytest_cache/
-outputs/          # hydra default run dir, if left enabled
-.vscode/*        # editor state is machine-local ...
-!.vscode/settings.json   # ... except the exclude maps, which are project policy
+# hydra default run dir, if left enabled
+outputs/
+# editor state is machine-local, except the exclude maps, which are project policy
+.vscode/*
+!.vscode/settings.json
 ```
 
 Adjust with the user: they may want evaluations/ (small jsons) or plots/ committed.
 `.status.json` markers live inside evaluations/ and follow whatever is decided for it.
+
+Every comment above sits on its own line, and must. `.gitignore` has no inline comments: a
+trailing `#` note becomes part of the pattern, so `outputs/  # hydra run dir` silently stops
+ignoring `outputs/` and matches a path literally named that instead. Never annotate a pattern
+inline, here or in a scaffolded project.
 
 ## .vscode/settings.json
 
