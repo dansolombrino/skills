@@ -369,10 +369,125 @@ __pycache__/
 *.pyc
 .pytest_cache/
 outputs/          # hydra default run dir, if left enabled
+.vscode/*        # editor state is machine-local ...
+!.vscode/settings.json   # ... except the exclude maps, which are project policy
 ```
 
 Adjust with the user: they may want evaluations/ (small jsons) or plots/ committed.
 `.status.json` markers live inside evaluations/ and follow whatever is decided for it.
+
+## .vscode/settings.json
+
+Committed, not machine-local. The taxonomy guarantees that a working project's artifact trees
+dwarf its source: `plots/`, `checkpoints/`, `evaluations/`, `logs/`, `shitpads/`, `references/`,
+and `{{ENVIRONMENT_NAME}}/` routinely hold five to six figures of files against a few hundred
+tracked ones. `.gitignore` does not hide any of that from an editor. Only the exclude maps below
+do, so without this file every checkout of every Research 2.0 project installs recursive file
+watchers over the whole artifact tree, full-text-searches it, and language-server-indexes the
+virtual environment. Scaffold it at init; retrofitting it later is a step nothing prompts for.
+
+Keep artifact trees **visible** in the file explorer — they are browsed by hand, `plots/` most of
+all — and exclude them from the watcher, from search, and from Python analysis. State the
+consequence in the file: unwatched directories do not auto-refresh, so newly written artifacts
+appear only after an explicit explorer refresh. That is the deliberate trade, and a scaffold that
+hides it produces a user who thinks a run wrote nothing.
+
+```jsonc
+{
+  // Git tracks a few hundred files here; the working tree holds far more, because
+  // the artifact trees below are large and gitignored. .gitignore does NOT hide
+  // them from the editor -- only these three exclude maps do.
+  //
+  // Policy: artifact trees stay VISIBLE in the explorer (plots/ gets browsed by
+  // hand) but are excluded from the watcher, from search, and from Python
+  // analysis. Consequence: they are unwatched, so the explorer does NOT
+  // auto-refresh when a run writes new files there -- hit Refresh to see them.
+
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true,
+    "checkpoints/**": true,
+    "plots/**": true,
+    "evaluations/**": true,
+    "logs/**": true,
+    "shitpads/**": true,
+    "references/**": true,
+    "outputs/**": true,
+    "storage/**": true,
+    "{{ENVIRONMENT_NAME}}/**": true,
+    ".rigsync_cache/**": true,
+    ".pytest_cache/**": true,
+    "**/__pycache__/**": true,
+    "**/wandb/**": true
+  },
+
+  // logs/wandb/ holds symlinks (latest-run, debug logs) that can walk the
+  // watcher and search outside the workspace entirely.
+  "files.followSymlinks": false,
+  "search.followSymlinks": false,
+
+  "search.useIgnoreFiles": true,
+  "search.exclude": {
+    "checkpoints/**": true,
+    "plots/**": true,
+    "evaluations/**": true,
+    "logs/**": true,
+    "shitpads/**": true,
+    "references/**": true,
+    "outputs/**": true,
+    "storage/**": true,
+    "{{ENVIRONMENT_NAME}}/**": true,
+    ".rigsync_cache/**": true,
+    ".pytest_cache/**": true,
+    "**/__pycache__/**": true,
+    "**/*.pyc": true,
+    "uv.lock": true
+  },
+
+  // Artifact trees stay visible on purpose. Only genuine noise is hidden.
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.pyc": true,
+    "**/.pytest_cache": true,
+    ".rigsync_cache": true,
+    "{{ENVIRONMENT_NAME}}": true
+  },
+
+  // Without an explicit exclude list the language server indexes the whole
+  // workspace, virtual environment included.
+  "python.defaultInterpreterPath": "${workspaceFolder}/{{ENVIRONMENT_NAME}}/bin/python",
+  "python.analysis.exclude": [
+    "checkpoints/**",
+    "plots/**",
+    "evaluations/**",
+    "logs/**",
+    "shitpads/**",
+    "references/**",
+    "outputs/**",
+    "storage/**",
+    "{{ENVIRONMENT_NAME}}/**",
+    ".rigsync_cache/**",
+    "**/__pycache__/**"
+  ],
+  "python.analysis.diagnosticMode": "openFilesOnly",
+  "python.analysis.indexing": true,
+
+  // A timed network fetch stalls the editor for no benefit on a repo this small.
+  "git.autofetch": false,
+  "git.untrackedChanges": "separate",
+
+  // An artifact json or csv opened by accident should not freeze the editor.
+  "editor.largeFileOptimizations": true,
+
+  "npm.autoDetect": "off",
+  "task.autoDetect": "off",
+  "typescript.disableAutomaticTypeAcquisition": true
+}
+```
+
+Substitute `{{ENVIRONMENT_NAME}}` everywhere above, including inside
+`python.defaultInterpreterPath`. Add a project's own heavy directories to all three maps when the
+user declares any beyond the taxonomy; never drop a taxonomy directory from them.
 
 ## sync.toml
 
