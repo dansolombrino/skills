@@ -90,6 +90,12 @@ network, no server, and no sibling files:
 - **Plotly is the default library**, because it satisfies that contract and gives legend series
   toggling natively. A different library for a specific plot is allowed only with explicit user
   approval through the plotting-communication gate; do not mix libraries silently within a project.
+- **White background, always.** The page and the figure render on white regardless of the
+  reader's browser or OS theme. Set the HTML `body` background to `#ffffff` explicitly, set the
+  figure's `paper_bgcolor` and `plot_bgcolor` to `#ffffff` (Plotly's default `plotly` template
+  paints the plot area grey, so overriding it is mandatory), and never emit a dark-mode or
+  `prefers-color-scheme` variant. Keep text and gridline colors dark enough to stay legible on
+  white.
 - **File size is not a constraint.** `plots/` is gitignored, so plots are shared by sending the
   file. Never propose committing plot output, and never downsample data to shrink a file.
 - **Selection first, figure second.** The page lets the user choose among the run_id params the
@@ -139,7 +145,8 @@ network, no server, and no sibling files:
   identical to the previously explicitly approved concrete path.
 - After rendering, open the file and verify that the accepted text is present, legible, and
   unchanged in the page's default view, that every approved affordance actually works, and that
-  the approved strings are present in the HTML source. Do not silently repair wording, placement,
+  the approved strings are present in the HTML source, and that the page and plot area
+  are white. Do not silently repair wording, placement,
   or title arrangement; propose any correction and reopen the approval gate before editing.
 - **No fixed plot checklist**: manual mode asks what the user wants; auto mode chooses the smallest
   visualization that answers the approved scientific handoff.
