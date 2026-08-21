@@ -121,21 +121,17 @@ When the artifact plan includes a newly authored plot, propose its complete comm
 specification before creating or modifying plot-producing code: the exact title, visible in-figure
 text defining every plotted metric and its higher/lower/target/range/no-universal-direction
 interpretation, exact placement, and every complete project-relative `plots/` export path including
-its leaf filename. Identify the experiment-wide pinned `RUN_ID_PATH_LAYOUT`; construct and show the
-complete canonical `nested` path or template first without optimizing it. If two or more fixed
-`RUN_ID_PARAMS` remain after aggregated params are elided, immediately show exactly one separate
-`collapsed-v1` alternative: combine all fixed params, never a partial group, in elected order as
-comma-joined, canonically percent-encoded `key=value` components. With zero or one fixed param, show
-one path and no separate alternative; label it as the byte-identical rendering of `nested` and
-`collapsed-v1` plus the experiment's pinned literal. That path is approvable under either pin
-without treating it as a layout change. With two or more, only the form matching the pinned literal
-is approvable. Before any output artifact or wave exists, `experiment-design` owns layout election
-through the canonical `nested`-first comparison. Once any artifact or wave exists, the pin is
-immutable; wanting the other form requires a new numbered sub-experiment, never per-plot approval or
-an in-place layout change. Protect `plots/`, the complete experiment path, script stem, and leaf.
-Reject collisions and overwrites. If runtime values prevent a concrete path before the edit,
+its leaf filename, its arrangement across title lines, and the interaction affordances. Every plot
+is one self-contained interactive HTML file at `plots/<experiment_path>/<script_stem>/<leaf>.html`;
+run_id selection lives inside the file, so no plot path carries run_id segments and plot
+communication never identifies, applies, or reopens `RUN_ID_PATH_LAYOUT`. Ask how the selected
+params are arranged across title lines for this plot rather than reusing another plot's
+arrangement. Protect `plots/`, the complete experiment path, script stem, and leaf.
+Rewriting a leaf whole on rerun is expected and needs no fresh approval while the path is
+unchanged; reject any destination that collides with a different script's output. If runtime values
+prevent a concrete path before the edit,
 identify every placeholder in the complete path template. Before rendering, show every fully
-resolved concrete export path matching the pinned layout, including its leaf filename, and wait for
+resolved concrete export path, including its leaf filename, and wait for
 explicit user approval. An approved template does not approve any concrete destination. A new or
 changed resolved path always reopens approval, even when it conforms to the approved template; do
 not render before that approval. Cover separate axes, panels, derived metrics, and visual encodings

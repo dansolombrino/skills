@@ -104,9 +104,9 @@ logs/NNN_exp/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-<YYYYmmdd-HHMMSS>.
 ```
 
 So `logs/` mirrors `scripts/` (flat run_id form, wave-scoped) — you reach a log from its
-script — while `checkpoints/`, `evaluations/`, and run-ID-derived `plots/` all use the
-experiment's one authoritative run_id **path** layout after their experiment-specific prefixes and
-stay run-scoped. Logs are timestamped per launch, so history is kept; logs are never overwritten,
+script — while `checkpoints/` and `evaluations/` both use the experiment's one authoritative
+run_id **path** layout after their experiment-specific prefixes and stay run-scoped. `plots/` is
+deliberately not run-scoped: see the plot-output rule below. Logs are timestamped per launch, so history is kept; logs are never overwritten,
 and a crash-recovery relaunch never clobbers the earlier attempt. Hydra projects must disable
 hydra's job file logging (defaults entry
 `- override hydra/job_logging: none`) or explicitly point it inside `logs/` — a stray
@@ -118,14 +118,16 @@ Experiments are named `NNN_[experiment_name]` (three-digit zero-padded), optiona
 Call this complete numbered leaf hierarchy `<experiment_path>`; never shorten it to the parent
 experiment when the producer is a sub-experiment. A visualization with exactly one producer lives
 at `visualizations/<experiment_path>/<script_stem>.py` and writes only below
-`plots/<experiment_path>/<script_stem>/<partial_run_id path>/`. For example:
+`plots/<experiment_path>/<script_stem>/`, one self-contained interactive HTML file per figure.
+Run_id selection lives inside that file, never in its path, so no `key=value` segment ever appears
+under `plots/`. For example:
 
 ```
 visualizations/000_grokking/plot_loss.py
-plots/000_grokking/plot_loss/model=mlp/lr=1e-3/seed=0/loss_curve.pdf
+plots/000_grokking/plot_loss/loss_curve.html
 
 visualizations/001_compression/002_weight_error/plot_layers.py
-plots/001_compression/002_weight_error/plot_layers/model=vit/seed=0/layer_error.pdf
+plots/001_compression/002_weight_error/plot_layers/layer_error.html
 ```
 
 Do not infer placement for a visualization that combines multiple producer experiment paths; stop
@@ -180,8 +182,8 @@ The per-experiment **ordered** set of config params that uniquely identifies a r
   path-building code actually uses; mirrored in the experiment's EXPERIMENTS.md section header.
 - Config yamls stay pure hydra params — **no run_id metadata in yaml**.
 - Two renderings via `code/common/run_id.py`:
-  - **path form** → used under `checkpoints/`, `evaluations/`, and for run-ID-derived
-    `plots/` paths. Every experiment records one authoritative
+  - **path form** → used under `checkpoints/` and `evaluations/`, and by plotting code to
+    **read** them; `plots/` output paths never use it. Every experiment records one authoritative
     `RUN_ID_PATH_LAYOUT = "nested"|"collapsed-v1"` beside `RUN_ID_PARAMS` and passes it as the
     keyword-only `layout` argument to `run_id_path`. The default and canonical proposal is
     `nested`, e.g. `model=mlp/lr=1e-3/seed=0/`. `collapsed-v1` is the opt-in rendering
@@ -197,11 +199,11 @@ The per-experiment **ordered** set of config params that uniquely identifies a r
 ### run-output path layout approval
 
 At experiment design time, first construct and show the complete `nested` templates through their
-leaf names for checkpoints, evaluations, and every run-ID-derived plot. Immediately afterward,
-when at least two ordered `RUN_ID_PARAMS` are eligible, show exactly one separately labeled
-`collapsed-v1` alternative built from those same params; show none when fewer than two are
-eligible. The alternative collapses all applicable ordered params after aggregated plot params are
-elided, never a partial group. Wait for explicit user layout selection; neither automatic mode may
+leaf names for checkpoints and evaluations; `plots/` is not run-scoped and is out of scope here.
+Immediately afterward, when at least two ordered `RUN_ID_PARAMS` are eligible, show exactly one
+separately labeled `collapsed-v1` alternative built from those same params; show none when fewer
+than two are eligible. The alternative collapses all applicable ordered params, never a partial
+group. Wait for explicit user layout selection; neither automatic mode may
 select `collapsed-v1`. Without explicit user approval, record `RUN_ID_PATH_LAYOUT = "nested"`.
 
 For any proposed path whose applicable fixed-param list has zero or one item, `nested` and
@@ -212,7 +214,7 @@ This degenerate presentation does not change the experiment-wide pin. The exactl
 `collapsed-v1` alternative rule still applies whenever two or more applicable fixed params remain.
 
 The approved value is one experiment-wide layout, not a per-artifact preference. Checkpoints,
-evaluations (including `.run_config.json` and `.status.json`), and run-ID-derived plots must all
+evaluations (including `.run_config.json` and `.status.json`) must both
 call `run_id_path(..., layout=RUN_ID_PATH_LAYOUT)` with the applicable full or partial ordered
 param list. `scripts/` and `logs/` folders, WandB run names, log-line identity, and
 EXPERIMENTS.md row identity continue to use `run_id_flat`; choosing a path layout does not rename

@@ -1,6 +1,6 @@
 ---
 name: visualizations
-description: Create or update Research 2.0 plots and figures from provenance-valid experiment evaluation outputs, preserve each single producer's complete numbered hierarchy, run plotting directly on rig-4090 without orchestration or wave machinery, and require user approval of exact titles, metric explanations, and complete export paths before every plotting-code edit. Use when the user asks to plot, visualize, chart, make figures from results, or add or modify scripts under visualizations/; do not use to recompute missing evaluation data.
+description: Create or update Research 2.0 plots as self-contained interactive HTML from provenance-valid experiment evaluation outputs, keep run_id selection inside the file instead of the export path, preserve each single producer's complete numbered hierarchy, run plotting directly on rig-4090 without orchestration or wave machinery, and require user approval of exact titles, title line arrangement, metric explanations, interaction affordances, and export paths before every plotting-code edit. Use when the user asks to plot, visualize, chart, make figures from results, or add or modify scripts under visualizations/; do not use to recompute missing evaluation data.
 ---
 
 # visualizations
@@ -28,9 +28,9 @@ the scientific layer. Plot communication approval is always user-owned and overr
   `run_id_path(..., layout=RUN_ID_PATH_LAYOUT)` from the canonical helper. Never infer layout from
   slash depth or force `nested`. Viz never reads checkpoints or recomputes; if a quantity is absent
   from evaluations, the producer experiment must export it first.
-- Output: under `plots/<experiment_path>/<script_stem>/<partial_run_id path>/` — one subfolder per
-  script (stem = filename without `.py`) after the complete producer hierarchy. Resolve its
-  fixed-param portion with the same recorded `RUN_ID_PATH_LAYOUT` as the producer.
+- Output: under `plots/<experiment_path>/<script_stem>/` — one subfolder per script (stem =
+  filename without `.py`) after the complete producer hierarchy, holding one HTML file per figure.
+  `RUN_ID_PATH_LAYOUT` governs reads only; it never shapes a plot output path.
 - If a visualization consumes multiple producer experiment paths, stop without inferring its
   placement; that taxonomy requires a separate user decision.
 - Unit tests for a plotting script are optional and create-on-demand. When one is written, it
@@ -38,72 +38,96 @@ the scientific layer. Plot communication approval is always user-owned and overr
 
 ## Interface: argparse, NOT hydra
 
-Plotting is too dynamic to standardize into configs. Each script takes CLI args via argparse, with argument names matching **1:1** the producer experiment's param names (run_id/config params), plus extra viz-specific args as needed:
+Plotting is too dynamic to standardize into configs. Each script takes CLI args via argparse, with argument names matching **1:1** the producer experiment's param names (run_id/config params), plus extra viz-specific args as needed.
+
+These args **scope** which runs the figure covers; they no longer pin the one run it shows.
+Default to every run available in `evaluations/` and treat each arg as an optional filter, so the
+emitted file carries the whole selectable space:
 
 ```bash
-<environment.name>/bin/python visualizations/000_grokking/002_loss/plot_curve.py --model mlp --lr 1e-3 --seed 0
+# every run:
+<environment.name>/bin/python visualizations/000_grokking/002_loss/plot_curve.py
+# restricted to one model:
+<environment.name>/bin/python visualizations/000_grokking/002_loss/plot_curve.py --model mlp
 ```
 
-## Output paths — per-script subfolder + partial run_id rule
+## Output paths — per-script subfolder, one file per figure
 
 Each script writes only below the plot root obtained by replacing its leading `visualizations/`
 with `plots/` and removing `.py`. This preserves every numbered hierarchy component and adds the
-script stem exactly once. Inside that root, the partial run_id rule applies: a plot sits at the
-path of the run_id params it holds **fixed**; params it aggregates over are elided:
+script stem exactly once. Inside that root a figure is one leaf file, and
+run_id selection lives inside the file rather than in the path:
 
 ```
-plots/000_grokking/plot_loss/model=mlp/lr=1e-3/seed=0/loss_curve.pdf   # per-run: full run_id path
-plots/000_grokking/plot_acc_vs_lr/model=mlp/acc_vs_lr.pdf              # fixed model, aggregated over lr+seed
-plots/000_grokking/plot_acc_vs_lr/acc_vs_lr_by_model.pdf               # aggregated over everything
-plots/001_compression/002_weight_error/plot_layers/model=vit/seed=0/layer_error.pdf  # nested producer
+plots/000_grokking/plot_loss/loss_curve.html
+plots/000_grokking/plot_acc_vs_lr/acc_vs_lr.html
+plots/001_compression/002_weight_error/plot_layers/layer_error.html   # nested producer
 ```
 
-For every export proposal, identify the experiment-wide pinned `RUN_ID_PATH_LAYOUT` and construct
-the complete canonical `nested` output path or template first, without optimizing it. If two or
-more fixed `RUN_ID_PARAMS` remain after aggregated params are elided, immediately afterward show
-exactly one separately labeled `collapsed-v1` alternative. It replaces all fixed-param path
-segments, never a partial group, with one segment in elected order using the canonical helper's
-comma-joined, percent-encoded `key=value` representation. With zero or one fixed param, show one
-path and no separate alternative; label it as the byte-identical rendering of `nested` and
-`collapsed-v1`, and state the producer experiment's pinned literal. That one concrete path is
-approvable under either pin; do not treat the byte-identical rendering as a layout change.
+No plot path carries run_id segments: no `key=value` directories, no per-run subfolders anywhere
+under `plots/`. Protect `plots/`, the complete `<experiment_path>`, `<script_stem>`, and the leaf
+filename — none of them may be collapsed. A script may emit several leaves when it produces
+genuinely distinct figures; name each leaf for what it shows, and keep leaf and stem distinct so
+variants of one figure stay expressible.
 
-With two or more fixed params, label which displayed form matches the pinned literal `nested` or
-`collapsed-v1`; only that form is approvable. Before any output artifact or wave exists,
-`experiment-design` owns layout election through the canonical `nested`-first comparison. Once any
-artifact or wave exists, the pin is immutable. Wanting the other form requires a new numbered
-sub-experiment, never per-plot approval or selection or an in-place layout change.
+Rewriting a leaf whole is the expected result of every rerun. That self-overwrite needs no
+approval while the resolved path is unchanged. Two different scripts resolving to the same leaf is
+still an error: stop and propose a new leaf rather than letting one clobber the other.
 
-Both layouts protect `plots/`, the complete `<experiment_path>`, `<script_stem>`, and the leaf
-filename: collapse only the intervening fixed-param segments. Elide every aggregated param in both
-layouts. Reject any candidate that collides with another export or would overwrite an existing
-artifact; propose a new leaf or stop for direction. An approved template does not approve any
-concrete destination.
+Before modifying an existing single-producer plotter, verify that its code and output roots
+preserve the producer's complete `<experiment_path>`. Report a flattened or otherwise mismatched
+layout and stop; do not move or rewrite artifacts.
 
-Before modifying an existing single-producer plotter, verify that its code and output roots preserve
-the producer's complete `<experiment_path>`. Report a flattened or otherwise mismatched layout and
-stop; do not move or rewrite artifacts. Use a new numbered sub-experiment when a different layout is
-required after any artifact or wave exists.
+## Artifact contract — self-contained interactive HTML
+
+Every plot is one self-contained interactive HTML file at
+`plots/<experiment_path>/<script_stem>/<leaf>.html` that a colleague can open in a browser with no
+network, no server, and no sibling files:
+
+- **One self-contained file.** Inline every script, style, and datum. No `http(s)://` references,
+  no CDN tags, no external asset paths. Confirm it renders correctly from `file://` with the
+  network unavailable.
+- **Plotly is the default library**, because it satisfies that contract and gives legend series
+  toggling natively. A different library for a specific plot is allowed only with explicit user
+  approval through the plotting-communication gate; do not mix libraries silently within a project.
+- **File size is not a constraint.** `plots/` is gitignored, so plots are shared by sending the
+  file. Never propose committing plot output, and never downsample data to shrink a file.
+- **Selection first, figure second.** The page lets the user choose among the run_id params the
+  file covers, then renders the figure for that selection.
+- **Offer the affordances the figure's shape earns**: a series toggle whenever it carries two or
+  more line series, and a slider or stepper whenever it spans an ordered dimension such as layer,
+  epoch, step, or checkpoint. Propose each one in the specification; the user approves or declines.
+  Never impose a fixed interaction checklist beyond what the shape implies.
 
 ## Design & execution
 
 - Before every creation or modification of plotting code, read the producer's authoritative
   ordered `RUN_ID_PARAMS`, `RUN_ID_PATH_LAYOUT`, metric definitions, evaluation schema, and
-  scientific contract. Classify each RUN_ID parameter as fixed or aggregated for every plot the
-  script produces.
-- Propose one exact communication specification per plot. Include the title wording, punctuation,
-  formatting, and each fixed RUN_ID param as `key={value}` in elected order. Also propose visible
-  in-figure text that explains what every plotted metric measures, its higher/lower/target/range/no-
-  universal-direction interpretation, the text's exact placement, and every complete
-  project-relative export path rooted at `plots/` and ending in its leaf filename. Omit aggregated
-  RUN_ID params; describe aggregation semantically only when it helps interpretation. If none are
-  fixed, state that the semantic title contains no RUN_ID part rather than fabricating one.
-- If runtime values prevent a concrete path before the code edit, propose the complete path template
-  and identify every placeholder explicitly. Before rendering, show every fully resolved concrete
-  export path matching the pinned layout, including its leaf filename, and wait for explicit user
-  approval. An approved template does not approve any concrete destination. A new or changed
-  resolved path always reopens approval, even when it conforms to the approved template; do not
-  render before that approval. Recheck collisions and overwrite risk after resolution.
+  scientific contract. Determine which RUN_ID params the figure covers and which of them the page
+  lets the reader select.
+- Propose one exact communication specification per plot: the title, the visible in-figure metric
+  explanation, the interaction affordances, and the complete project-relative export path rooted
+  at `plots/` and ending in its leaf filename. Explain what every plotted metric measures and its
+  higher/lower/target/range/no-universal-direction interpretation, and state that text's exact
+  placement.
+- The title states **every** selected RUN_ID param as `key={value}`, so a figure is never
+  ambiguous about which runs it shows. Titles are dynamic: they re-render with the selection.
+  Propose the title template with every placeholder identified plus one fully resolved example.
+- **Ask the user how the params are arranged across title lines** — which params share a line, in
+  what order, and where the semantic part sits. This differs per plot. Never choose an arrangement
+  silently, and never carry one over from another plot.
+- Keep provenance in the file, since `plots/` is gitignored and the file travels alone: the
+  selected run_ids in-figure, and the producer `<experiment_path>`, the project revision at render
+  time, the render timestamp, and the evaluation source paths read in an unobtrusive page-level
+  block. That metadata stays out of the title and must never crowd it.
+- Dropping run_id segments normally makes the export path fully determined before the code edit,
+  so propose the complete concrete path with the rest of the specification. If runtime values
+  still prevent that, propose the complete path template and identify every placeholder
+  explicitly. Before rendering, show every fully resolved concrete export path, including its leaf
+  filename, and wait for explicit user approval. An approved template does not approve any
+  concrete destination. A new or changed resolved path always reopens approval, even when it
+  conforms to the approved template; do not render before that approval. Recheck cross-script
+  collisions after resolution.
 - Cover multiple axes, panels, derived metrics, and visual encodings separately unless one shared
   explanation is unambiguous. Stop rather than guess when metric semantics are not grounded. Put
   the explanation in an axis label, subtitle, legend, annotation, or in-figure caption; surrounding
@@ -113,9 +137,10 @@ required after any artifact or wave exists.
   unchanged. Neither scientific-auto nor engineering-auto may bypass this gate. An unchanged-code
   rerender may reuse approval only when every resolved concrete export path is byte-for-byte
   identical to the previously explicitly approved concrete path.
-- After rendering, inspect the figure and verify that the accepted text is present, legible, and
-  unchanged. Do not silently repair wording or placement; propose any correction and reopen the
-  approval gate before editing.
+- After rendering, open the file and verify that the accepted text is present, legible, and
+  unchanged in the page's default view, that every approved affordance actually works, and that
+  the approved strings are present in the HTML source. Do not silently repair wording, placement,
+  or title arrangement; propose any correction and reopen the approval gate before editing.
 - **No fixed plot checklist**: manual mode asks what the user wants; auto mode chooses the smallest
   visualization that answers the approved scientific handoff.
 - Treat every plotting render as a direct, non-orchestrated fast path. Run its argparse command in

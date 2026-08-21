@@ -36,7 +36,7 @@ Integrity gates and protected choices never become delegable.
 2. In manual mode, iterate until the user approves. In auto mode, elect the smallest ordered subset
    that prevents collisions, record the reasoning in the handoff/decision register, and proceed.
 3. Construct and show the complete current canonical `nested` path templates first for
-   checkpoints, evaluations, and every run-ID-derived plot. Immediately afterward, and separately,
+   checkpoints and evaluations; `plots/` is not run-scoped. Immediately afterward, and separately,
    show exactly one `collapsed-v1` alternative that collapses all eligible ordered
    `RUN_ID_PARAMS` into one component using the exact existing percent-encoded `run_id_flat`
    pairs. Do not construct or show an alternative when fewer than two params are eligible. When it
@@ -44,7 +44,7 @@ Integrity gates and protected choices never become delegable.
    user must explicitly approve `collapsed-v1`; otherwise `nested` is the default regardless of
    engineering mode. Preflight exact component and full-path limits and collisions; never silently
    hash, truncate, drop params, fall back, or accept an ambiguous mapping.
-   For any checkpoint, evaluation, or run-ID-derived plot path with zero or one applicable fixed
+   For any checkpoint or evaluation path with zero or one applicable fixed
    param, `nested` and `collapsed-v1` are byte-identical: show the path once, not as a separate
    alternative; label it as both layouts' rendering and state the experiment's selected or existing
    pinned literal. That one path is approvable under the pin. This does not relax
@@ -52,7 +52,7 @@ Integrity gates and protected choices never become delegable.
 4. Record `RUN_ID_PARAMS = [...]` and the one authoritative experiment-wide
    `RUN_ID_PATH_LAYOUT = "nested"|"collapsed-v1"` beside it in the experiment's `.py`; mirror
    both in the experiment's EXPERIMENTS.md section header. Make ALL artifact paths go through
-   `code/common/run_id.py`: checkpoints, evaluations, and run-ID-derived plots call
+   `code/common/run_id.py`: checkpoints and evaluations call
    `run_id_path(..., layout=RUN_ID_PATH_LAYOUT)` with their applicable ordered params, while
    scripts/logs/WandB and EXPERIMENTS.md row identity keep using `run_id_flat` unchanged. Never
    mix layouts across the authoritative artifact surfaces.

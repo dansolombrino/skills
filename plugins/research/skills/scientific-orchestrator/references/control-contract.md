@@ -35,24 +35,20 @@ overwriting user changes, new repositories/remotes/accounts/destinations, secret
 changes, budget/scope/rig expansion, shared-GPU exceptions, ambiguous Flywheel root or parent,
 external publication outside the approved root, and every source-to-target deviation governed by
 `integrate-reference-code`. Also require user approval of the complete plot communication
-specification before every plotting-code creation or modification: exact title and fixed
-`RUN_ID_PARAMS`, visible text defining every plotted metric and its directional interpretation,
-exact in-figure placement, and every complete project-relative `plots/` export path including its
-leaf filename. Identify the experiment-wide pinned `RUN_ID_PATH_LAYOUT`; construct and show the
-complete canonical `nested` path or template first without optimizing it. When two or more fixed
-params remain after aggregated params are elided, immediately show exactly one separate
-`collapsed-v1` alternative that combines all fixed params, never a partial group, in elected order
-as comma-joined, canonically percent-encoded `key=value` components. With zero or one fixed param,
-show one path and no separate alternative; label it as the byte-identical rendering of `nested` and
-`collapsed-v1` plus the experiment's pinned literal. That path is approvable under either pin
-without treating it as a layout change. With two or more, only the form matching the pinned literal
-is approvable. Before any output artifact or wave exists, `experiment-design` owns layout election
-through the canonical `nested`-first comparison. Once any artifact or wave exists, the pin is
-immutable; wanting the other form requires a new numbered sub-experiment, never per-plot approval or
-an in-place layout change. Protect `plots/`, the complete experiment path, script stem, and leaf.
-Reject collisions and overwrites. If runtime values prevent a concrete path before the edit,
+specification before every plotting-code creation or modification: exact title, its arrangement
+across title lines, every selected `RUN_ID_PARAMS`, visible text defining every plotted metric and
+its directional interpretation, exact in-figure placement, the interaction affordances, and every
+complete project-relative `plots/` export path including its leaf filename. Every plot is one
+self-contained interactive HTML file at `plots/<experiment_path>/<script_stem>/<leaf>.html`;
+run_id selection lives inside the file, so no plot path carries run_id segments and plot
+communication never identifies, applies, or reopens `RUN_ID_PATH_LAYOUT`. How the selected params
+are arranged across title lines is a per-plot question the user answers each time; never choose it
+automatically or reuse another plot's arrangement. Protect `plots/`, the complete experiment path,
+script stem, and leaf. Rewriting a leaf whole on rerun is expected and needs no fresh approval
+while the path is unchanged; reject any destination that collides with a different script's
+output. If runtime values prevent a concrete path before the edit,
 identify every placeholder in the complete path template. Before rendering, show every fully
-resolved concrete export path matching the pinned layout, including its leaf filename, and wait for
+resolved concrete export path, including its leaf filename, and wait for
 explicit user approval. An approved template does not approve any concrete destination. A new or
 changed resolved path always reopens approval, even when it conforms to the approved template; do
 not render before that approval. The agent may only propose this specification. Auto modes cannot
@@ -87,9 +83,8 @@ Require:
 - source tag/revision and environment fingerprint;
 - exact commands/config snapshots and placement;
 - status and expected final-artifact paths;
-- for newly authored plots, persist the experiment-wide pinned `RUN_ID_PATH_LAYOUT`, approved
-  complete path templates, and every explicitly approved matching concrete export path in the
-  packet;
+- for newly authored plots, persist the approved complete path templates and every explicitly
+  approved concrete export path in the packet;
 - measured metrics, uncertainty, failures, exclusions, and deviations;
 - resource/time spend and recovery actions;
 - links to `EXPERIMENTS.md`, `JOURNAL.md`, logs, evaluations, plots, and checkpoints.

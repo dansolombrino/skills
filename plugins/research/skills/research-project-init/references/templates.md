@@ -201,42 +201,39 @@ engineering_mode: <manual|auto — required>
 - Soft preferences:
 - Delegable fields:
 - Protected choices:
-  - Run-output path layout: at experiment design, first show the complete `nested` checkpoint,
-    evaluation, and run-ID-derived plot templates through their leaf names. Immediately afterward,
+  - Run-output path layout: at experiment design, first show the complete `nested` checkpoint and
+    evaluation templates through their leaf names; `plots/` is not run-scoped and is out of scope
+    for this choice. Immediately afterward,
     when at least two ordered RUN_ID_PARAMS are eligible, show exactly one separately labeled
     `collapsed-v1` alternative; show none otherwise. When an applicable fixed-param list has zero
     or one item, show its byte-identical `nested`/`collapsed-v1` path once, not as a separate
     alternative; label it as both layouts' rendering and state the experiment's pinned literal.
     That path is approvable under the pin. Wait for explicit user layout selection;
     neither automatic mode may select it. Record one experiment-wide RUN_ID_PATH_LAYOUT and use it
-    for all three artifact surfaces. Offer this choice only before any checkpoint, evaluation,
-    plot output, or wave README/script exists. After that boundary, preserve the checked-in
+    for both artifact surfaces. Offer this choice only before any checkpoint, evaluation, or wave
+    README/script exists. After that boundary, preserve the checked-in
     renderer and literal pin forever; never propose or perform an in-place layout change, including
     a byte-identical zero/one-param change. Another layout requires a new numbered sub-experiment.
-  - Plot communication: approve each exact title, fixed RUN_ID_PARAMS, visible metric explanation,
-    in-figure placement, and complete project-relative `plots/` export path including its leaf
-    filename before every plotting-code edit. Resolve every proposed plot path with the recorded
-    experiment-wide RUN_ID_PATH_LAYOUT; plot communication cannot select an independent layout.
-    With zero or one fixed param after aggregation elision, show the path once, label it as the
-    byte-identical rendering of `nested` and `collapsed-v1`, and state the experiment's pinned
-    literal; that destination is approvable under the existing pin. With two or more fixed params,
-    first display the complete `nested` path or template through its leaf filename, then immediately
-    display exactly one separately labeled complete `collapsed-v1` comparison that collapses all
-    fixed-param segments after aggregation elision, never a partial group. State which literal is
-    pinned. Only the form matching that pin is approvable; the other form requires a new numbered
-    sub-experiment and cannot be selected for the established experiment. Plot communication never
-    reopens layout choice.
-    Reject any destination that would collide with or overwrite an existing output. If runtime
-    values require a path template, the user
+  - Plot communication: approve each exact title, its arrangement across title lines, the visible
+    metric explanation, its in-figure placement, the interaction affordances, and the complete
+    project-relative `plots/` export path including its leaf filename before every plotting-code
+    edit. Every plot is one self-contained interactive HTML file at
+    `plots/<experiment_path>/<script_stem>/<leaf>.html`; run_id selection lives inside the file, so
+    no plot path carries run_id segments and plot communication never touches RUN_ID_PATH_LAYOUT.
+    The title states every selected RUN_ID param; how those params are arranged across title lines
+    is a per-plot question the user answers each time, never chosen automatically and never reused
+    from another plot's arrangement. Only the user may approve these protected path choices; scientific-auto and
+    engineering-auto cannot bypass them. Rewriting a leaf whole on rerun is expected and needs no
+    fresh approval while the path is unchanged; reject any destination that collides with a
+    different script's output. If runtime values require a path template, the user
     must explicitly approve before the plotting-code edit the complete project-relative `plots/`
-    path template, including its leaf-filename template and every identified placeholder. Only the
-    user may approve these protected path choices; scientific-auto and engineering-auto cannot
-    bypass them. Before rendering, show every fully resolved concrete export path, including its
-    leaf filename, and wait for explicit user approval. An approved template does not approve any
-    concrete destination. A new or changed resolved path always reopens approval, even when it
-    conforms to the approved template; do not render before that approval. An unchanged-code
-    rerender may reuse approval only when every resolved concrete export path is byte-for-byte
-    identical to the previously explicitly approved concrete path.
+    path template, including its leaf-filename template and every identified placeholder. Before
+    rendering, show every fully resolved concrete export path, including its leaf filename, and
+    wait for explicit user approval. An approved template does not approve any concrete
+    destination. A new or changed resolved path always reopens approval, even when it conforms to
+    the approved template; do not render before that approval. An unchanged-code rerender may
+    reuse approval only when every resolved concrete export path is byte-for-byte identical to the
+    previously explicitly approved concrete path.
   - Additional project-specific choices:
 
 ## Approval
@@ -624,7 +621,8 @@ Scripts must call guard_run_config() before writing ANY artifact (and before the
 StatusWriter starts): it hard-fails on run_id collisions — same run_id, different
 full config — which happen when a param was added to the config but not to
 RUN_ID_PARAMS (schema evolution rules: conventions.md). One guard at the
-evaluations/ run dir suffices: checkpoints/ and plots/ share the same run_id.
+evaluations/ run dir suffices: checkpoints/ shares the same run_id. plots/ is
+not run-scoped and needs no guard.
 
 Scripts that use wandb must call wandb.init(config=wandb_config(cfg)) — the whole
 resolved config, never a subset.
@@ -666,9 +664,9 @@ def run_id_path(cfg, params, *, layout="nested") -> Path:
     ``key=value`` component). Presentation code shows that path once, labels it
     as both layouts' rendering plus the pinned literal.
 
-    Use one layout consistently under checkpoints/, evaluations/, and for
-    run-ID-derived plots/. Do not truncate, hash, or otherwise rewrite pairs to
-    evade a collision or filesystem limit.
+    Use one layout consistently under checkpoints/ and evaluations/. plots/ does
+    not use run_id paths at all. Do not truncate, hash, or otherwise rewrite
+    pairs to evade a collision or filesystem limit.
     """
     pairs = _run_id_pairs(cfg, params)
     if layout == "nested":

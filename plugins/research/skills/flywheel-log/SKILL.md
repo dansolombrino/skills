@@ -213,22 +213,17 @@ metric meaning and directional interpretation, in-figure placement, and complete
 `plots/` export path including its leaf filename. Require evidence that before the plotting-code
 edit the user explicitly approved either that complete concrete path or, when runtime values
 prevented a concrete destination, the complete project-relative `plots/` path template including its
-leaf-filename template and every identified placeholder. Verify that the proposal identified the
-experiment-wide pinned `RUN_ID_PATH_LAYOUT` and first showed the complete canonical `nested` path or
-template without optimization. If two or more fixed `RUN_ID_PARAMS` remained after aggregated-param
-elision, require exactly one separate `collapsed-v1` alternative combining all fixed params, never a
-partial group, in elected order as comma-joined, canonically percent-encoded `key=value` components.
-With zero or one fixed param, require one path and no separate alternative; require evidence
-labeling it as the byte-identical rendering of `nested` and `collapsed-v1` plus the experiment's
-pinned literal, and accept that path under either pin without treating it as a layout change. With
-two or more, verify the proposal accepted only the form matching the pinned literal. Verify that a
-pristine experiment with no output artifact or wave routed election through `experiment-design` and
-the canonical `nested`-first comparison. Once any artifact or wave exists, require the pin to remain
-immutable; the other form requires a new numbered sub-experiment; selection is never per-plot
-approval and never in-place. Reject any collapse of `plots/`, the complete experiment path, script
-stem, or leaf, any included aggregated param, collision, or overwrite. Only explicit user approval
+leaf-filename template and every identified placeholder. Verify that the plot is one self-contained
+interactive HTML file at `plots/<experiment_path>/<script_stem>/<leaf>.html`, that its path carries
+no run_id segments, and that the proposal never applied or reopened `RUN_ID_PATH_LAYOUT` for a plot
+destination. Require evidence that the user approved the title's arrangement across title lines for
+this plot specifically rather than inheriting another plot's arrangement, and that the rendered file
+states its own provenance, since `plots/` is gitignored and the file is shared standalone. Reject
+any collapse of `plots/`, the complete experiment path, script stem, or leaf, and any collision with
+a different script's output. Rewriting a leaf whole on rerun is expected, not an overwrite
+violation. Only explicit user approval
 satisfies this gate; scientific-auto and engineering-auto cannot bypass it. Require evidence that
-every fully resolved concrete export path matching the pinned layout, including its leaf filename,
+every fully resolved concrete export path, including its leaf filename,
 received explicit user approval before rendering. An approved template does not approve any concrete
 destination. A new or changed resolved path always reopens approval, even when it conforms to the
 approved template; do not render before that approval. Accept reused approval for an unchanged-code

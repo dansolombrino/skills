@@ -65,20 +65,14 @@ Before execution, recover or establish these inputs:
 - Ask only the minimum clarification questions needed to establish a coherent validation contract, and ask none when the required answers are already recoverable from user instructions, conversational context, or graph state.
 - For empirical execution, load the shared [experiment design protocol](../flywheel/references/experiment-design-protocol.md) and [Flywheel MCP tool map](../flywheel/references/flywheel-mcp-tool-map.md) before spending compute.
 - When a validation branch will author a plot, apply the experiment protocol's plot communication
-  gate before creating or modifying plot-producing code. Identify the experiment-wide pinned
-  `RUN_ID_PATH_LAYOUT` and show the complete canonical `nested` path or template first without
-  optimization. If at least two fixed params remain after aggregated-param elision, immediately show
-  exactly one separate `collapsed-v1` alternative combining all fixed params, never a partial group,
-  in elected order as comma-joined, canonically percent-encoded `key=value` components. With zero or
-  one fixed param, show one path and no separate alternative; label it as the byte-identical
-  rendering of `nested` and `collapsed-v1` plus the experiment's pinned literal. That path is
-  approvable under either pin without treating it as a layout change. With two or more, only the
-  form matching the pinned literal is approvable. Before any output artifact or wave exists,
-  `experiment-design` owns layout election through the canonical `nested`-first comparison. Once any
-  artifact or wave exists, the pin is immutable; wanting the other form requires a new numbered
-  sub-experiment, never per-plot approval or an in-place layout change. Neither scientific-auto nor
+  gate before creating or modifying plot-producing code. Every plot is one self-contained
+  interactive HTML file at `plots/<experiment_path>/<script_stem>/<leaf>.html`; run_id selection
+  lives inside the file, so no plot path carries run_id segments and plot communication never
+  identifies, applies, or reopens `RUN_ID_PATH_LAYOUT`. Show the complete concrete path, and ask
+  the user how the selected params are arranged across title lines for this plot rather than
+  reusing another plot's arrangement. Neither scientific-auto nor
   engineering-auto may approve it. Wait for explicit user acceptance. Persist the accepted
-  specification, pinned layout, approved template, and approved matching concrete paths in the
+  specification, approved template, and approved concrete paths in the
   validation control node. Reuse it only for unchanged code whose resolved export paths are
   identical. Do not apply the gate retroactively to extracted source figures or external artifacts.
 
@@ -184,20 +178,14 @@ Canonical contract shape:
 The `Source or claim nodes under test` line is the recovery anchor for later validation passes. If
 multiple claim nodes are in scope, list the governing node ids or slugs explicitly. Replace `none`
 only after explicit user acceptance, recording each plot's identifier, exact title, visible metric
-explanation, in-figure placement, and complete project-relative `plots/` export path including its
-leaf filename, pinned `RUN_ID_PATH_LAYOUT`, and collision check. Always show the canonical `nested`
-path or template first. With two or more fixed params, immediately show exactly one separate
-`collapsed-v1` alternative containing every fixed param in elected order and no aggregated param;
-with zero or one show one path and no separate alternative, labeled as the byte-identical rendering
-of both literals plus the experiment's pinned literal. That one concrete path is approvable under
-either pin without treating it as a layout change. Never collapse only a subset or alter the root,
-experiment path, script stem, or leaf. Encode its single combined segment with the shared helper's
-comma-joined, percent-encoded `key=value` flat form. For two or more, label the pinned literal and
-accept only its matching form. Before any output artifact or wave exists, `experiment-design` owns
-the canonical `nested`-first election. After any artifact or wave exists, wanting the other form
-requires a new numbered sub-experiment; never alter the pin in place or approve the choice per plot.
+explanation, in-figure placement, its arrangement across title lines, the interaction affordances,
+and complete project-relative `plots/` export path including its leaf filename, plus the collision
+check. Every plot is one self-contained interactive HTML file at
+`plots/<experiment_path>/<script_stem>/<leaf>.html`; run_id selection lives inside the file, so no
+plot path carries run_id segments and plot communication never records or applies
+`RUN_ID_PATH_LAYOUT`. Never alter the root, experiment path, script stem, or leaf.
 When runtime values require a path template, identify every placeholder before the code edit. Before
-rendering, show every fully resolved concrete export path matching the pinned layout, including its
+rendering, show every fully resolved concrete export path, including its
 leaf filename, and wait for explicit user approval. An approved template does not approve any
 concrete destination. A new or changed resolved path always reopens approval, even when it conforms
 to the approved template; do not render before that approval. An unchanged-code rerender may reuse

@@ -67,7 +67,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "3.11.1")
+        self.assertEqual(manifest["version"], "4.0.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -213,7 +213,7 @@ class ResearchContractTests(unittest.TestCase):
             ),
             "autonomous protocol": (
                 "before creating or modifying plot-producing code, propose",
-                "path including its leaf filename, then wait for explicit user acceptance",
+                "then wait for explicit user acceptance before editing",
                 "complete path template",
             ),
             "experiment protocol": (
@@ -294,29 +294,52 @@ class ResearchContractTests(unittest.TestCase):
                 "visualizations/<experiment_path>/<script_stem>.py", contract
             )
             self.assertIn(
-                "plots/<experiment_path>/<script_stem>/<partial_run_id path>/",
+                "plots/<experiment_path>/<script_stem>/",
                 contract,
             )
             self.assertIn("multiple producer experiment paths", contract)
 
         nested = (
             "plots/001_compression/002_weight_error/plot_layers/"
-            "model=vit/seed=0/layer_error.pdf"
+            "layer_error.html"
         )
-        top_level = (
-            "plots/000_grokking/plot_loss/"
-            "model=mlp/lr=1e-3/seed=0/loss_curve.pdf"
-        )
+        top_level = "plots/000_grokking/plot_loss/loss_curve.html"
         self.assertIn(top_level, visualization)
         self.assertIn(top_level, conventions)
         self.assertIn(nested, visualization)
         self.assertIn(nested, conventions)
         self.assertNotIn("plots/NNN_exp/<script_stem>/", visualization)
         self.assertIn("stop; do not move or rewrite artifacts", visualization)
-        self.assertIn("new numbered sub-experiment", visualization)
         self.assertIn("preserve it unchanged", design)
         self.assertIn("complete numbered `<experiment_path>`", housekeeping)
         self.assertIn("full numbered producer hierarchy", metadata)
+
+    def test_plots_are_self_contained_html_with_in_file_run_id_selection(
+        self,
+    ) -> None:
+        skills = ROOT / "plugins/research/skills"
+        visualization = (skills / "visualizations/SKILL.md").read_text()
+        conventions = (
+            skills / "research-project-init/references/conventions.md"
+        ).read_text()
+
+        # The artifact a colleague opens: one file, no network, no server.
+        self.assertIn("self-contained", visualization)
+        self.assertIn("file://", visualization)
+        self.assertIn("Plotly", visualization)
+
+        # run_id selection lives in the page, never in the export path.
+        for contract in (visualization, conventions):
+            self.assertNotIn("plots/000_grokking/plot_loss/model=", contract)
+            self.assertNotIn("<partial_run_id path>", contract)
+
+        # The title carries every selected param, and its line arrangement is a
+        # per-plot question the user answers rather than a silent default.
+        self.assertIn("title lines", visualization)
+        self.assertIn("never carry one over from another plot", visualization)
+
+        # plots/ stays gitignored, so the file must describe its own provenance.
+        self.assertIn("gitignored", visualization)
 
     def test_run_id_path_layout_renderings_are_compatible_and_lossless(self) -> None:
         namespace: dict[str, object] = {}
@@ -388,7 +411,7 @@ class ResearchContractTests(unittest.TestCase):
         )
         compact_conventions = " ".join(conventions.split())
         self.assertIn("one experiment-wide layout", compact_conventions)
-        self.assertIn("must all call `run_id_path", compact_conventions)
+        self.assertIn("must both call `run_id_path", compact_conventions)
         self.assertIn("show exactly one separately labeled", compact_conventions)
         self.assertIn("show none when fewer than two are eligible", compact_conventions)
         self.assertIn("must use the same selected layout", dispatch)
@@ -661,7 +684,7 @@ class ResearchContractTests(unittest.TestCase):
             self.assertRegex(contract, r"never (?:move|rename|rewrite)")
 
         agreement = " ".join(PROJECT_TEMPLATES.read_text().lower().split())
-        self.assertIn("offer this choice only before any checkpoint, evaluation, plot output, or wave readme/script exists", agreement)
+        self.assertIn("offer this choice only before any checkpoint, evaluation, or wave readme/script exists", agreement)
         self.assertIn("preserve the checked-in renderer and literal pin forever", agreement)
         self.assertIn("never propose or perform an in-place layout change", agreement)
         self.assertIn("another layout requires a new numbered sub-experiment", agreement)
@@ -859,9 +882,10 @@ class ResearchContractTests(unittest.TestCase):
         self.assertNotIn("producer's ordinary nested run-id path", visualization)
         self.assertIn("Read the producer's recorded experiment-wide `RUN_ID_PATH_LAYOUT`", visualization)
         self.assertIn("`run_id_path(..., layout=RUN_ID_PATH_LAYOUT)`", visualization)
-        self.assertIn("same recorded `RUN_ID_PATH_LAYOUT` as the producer", visualization)
-        self.assertIn("after aggregated params are elided", visualization)
-        self.assertIn("replaces all fixed-param path segments", visualization)
+        self.assertIn(
+            "`RUN_ID_PATH_LAYOUT` governs reads only; it never shapes a plot output path",
+            visualization,
+        )
         for protected in (
             "`plots/`",
             "complete `<experiment_path>`",
@@ -869,7 +893,7 @@ class ResearchContractTests(unittest.TestCase):
             "leaf filename",
         ):
             self.assertIn(protected, visualization)
-        self.assertIn("Elide every aggregated param in both layouts", visualization)
+        self.assertIn("no `key=value` directories", visualization)
 
     def test_collapsed_pin_degenerate_plot_paths_are_directly_approvable(self) -> None:
         namespace: dict[str, object] = {}
@@ -934,46 +958,9 @@ class ResearchContractTests(unittest.TestCase):
                 skills / "experiment-design/SKILL.md",
                 "## 2. run_id election",
             ),
-            "visualizations": (
-                skills / "visualizations/SKILL.md",
-                "for every export proposal",
-            ),
             "project conventions": (
                 skills / "research-project-init/references/conventions.md",
                 "### run-output path layout approval",
-            ),
-            "execution agreement": (
-                skills / "research-project-init/references/templates.md",
-                "- plot communication:",
-            ),
-            "orchestrator": (
-                skills / "scientific-orchestrator/references/control-contract.md",
-                "identify the experiment-wide pinned",
-            ),
-            "flywheel auto": (
-                skills / "flywheel-auto/SKILL.md",
-                "identify the experiment-wide pinned",
-            ),
-            "autonomous protocol": (
-                skills
-                / "flywheel-auto/references/experiment-design-protocol-autonomous.md",
-                "the experiment-wide pinned",
-            ),
-            "experiment protocol": (
-                skills / "flywheel/references/experiment-design-protocol.md",
-                "identify the experiment-wide pinned",
-            ),
-            "scientific audit": (
-                skills / "critical-scientific-audit/SKILL.md",
-                "verify that the proposal identified",
-            ),
-            "flywheel logging": (
-                skills / "flywheel-log/SKILL.md",
-                "verify that the proposal identified",
-            ),
-            "flywheel reproduction": (
-                skills / "flywheel-reproduce/SKILL.md",
-                "identify the experiment-wide pinned",
             ),
         }
 
@@ -981,8 +968,6 @@ class ResearchContractTests(unittest.TestCase):
             text = " ".join(path.read_text().lower().split())
             self.assertIn(marker, text, name)
             section = text[text.index(marker) :]
-            if name == "execution agreement":
-                section = section.split("- additional project-specific choices:", 1)[0]
             with self.subTest(contract=name):
                 self.assertRegex(section, r"(?:show|require|display) exactly one")
                 self.assertIn("collapsed-v1", section)
@@ -1020,36 +1005,39 @@ class ResearchContractTests(unittest.TestCase):
 
         def assert_plot_contract(name: str, section: str) -> None:
             with self.subTest(contract=name):
-                nested = re.search(
-                    r"(?:complete )?(?:canonical )?`nested`.{0,80}(?:first|without optimizing)|"
-                    r"first (?:display|showed) the complete (?:canonical )?`nested`",
-                    section,
+                # One self-contained HTML file per figure, at the taxonomy path.
+                self.assertIn("self-contained", section)
+                self.assertIn(
+                    "plots/<experiment_path>/<script_stem>/<leaf>.html", section
                 )
-                collapsed = re.search(r"exactly one.{0,100}`collapsed-v1`", section)
-                self.assertIsNotNone(nested)
-                self.assertIsNotNone(collapsed)
-                self.assertLess(nested.start(), collapsed.start())
-                self.assertRegex(section, r"(?:two or more|at least two)")
-                self.assertRegex(section, r"zero or one.{0,180}(?:one path|show the path once)")
-                self.assertIn("byte-identical", section)
-                self.assertRegex(section, r"pinned literal|which literal is pinned")
+                # Selection lives in the page, so no path carries run_id segments.
                 self.assertRegex(
                     section,
-                    r"only (?:its |the |that )?matching form is approvable|"
-                    r"only that form is an approvable plot path|"
-                    r"only the form matching that pin is approvable|"
-                    r"only (?:that form|the form matching the pinned literal) is approvable|"
-                    r"accepted only (?:its matching form|the form matching the pinned literal)|"
-                    r"accept only its matching form",
+                    r"run_id selection lives inside the file|"
+                    r"path carries no run_id segments",
                 )
-                self.assertIn("new numbered sub-experiment", section)
-                self.assertNotRegex(section, r"show only.{0,80}pinned|only show.{0,80}pinned")
+                self.assertRegex(
+                    section,
+                    r"no plot path carries run_id segments|"
+                    r"never (?:applied or reopened|identifies, applies, or reopens|"
+                    r"records or applies) `run_id_path_layout`",
+                )
+                # Title line arrangement is asked per plot, never inherited.
+                self.assertIn("title lines", section)
+                self.assertRegex(
+                    section,
+                    r"another plot's arrangement|"
+                    r"never carry one over from another plot",
+                )
+                # The old run_id-in-path machinery must be fully gone.
+                self.assertNotIn("collapsed-v1", section)
 
         assert_plot_contract("execution agreement", agreement)
         for name, path in propagated.items():
             assert_plot_contract(name, " ".join(path.read_text().lower().split()))
 
-    def test_plot_workflows_approve_only_the_pinned_layout(self) -> None:
+    def test_plot_surfaces_never_apply_the_run_id_path_layout(self) -> None:
+        """plots/ stopped being run-scoped: no plot path may embed run_id."""
         skills = ROOT / "plugins/research/skills"
         contracts = {
             "visualizations": skills / "visualizations/SKILL.md",
@@ -1063,39 +1051,21 @@ class ResearchContractTests(unittest.TestCase):
             "scientific audit": skills / "critical-scientific-audit/SKILL.md",
             "flywheel logging": skills / "flywheel-log/SKILL.md",
             "flywheel reproduction": skills / "flywheel-reproduce/SKILL.md",
+            "execution agreement": (
+                skills / "research-project-init/references/templates.md"
+            ),
+            "project conventions": (
+                skills / "research-project-init/references/conventions.md"
+            ),
         }
-
-        def disposition(pinned: str, proposed: str) -> str:
-            return "approvable" if proposed == pinned else "new-numbered-sub-experiment"
-
-        for pinned in ("nested", "collapsed-v1"):
-            self.assertEqual(disposition(pinned, pinned), "approvable")
-            other = "collapsed-v1" if pinned == "nested" else "nested"
-            self.assertEqual(disposition(pinned, other), "new-numbered-sub-experiment")
 
         for name, path in contracts.items():
             contract = " ".join(path.read_text().lower().split())
             with self.subTest(contract=name):
-                self.assertIn("pinned", contract)
-                self.assertIn("new numbered sub-experiment", contract)
-                self.assertRegex(
-                    contract,
-                    r"only (?:its |the |that )?matching form is approvable|"
-                    r"only that form is an approvable plot path|"
-                    r"only (?:that form|the form matching the pinned literal) is approvable|"
-                    r"accepted only (?:its matching form|the form matching the pinned literal)|"
-                    r"accept only its matching form",
-                )
-                self.assertRegex(
-                    contract,
-                    r"(?:other(?: form)?|layout revision).{0,160}"
-                    r"new numbered sub-experiment",
-                )
-                self.assertRegex(
-                    contract,
-                    r"never (?:permit )?per-plot approval|"
-                    r"not per-plot approval|never approve or select a layout per plot",
-                )
+                # No surface may still describe a run_id-derived plot path.
+                self.assertNotIn("run-id-derived", contract)
+                self.assertNotIn("<partial_run_id path>", contract)
+                self.assertNotRegex(contract, r"plots/[^ ]*/(?:model|lr|seed)=")
 
     def test_every_launch_and_recovery_loop_stops_on_reserved_exits(self) -> None:
         templates = (
