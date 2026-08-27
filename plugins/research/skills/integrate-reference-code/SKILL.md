@@ -10,8 +10,8 @@ best target-native implementation, but make every departure from the reference v
 user-approved before writing it.
 
 In a research project, require the Research 2.0 scaffold first. Source-to-target deviations are an
-always-protected choice: neither scientific-auto nor engineering-auto may approve them. The user's
-row-level approval remains required regardless of the active modes.
+always-protected choice: engineering-auto may not approve them. The user's
+row-level approval remains required regardless of the active mode.
 
 References are always user-supplied: the user names each one by path or URL, or places it in the
 project's `references/` directory. This skill is the only sanctioned path for external source code

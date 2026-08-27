@@ -1,6 +1,6 @@
 ---
 name: research-project-init
-description: Scaffold a new or empty Research 2.0 repository with the standard experiment taxonomy, scientific program records, explicit manual/auto modes, Flywheel integration surfaces, exact uv environment, rig configuration, status helpers, journal guard, and host guidance. Use when starting, initializing, bootstrapping, or scaffolding a fresh research project; do not use to upgrade, migrate, or retrofit an existing project.
+description: Scaffold a new or empty Research 2.0 repository with the standard experiment taxonomy, an explicit engineering execution agreement with manual/auto modes, exact uv environment, rig configuration, status helpers, journal guard, and host guidance. Use when starting, initializing, bootstrapping, or scaffolding a fresh research project; do not use to upgrade, migrate, or retrofit an existing project.
 ---
 
 # Research Project Init
@@ -39,12 +39,8 @@ values, and material the user supplies explicitly. See "Directives are closed" i
    project decision. When one is absent, walk the user through declaring it and never infer a
    volume, never default a cache or `TMPDIR` to `$HOME` or `~/.cache`, and never copy another
    project's values.
-5. Require explicit `scientific_mode: manual|auto` and `engineering_mode: manual|auto`. Never
-   infer a default. Capture the initial scientific scope, engineering repo/rig/GPU/budget envelope,
-   approved destinations, and protected choices.
-6. Ask whether a canonical Flywheel root already exists. Verify an explicit root id/title before
-   creating `.flywheel.json`; otherwise leave Flywheel setup incomplete and make its write gate
-   visible without blocking the local scaffold.
+5. Require an explicit `engineering_mode: manual|auto`. Never infer a default. Capture the
+   engineering repo/rig/GPU/budget envelope, approved destinations, and protected choices.
 
 ## Scaffold
 
@@ -52,12 +48,7 @@ values, and material the user supplies explicitly. See "Directives are closed" i
    `logs/`, `plots/`, `scripts/`, `tests/`, `visualizations/`, `shitpads/`, and `references/`.
    Put a `.gitkeep` in every directory that would otherwise be empty so the initial
    commit actually preserves the complete taxonomy.
-2. Create the scientific records:
-   - `program.md` current index;
-   - `program/00-execution-agreement.md` current contract under 200 lines;
-   - `program/decision-register.md` decision history;
-   - `index.md` local Flywheel mirror;
-   - ignored `orchestration/control/events.jsonl` and phase traces as needed.
+2. Create `program/00-execution-agreement.md`, the current engineering contract, under 200 lines.
 3. Create `README.md`, `AGENTS.md`, `CLAUDE.md`, `JOURNAL.md`, `EXPERIMENTS.md`, `.env.example`, `.env`,
    `.gitignore`, `.vscode/settings.json`, `sync.toml`, `pyproject.toml`, and `.python-version` from the
    templates. `.vscode/settings.json` is committed project policy, not machine-local state: it is the
@@ -74,8 +65,7 @@ values, and material the user supplies explicitly. See "Directives are closed" i
    `.env` line silently overrides them. Written this way `.env` holds nothing rig-specific, which
    is what lets `rig-sync push-env` copy one file to every peer. Keep token
    values empty unless the user supplies them through an authorized secret source. Mirror every
-   key in `.env.example` with empty values and explanatory comments; put Flywheel root placeholders
-   there. Create `.flywheel.json` only from a verified root.
+   key in `.env.example` with empty values and explanatory comments.
 4. Install `.githooks/pre-commit`. It requires a journal update when experiment-relevant files are
    committed; the active layer's mode determines whether the entry is user-approved or delegated.
 5. Create `code/common/run_id.py`, `code/common/status.py`, `code/common/paths.py` (which resolves
@@ -112,8 +102,8 @@ values, and material the user supplies explicitly. See "Directives are closed" i
    6. Run `rig-sync push-env` for each peer. `.env` is ignored by Git, so a fresh clone has none
       and nothing else will put one there. It moves secrets; treat it as a protected write.
    7. Run `rig-sync doctor` and the `environment-sync` gates for every intended peer.
-4. Finish the local scaffold when remote setup is unavailable, but report remote execution and
-   Flywheel publication as blocked until their independent gates pass.
+4. Finish the local scaffold when remote setup is unavailable, but report remote execution as
+   blocked until its independent gates pass.
 
 Never deviate from the taxonomy, create compatibility shims, or silently weaken a gate. Never take
 structure, file contents, or defaults from another project on disk.

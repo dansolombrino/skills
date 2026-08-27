@@ -155,6 +155,6 @@ display-only status contract makes the repository unsupported; do not upgrade it
 
 ## 6. Wrap up
 
-- Apply `research-journal` according to the event-owning layer's mode, then return the engineering
+- Apply `research-journal` according to `engineering_mode`, then report the engineering
   handoff fields, elected run identity, checkpoint/smoke/WandB decisions, and expected artifacts to
-  `scientific-orchestrator` when it initiated the work.
+  the user.

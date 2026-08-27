@@ -67,7 +67,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "4.1.0")
+        self.assertEqual(manifest["version"], "5.0.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -92,9 +92,26 @@ class ResearchContractTests(unittest.TestCase):
             path.parent.name
             for path in (ROOT / "plugins/research/skills").glob("*/SKILL.md")
         }
-        self.assertEqual(len(skill_names), 21)
-        self.assertTrue(
+        self.assertEqual(len(skill_names), 9)
+        self.assertEqual(
+            skill_names,
             {
+                "environment-sync",
+                "experiment-design",
+                "experiments-tracking",
+                "integrate-reference-code",
+                "research-journal",
+                "research-project-init",
+                "rig-sync",
+                "sweep-dispatch",
+                "visualizations",
+            },
+        )
+        # The scientific-process and Flywheel families were removed in 5.0.0 and
+        # must not reappear: the plugin is the engineering execution layer only.
+        self.assertEqual(
+            skill_names
+            & {
                 "scientific-orchestrator",
                 "science-literature-plan",
                 "assumption-breaker-plan",
@@ -107,7 +124,8 @@ class ResearchContractTests(unittest.TestCase):
                 "flywheel-lookahead",
                 "flywheel-reproduce",
                 "flywheel-to-graph",
-            }.issubset(skill_names)
+            },
+            set(),
         )
 
     def test_visualizations_use_direct_rig_4090_execution(self) -> None:
@@ -123,8 +141,7 @@ class ResearchContractTests(unittest.TestCase):
             self.assertIn("direct, non-orchestrated fast path", contract)
             self.assertIn("foreground", contract)
             self.assertIn("`rig-4090`", contract)
-            self.assertIn("Do not invoke `scientific-orchestrator`", contract)
-            self.assertIn("`sweep-dispatch`", contract)
+            self.assertIn("Do not invoke `sweep-dispatch`", contract)
             self.assertIn("mint a wave id", contract)
             self.assertIn("start tmux", contract)
             self.assertIn("`EXPERIMENTS.md` rows", contract)
@@ -137,20 +154,6 @@ class ResearchContractTests(unittest.TestCase):
             "execution agreement": (
                 skills / "research-project-init/references/templates.md"
             ),
-            "orchestrator": (
-                skills / "scientific-orchestrator/references/control-contract.md"
-            ),
-            "flywheel auto": skills / "flywheel-auto/SKILL.md",
-            "autonomous protocol": (
-                skills
-                / "flywheel-auto/references/experiment-design-protocol-autonomous.md"
-            ),
-            "experiment protocol": (
-                skills / "flywheel/references/experiment-design-protocol.md"
-            ),
-            "scientific audit": skills / "critical-scientific-audit/SKILL.md",
-            "flywheel logging": skills / "flywheel-log/SKILL.md",
-            "flywheel reproduction": skills / "flywheel-reproduce/SKILL.md",
         }
 
         for name, path in contracts.items():
@@ -203,70 +206,16 @@ class ResearchContractTests(unittest.TestCase):
                 "user must explicitly approve before the plotting-code edit",
                 "leaf-filename template and every identified placeholder",
             ),
-            "orchestrator": (
-                "require user approval of the complete plot communication specification before every plotting-code creation or modification",
-                "complete path template",
-            ),
-            "flywheel auto": (
-                "explicit user acceptance before creating or modifying plot-producing code",
-                "approved export path or path template with all placeholders identified",
-            ),
-            "autonomous protocol": (
-                "before creating or modifying plot-producing code, propose",
-                "then wait for explicit user acceptance before editing",
-                "complete path template",
-            ),
-            "experiment protocol": (
-                "specification before creating or modifying plot-producing code",
-                "complete path template",
-                "explicit acceptance before editing the plot-producing code",
-            ),
-            "scientific audit": (
-                "require evidence that before the plotting-code edit the user explicitly approved either",
-                "leaf-filename template and every identified placeholder",
-            ),
-            "flywheel logging": (
-                "require evidence that before the plotting-code edit the user explicitly approved either",
-                "leaf-filename template and every identified placeholder",
-            ),
-            "flywheel reproduction": (
-                "gate before creating or modifying plot-producing code",
-                "wait for explicit user acceptance",
-                "replace `none` only after explicit user acceptance",
-                "when runtime values require a path template, identify every placeholder before the code edit",
-            ),
         }
         ownership_evidence = {
-            "visualizations": (
-                "neither scientific-auto nor engineering-auto may bypass this gate",
-            ),
+            "visualizations": ("engineering-auto may not bypass this gate",),
             "conventions": (
                 "only the user may accept them",
-                "scientific-auto and engineering-auto cannot approve it",
+                "engineering-auto cannot approve it",
             ),
             "execution agreement": (
                 "only the user may approve these protected path choices",
-                "scientific-auto and engineering-auto cannot bypass them",
-            ),
-            "orchestrator": ("auto modes cannot approve it",),
-            "flywheel auto": ("this gate overrides autonomy",),
-            "autonomous protocol": (
-                "the agent cannot approve its own proposal or derive acceptance from autonomous mode",
-            ),
-            "experiment protocol": (
-                "the agent proposes only",
-                "even in an automatic workflow",
-            ),
-            "scientific audit": (
-                "only explicit user approval satisfies this gate",
-                "scientific-auto and engineering-auto cannot bypass it",
-            ),
-            "flywheel logging": (
-                "only explicit user approval satisfies this gate",
-                "scientific-auto and engineering-auto cannot bypass it",
-            ),
-            "flywheel reproduction": (
-                "neither scientific-auto nor engineering-auto may approve it",
+                "engineering-auto cannot bypass them",
             ),
         }
 
@@ -284,7 +233,6 @@ class ResearchContractTests(unittest.TestCase):
         visualization = (skills / "visualizations/SKILL.md").read_text()
         metadata = (skills / "visualizations/agents/openai.yaml").read_text()
         design = (skills / "experiment-design/SKILL.md").read_text()
-        housekeeping = (skills / "research-housekeeping/SKILL.md").read_text()
         conventions = (
             skills / "research-project-init/references/conventions.md"
         ).read_text()
@@ -311,7 +259,6 @@ class ResearchContractTests(unittest.TestCase):
         self.assertNotIn("plots/NNN_exp/<script_stem>/", visualization)
         self.assertIn("stop; do not move or rewrite artifacts", visualization)
         self.assertIn("preserve it unchanged", design)
-        self.assertIn("complete numbered `<experiment_path>`", housekeeping)
         self.assertIn("full numbered producer hierarchy", metadata)
 
     def test_plots_are_self_contained_html_with_in_file_run_id_selection(
@@ -668,17 +615,16 @@ class ResearchContractTests(unittest.TestCase):
             "project conventions": skills / "research-project-init/references/conventions.md",
             "dispatch": skills / "sweep-dispatch/SKILL.md",
             "tracking": skills / "experiments-tracking/SKILL.md",
-            "housekeeping": skills / "research-housekeeping/SKILL.md",
         }
         for name, path in contracts.items():
             contract = " ".join(path.read_text().lower().split())
             with self.subTest(contract=name):
                 self.assertIn("new numbered sub-experiment", contract)
         self.assertIn("preserve the checked-in renderer and `run_id_path_layout` forever", " ".join(contracts["experiment design"].read_text().lower().split()))
-        for name in ("project conventions", "dispatch", "tracking", "housekeeping"):
+        for name in ("project conventions", "dispatch", "tracking"):
             contract = " ".join(contracts[name].read_text().lower().split())
             self.assertIn("immutable", contract)
-        for name in ("dispatch", "tracking", "housekeeping"):
+        for name in ("dispatch", "tracking"):
             contract = " ".join(contracts[name].read_text().lower().split())
             self.assertRegex(contract, r"(?:mismatch|disagreement|mixed)")
             self.assertRegex(contract, r"never (?:move|rename|rewrite)")
@@ -739,7 +685,6 @@ class ResearchContractTests(unittest.TestCase):
             "tracking": skills / "experiments-tracking/SKILL.md",
             "dispatch": skills / "sweep-dispatch/SKILL.md",
             "dispatch templates": skills / "sweep-dispatch/references/templates.md",
-            "housekeeping": skills / "research-housekeeping/SKILL.md",
         }
         compact = {
             name: " ".join(path.read_text().lower().split())
@@ -753,9 +698,9 @@ class ResearchContractTests(unittest.TestCase):
 
         self.assertIn("preserve the checked-in renderer and `run_id_path_layout` forever", compact["experiment design"])
         self.assertIn("preserve the checked-in renderer and literal pin forever", compact["execution agreement"])
-        for name in ("conventions", "tracking", "dispatch", "dispatch templates", "housekeeping"):
+        for name in ("conventions", "tracking", "dispatch", "dispatch templates"):
             self.assertIn("immutable", compact[name])
-        for name in ("tracking", "dispatch", "dispatch templates", "housekeeping"):
+        for name in ("tracking", "dispatch", "dispatch templates"):
             self.assertRegex(compact[name], r"(?:mismatch|disagreement|mixed)")
 
         joined = "\n".join(compact.values())
@@ -994,13 +939,6 @@ class ResearchContractTests(unittest.TestCase):
         )[0]
         propagated = {
             "visualizations": skills / "visualizations/SKILL.md",
-            "orchestrator": skills / "scientific-orchestrator/references/control-contract.md",
-            "flywheel auto": skills / "flywheel-auto/SKILL.md",
-            "autonomous protocol": skills / "flywheel-auto/references/experiment-design-protocol-autonomous.md",
-            "experiment protocol": skills / "flywheel/references/experiment-design-protocol.md",
-            "scientific audit": skills / "critical-scientific-audit/SKILL.md",
-            "flywheel logging": skills / "flywheel-log/SKILL.md",
-            "flywheel reproduction": skills / "flywheel-reproduce/SKILL.md",
         }
 
         def assert_plot_contract(name: str, section: str) -> None:
@@ -1137,84 +1075,24 @@ class ResearchContractTests(unittest.TestCase):
             "'^(code|config|scripts|evaluations|visualizations)/'", templates
         )
 
-    def test_scientific_orchestrator_has_independent_explicit_modes(self) -> None:
-        skill_root = ROOT / "plugins/research/skills/scientific-orchestrator"
-        skill = (skill_root / "SKILL.md").read_text()
-        contract = (skill_root / "references/control-contract.md").read_text()
-
-        self.assertIn("Require explicit `scientific_mode` and `engineering_mode`", skill)
-        self.assertIn("Never infer either mode", skill)
-        self.assertIn("| manual | manual |", contract)
-        self.assertIn("| manual | auto |", contract)
-        self.assertIn("| auto | manual |", contract)
-        self.assertIn("| auto | auto |", contract)
-        self.assertIn("System or sandbox approvals remain independent", contract)
-        self.assertIn("every source-to-target deviation", contract)
-
-    def test_scientific_and_engineering_handoffs_preserve_ownership(self) -> None:
-        skill_root = ROOT / "plugins/research/skills/scientific-orchestrator"
-        skill = (skill_root / "SKILL.md").read_text()
-        contract = (skill_root / "references/control-contract.md").read_text()
-
-        self.assertIn("experiment-design", skill)
-        self.assertIn("environment-sync", skill)
-        self.assertIn("rig-sync", skill)
-        self.assertIn("sweep-dispatch", skill)
-        self.assertIn("The scientific layer defines what evidence", contract)
-        self.assertIn("The engineering layer chooses how", contract)
-        self.assertIn("never rewrites its factual execution state", contract)
-
-    def test_program_experiments_journal_and_flywheel_are_noncompeting(self) -> None:
-        housekeeping = (
-            ROOT / "plugins/research/skills/research-housekeeping/SKILL.md"
+    def test_experiments_and_journal_are_noncompeting(self) -> None:
+        """State and story stay in separate files, each naming the other as owner."""
+        tracking = (
+            ROOT / "plugins/research/skills/experiments-tracking/SKILL.md"
         ).read_text()
-        orchestrator = (
-            ROOT / "plugins/research/skills/scientific-orchestrator/SKILL.md"
+        journal = (
+            ROOT / "plugins/research/skills/research-journal/SKILL.md"
         ).read_text()
 
-        self.assertIn("program.md` as the one-screen current index", orchestrator)
-        self.assertIn("`EXPERIMENTS.md` as the only run-state authority", orchestrator)
-        self.assertIn("`JOURNAL.md` as the chronological narrative", orchestrator)
-        self.assertIn("Flywheel as curated scientific lineage", orchestrator)
-        self.assertIn("Never introduce a generic `outputs/` tree", housekeeping)
-        self.assertIn("Never edit it from this skill", housekeeping)
-
-    def test_orchestrator_is_a_compaction_safe_control_plane(self) -> None:
-        skill_root = ROOT / "plugins/research/skills/scientific-orchestrator"
-        orchestrator = (skill_root / "SKILL.md").read_text()
-        roles = (skill_root / "references/subagent-roles.md").read_text()
-        housekeeping = (
-            ROOT / "plugins/research/skills/research-housekeeping/SKILL.md"
-        ).read_text()
-        orchestrator_words = " ".join(orchestrator.split())
-        roles_words = " ".join(roles.split())
-        housekeeping_words = " ".join(housekeeping.split())
-
-        self.assertIn("## Main-thread control plane", orchestrator)
-        self.assertIn("do not copy or fork the full main transcript", orchestrator_words)
         self.assertIn(
-            "Do not silently execute the substantive assignment", orchestrator_words
+            "EXPERIMENTS.md is the project's **state** (the story lives in JOURNAL.md)",
+            tracking,
         )
         self.assertIn(
-            "sole reconciler, synthesizer, and decision-register writer",
-            orchestrator_words,
+            "JOURNAL.md is the project's **story**", journal
         )
-        self.assertIn("## Assignment packet", roles)
-        self.assertIn("Do not pass the main transcript", roles_words)
-        self.assertIn("Do not return raw logs", roles_words)
-        self.assertIn("first recovery read after compaction", housekeeping_words)
-        self.assertIn("sole writer of `program.md`", housekeeping_words)
-        self.assertIn("Source-read-only workers may write only", roles_words)
-        for trace_field in (
-            '"assignment_id"',
-            '"success_condition"',
-            '"report_path"',
-            '"stop_condition"',
-            '"conclusion"',
-            '"validation"',
-            '"next_action"',
-        ):
-            self.assertIn(trace_field, housekeeping)
+        self.assertIn("state lives in EXPERIMENTS.md", journal)
+        self.assertIn("never as factual run state", journal)
 
     def test_project_init_is_fresh_only_and_scaffolds_research_2_records(self) -> None:
         init_root = ROOT / "plugins/research/skills/research-project-init"
@@ -1225,10 +1103,15 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("stop as unsupported", skill)
         self.assertRegex(skill, r"Never\s+infer a default")
         self.assertIn("## program/00-execution-agreement.md (initial)", templates)
-        self.assertIn("scientific_mode: <manual|auto", templates)
         self.assertIn("engineering_mode: <manual|auto", templates)
-        self.assertIn("orchestration/", templates)
-        self.assertIn("FLYWHEEL_ROOT_NODE_ID=", templates)
+        # The scientific half of the agreement and the Flywheel/orchestration
+        # surfaces are owned by skills removed in 5.0.0; scaffolding them would
+        # create records no installed skill maintains.
+        self.assertNotIn("scientific_mode", templates)
+        self.assertNotIn("orchestration/", templates)
+        self.assertNotIn("FLYWHEEL", templates)
+        self.assertNotIn("index.md", templates)
+        self.assertNotIn("decision-register", templates)
         for key in (
             "HF_TOKEN",
             "HUGGING_FACE_HUB_TOKEN",
@@ -1255,7 +1138,6 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("def project_path(", templates)
         self.assertIn("TORCH_NUM_WORKERS=16", templates)
         self.assertIn("never copy or commit a token", templates)
-        self.assertIn("Do not create this file with placeholders", templates)
         self.assertIn("`.gitkeep` in every directory", skill)
         self.assertIn("Ask which single directory name", skill)
         self.assertIn('name = "{{ENVIRONMENT_NAME}}"', templates)
@@ -1340,131 +1222,6 @@ class ResearchContractTests(unittest.TestCase):
             if "PARA/Projects" in text or "/mnt/KS_2TB" in text:
                 offenders.append(str(path.relative_to(ROOT)))
         self.assertEqual(offenders, [])
-
-    def test_flywheel_family_preserves_logging_and_index_authority(self) -> None:
-        log = (ROOT / "plugins/research/skills/flywheel-log/SKILL.md").read_text()
-        index = (ROOT / "plugins/research/skills/flywheel-index/SKILL.md").read_text()
-        auto = (ROOT / "plugins/research/skills/flywheel-auto/SKILL.md").read_text()
-        gate = (
-            ROOT
-            / "plugins/research/skills/flywheel/references/research-root-gate.md"
-        ).read_text()
-
-        self.assertIn("sole source of truth", log)
-        self.assertIn("./.flywheel.json", gate)
-        self.assertIn("Never create a", log)
-        self.assertIn("generic `outputs/`", log)
-        self.assertIn("`index.md` is a local logging side effect", log)
-        self.assertIn("index.md` is a *mirror*", index)
-        self.assertIn("authoritative", index)
-        self.assertIn("explicit budget", auto)
-
-    def test_flywheel_logging_contract_is_deterministic_and_fail_closed(self) -> None:
-        log = (ROOT / "plugins/research/skills/flywheel-log/SKILL.md").read_text()
-        index = (ROOT / "plugins/research/skills/flywheel-index/SKILL.md").read_text()
-        gate = (
-            ROOT
-            / "plugins/research/skills/flywheel/references/research-root-gate.md"
-        ).read_text()
-
-        self.assertLess(gate.index("./.flywheel.json"), gate.index("FLYWHEEL_ROOT_NODE_ID"))
-        self.assertLess(gate.index("FLYWHEEL_ROOT_NODE_ID"), gate.index("VS Code setting"))
-        for artifact in (
-            "at least one real plot/image",
-            "`summary.md`",
-            "machine-readable metrics",
-            "`reproducibility.md`",
-            "`commit.txt`",
-        ):
-            self.assertIn(artifact, log)
-        self.assertIn("stop and route its", log)
-        self.assertIn("generation to the owning research skill", log)
-        self.assertIn("explicit approval before deletion", log)
-        self.assertIn("approval before deletion", log)
-        self.assertIn("incremental", index)
-        self.assertIn("--rebuild", index)
-        self.assertIn("Never invent content", index)
-
-    def test_flywheel_writes_use_current_node_and_stage_contracts(self) -> None:
-        log = (ROOT / "plugins/research/skills/flywheel-log/SKILL.md").read_text()
-
-        self.assertNotIn("flywheel_stage_node_create", log)
-        self.assertIn("flywheel_commit_new_node", log)
-        self.assertIn("flywheel_branch_node", log)
-        self.assertIn("flywheel_acquire_stage_lease", log)
-        self.assertIn("stage_session_id", log)
-        self.assertIn("base_committed_revision", log)
-        self.assertIn("full `staged_payload`", log)
-        self.assertIn("Never send removed fields", log)
-        self.assertIn("For a failed or canceled run", log)
-        self.assertIn("For an insight node, require only self-contained `content`", log)
-        self.assertIn("A coherent\ngraph synthesis may be published with no artifacts", log)
-
-    def test_flywheel_mutators_require_canonical_root_ancestry(self) -> None:
-        gate = (
-            ROOT
-            / "plugins/research/skills/flywheel/references/research-root-gate.md"
-        ).read_text()
-        self.assertIn("flywheel_get_node_ancestry", gate)
-        self.assertIn("never overrides the workspace root", gate)
-        self.assertIn("Every new Research 2.0 node must be created with", gate)
-
-        for name in (
-            "flywheel-auto",
-            "flywheel-lookahead",
-            "flywheel-reproduce",
-            "flywheel-to-graph",
-        ):
-            skill = (ROOT / f"plugins/research/skills/{name}/SKILL.md").read_text()
-            self.assertIn("research-root-gate.md", skill, name)
-            self.assertRegex(skill, r"(?i)ancestry", name)
-            self.assertIn("explicitly approved new root", skill, name)
-
-    def test_flywheel_shared_contract_references_are_centralized(self) -> None:
-        common = (
-            "ARTIFACTS.md",
-            "INTERFACES.md",
-            "flywheel-cli-tool-map.md",
-            "flywheel-mcp-tool-map.md",
-        )
-        for skill_name in (
-            "flywheel-auto",
-            "flywheel-lookahead",
-            "flywheel-reproduce",
-            "flywheel-to-graph",
-        ):
-            skill = (ROOT / f"plugins/research/skills/{skill_name}/SKILL.md").read_text()
-            references = ROOT / f"plugins/research/skills/{skill_name}/references"
-            for filename in common:
-                self.assertFalse((references / filename).exists())
-                self.assertIn(f"../flywheel/references/{filename}", skill)
-
-        for skill_name in ("flywheel-auto", "flywheel-reproduce"):
-            duplicate = (
-                ROOT
-                / f"plugins/research/skills/{skill_name}/references/experiment-design-protocol.md"
-            )
-            self.assertFalse(duplicate.exists())
-
-    def test_operational_retry_preserves_run_identity(self) -> None:
-        fast_path = (
-            ROOT
-            / "plugins/research/skills/scientific-orchestrator/references/operational-fast-path.md"
-        ).read_text()
-        audit = (
-            ROOT / "plugins/research/skills/critical-scientific-audit/SKILL.md"
-        ).read_text()
-
-        self.assertIn("same elected run ID", fast_path)
-        self.assertIn("new wave or attempt identifier", fast_path)
-        self.assertIn("evolve the run ID", fast_path)
-        self.assertIn("../scientific-orchestrator/references/operational-fast-path.md", audit)
-        self.assertFalse(
-            (
-                ROOT
-                / "plugins/research/skills/critical-scientific-audit/references/operational-fast-path.md"
-            ).exists()
-        )
 
     def test_all_execution_skills_reject_legacy_project_migration(self) -> None:
         tracking = (
@@ -1628,7 +1385,6 @@ class ResearchContractTests(unittest.TestCase):
             "environment-sync",
             "rig-sync",
             "research-journal",
-            "research-housekeeping",
         ):
             skill = flat(ROOT / "plugins/research/skills" / skill_name / "SKILL.md")
             self.assertIn("Directives are closed", skill, skill_name)

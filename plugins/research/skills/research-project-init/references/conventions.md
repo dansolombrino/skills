@@ -12,15 +12,14 @@ Support only repositories scaffolded with the Research 2.0 surfaces in the taxon
 required surface is missing, or legacy status/scripts are detected, stop as unsupported. Do not
 offer compatibility, migration, or opportunistic upgrades.
 
-Read `program/00-execution-agreement.md` before a material scientific or engineering action. It
-must explicitly set `scientific_mode: manual|auto` and `engineering_mode: manual|auto`; never infer
-either. Manual mode reserves that layer's choices for the user. Auto mode delegates that layer's
-choices only inside its approved scientific scope or engineering envelope. Integrity gates never
-become optional.
+Read `program/00-execution-agreement.md` before a material engineering action. It must explicitly
+set `engineering_mode: manual|auto`; never infer it. Manual mode reserves the engineering choices
+for the user. Auto mode delegates them only inside the approved engineering envelope. Integrity
+gates never become optional.
 
 Always return to the user for destructive operations, history rewrites, deletion of material data,
 overwriting user changes, new repositories/remotes/accounts/destinations, secrets/authentication
-changes, scope/budget/rig expansion, shared-GPU exceptions, ambiguous Flywheel roots, or a
+changes, scope/budget/rig expansion, shared-GPU exceptions, or a
 source-to-target deviation governed by `integrate-reference-code`. System permission prompts are
 independent and always apply.
 
@@ -74,8 +73,7 @@ named by a directive rather than discovered by looking around:
 ├── visualizations/  # plotting code (argparse python), sibling of code/
 ├── shitpads/        # temp space; gitignored, dir tracked, rig-local, never synced
 ├── references/      # papers/codebases to reference; gitignored, dir tracked, rig-synced
-├── program/         # tracked scientific agreement, decisions, and phase reports
-├── orchestration/   # local-only append-only control/subagent traces; gitignored
+├── program/         # tracked engineering execution agreement
 ├── .env             # secrets + machine-varying paths ONLY (gitignored)
 ├── .env.example     # committed mirror of .env keys with placeholders
 ├── .python-version  # exact Python patch used on every rig
@@ -85,8 +83,6 @@ named by a directive rather than discovered by looking around:
 ├── README.md        # static scaffold (structure, setup, how-to)
 ├── AGENTS.md        # thin: project specifics + light awareness map (canonical project notes)
 ├── CLAUDE.md        # thin pointer to AGENTS.md so Claude Code loads the same notes
-├── program.md       # one-screen current scientific index
-├── index.md         # local mirror of the authoritative Flywheel graph
 ├── JOURNAL.md       # story: prose log of what/why/learned (append-only)
 └── EXPERIMENTS.md   # state: run tracking tables
 ```
@@ -264,7 +260,7 @@ workflow did not author are not retroactively subject to this gate.
 
 The agent proposes the exact wording, punctuation, formatting, placement, and export paths, but only
 the user may accept them. Wait for explicit user approval before the code edit. This is always
-protected: scientific-auto and engineering-auto cannot approve it, and a prior approval does not
+protected: engineering-auto cannot approve it, and a prior approval does not
 carry across a later plotting-code edit even when the proposed specification remains unchanged. An
 unchanged-code rerender may reuse approval only when every resolved concrete export path is
 byte-for-byte identical to the previously explicitly approved concrete path.
@@ -278,7 +274,7 @@ plotting script's argparse command in the foreground from the project checkout o
 evaluations converge. If another host is active, connect directly to `rig-4090`; stop when its
 checkout cannot be identified or reached.
 
-Do not invoke `scientific-orchestrator`, `sweep-dispatch`, `rig-sync`, or
+Do not invoke `sweep-dispatch`, `rig-sync`, or
 `experiments-tracking` for plotting. Do not create orchestration control state, mint a wave id,
 generate a launch script, dispatch work, start tmux, or add/update `EXPERIMENTS.md` rows. Plot
 plot-specification approval and the applicable engineering-mode decisions remain in force; this

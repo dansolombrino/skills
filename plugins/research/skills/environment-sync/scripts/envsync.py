@@ -49,7 +49,6 @@ RESERVED_ENVIRONMENT_NAMES = {
     "config",
     "evaluations",
     "logs",
-    "orchestration",
     "plots",
     "references",
     "scripts",

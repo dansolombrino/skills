@@ -1,4 +1,0 @@
-interface:
-  display_name: "Assumption Breaker Plan"
-  short_description: "Challenge hypotheses with falsifiable alternatives"
-  default_prompt: "Use $assumption-breaker-plan to identify hidden assumptions and rank discriminating experiments."

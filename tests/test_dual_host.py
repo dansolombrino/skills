@@ -141,12 +141,6 @@ class BehavioralRegressionTests(unittest.TestCase):
         ]
         self.assertEqual(offenders, [], "angle-bracket placeholders are not resolvable at runtime")
 
-    def test_concurrency_is_discovered_not_hardcoded(self) -> None:
-        skill = (SKILLS / "scientific-orchestrator/SKILL.md").read_text()
-        self.assertNotIn("With four total slots", skill)
-        self.assertIn("available concurrent subagents minus one", skill)
-        self.assertIn("never assume a fixed slot count", skill)
-
     def test_gpu_smoke_target_has_a_template(self) -> None:
         templates = (SKILLS / "research-project-init/references/templates.md").read_text()
         skill = (SKILLS / "research-project-init/SKILL.md").read_text()

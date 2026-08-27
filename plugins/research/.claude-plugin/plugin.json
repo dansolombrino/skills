@@ -1,7 +1,7 @@
 {
   "name": "research",
-  "version": "4.1.0",
-  "description": "Orchestrate scientific research, publish curated Flywheel lineage, and materialize reproducible experiments across verified GPU rigs.",
+  "version": "5.0.0",
+  "description": "Materialize reproducible experiments across verified GPU rigs: scaffold projects, provision exact environments, deploy tested revisions, dispatch GPU waves, and visualize results.",
   "author": {
     "name": "Dan Solombrino",
     "email": "dansolombrino@gmail.com",
@@ -18,9 +18,6 @@
     "uv",
     "reference-code",
     "adaptation",
-    "scientific-orchestration",
-    "literature-review",
-    "flywheel",
-    "research-lineage"
+    "visualization"
   ]
 }

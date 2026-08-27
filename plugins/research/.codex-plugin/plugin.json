@@ -1,7 +1,7 @@
 {
   "name": "research",
-  "version": "4.1.0",
-  "description": "Orchestrate scientific research, publish curated Flywheel lineage, and materialize reproducible experiments across verified GPU rigs.",
+  "version": "5.0.0",
+  "description": "Materialize reproducible experiments across verified GPU rigs: scaffold projects, provision exact environments, deploy tested revisions, dispatch GPU waves, and visualize results.",
   "author": {
     "name": "Dan Solombrino",
     "email": "dansolombrino@gmail.com",
@@ -18,16 +18,13 @@
     "uv",
     "reference-code",
     "adaptation",
-    "scientific-orchestration",
-    "literature-review",
-    "flywheel",
-    "research-lineage"
+    "visualization"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Research",
-    "shortDescription": "Scientific orchestration and reproducible GPU research",
-    "longDescription": "Scaffold fresh Research 2.0 projects, coordinate manual or autonomous scientific and engineering loops, synthesize literature, challenge assumptions, audit decisive evidence, publish curated Flywheel lineage, integrate reference implementations through protected deviation approval, provision exact uv environments, deploy tested revisions, dispatch and monitor GPU waves, reconcile run state, maintain a narrative journal, and create result visualizations.",
+    "shortDescription": "Reproducible GPU experiments across verified rigs",
+    "longDescription": "Scaffold fresh Research 2.0 projects under an explicit engineering execution agreement, integrate reference implementations through protected deviation approval, provision exact uv environments, deploy tested revisions, dispatch and monitor GPU waves, reconcile run state, maintain a narrative journal, and create approved result visualizations.",
     "developerName": "Dan Solombrino",
     "category": "Developer Tools",
     "capabilities": [
@@ -36,10 +33,10 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Run a scientific research loop with explicit scientific and engineering modes.",
-      "Scaffold a fresh Research 2.0 project with program, journal, Flywheel, environment, and rig contracts.",
-      "Publish a completed experiment or scientific insight to the canonical Flywheel graph.",
-      "Compile an approved research step into a reproducible experiment and monitor its GPU wave through completion."
+      "Scaffold a fresh Research 2.0 project with engineering, environment, and rig contracts.",
+      "Provision the exact uv environment and verify parity across my rigs.",
+      "Compile an approved research step into a reproducible experiment and monitor its GPU wave through completion.",
+      "Plot my evaluation results as approved self-contained interactive HTML."
     ],
     "screenshots": []
   }

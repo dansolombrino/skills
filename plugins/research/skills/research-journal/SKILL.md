@@ -1,6 +1,6 @@
 ---
 name: research-journal
-description: Keep a Research 2.0 JOURNAL.md as the append-only chronological story of what was done, why, and what was learned. Use after meaningful scientific or engineering events and whenever the user asks to journal, log, or write up the work; authorize each entry according to the event-owning layer's manual or auto mode, never as factual run state or Flywheel publication.
+description: Keep a Research 2.0 JOURNAL.md as the append-only chronological story of what was done, why, and what was learned. Use after meaningful scientific or engineering events and whenever the user asks to journal, log, or write up the work; authorize each entry according to the active engineering mode, never as factual run state.
 ---
 
 # research-journal
@@ -9,10 +9,10 @@ JOURNAL.md is the project's **story** — prose explaining what was done, why, a
 
 ## When
 
-- Read `program/00-execution-agreement.md`. If the event-owning scientific or engineering layer is
-  manual, suggest the entry in the same turn and wait for approval. If that layer is auto, append a
-  concise factual entry about its own in-envelope action without a per-entry prompt. When ownership
-  is mixed or ambiguous, treat it as manual and ask. Trivial mechanical edits do not journal.
+- Read `program/00-execution-agreement.md`. If `engineering_mode` is manual, suggest the entry in
+  the same turn and wait for approval. If it is auto, append a concise factual entry about the
+  in-envelope action without a per-entry prompt. When ownership is ambiguous, treat it as manual
+  and ask. Trivial mechanical edits do not journal.
 - On demand, anytime the user asks.
 
 ## Format

@@ -1,4 +1,0 @@
-interface:
-  display_name: "Research Housekeeping"
-  short_description: "Maintain compaction-safe research control records"
-  default_prompt: "Use $research-housekeeping to reconcile compaction-safe program records, decisions, and local orchestration traces."

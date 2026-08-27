@@ -9,7 +9,7 @@ EXPERIMENTS.md is the project's **state** (the story lives in JOURNAL.md). Canon
 
 Require the Research 2.0 scaffold and schema-v2 status contract. If either is absent, stop as
 unsupported; do not offer migration or interpret legacy state. Factual reconciliation is automatic
-in every scientific/engineering mode and does not require a narrative or scientific decision.
+in every engineering mode and does not require a narrative or scientific decision.
 
 ## Hard rules
 

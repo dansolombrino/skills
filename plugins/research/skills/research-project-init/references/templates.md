@@ -26,8 +26,7 @@ commit; the `.gitignore` exceptions below preserve placeholders in ignored trees
 | `visualizations/` | plotting code (argparse), reads `evaluations/`, writes `plots/` |
 | `shitpads/` | temp scratch space (gitignored, rig-local) |
 | `references/` | papers/codebases for reference (gitignored, rig-synced) |
-| `program/` | scientific agreement, decision history, and phase reports |
-| `orchestration/` | ignored local control events and subagent traces |
+| `program/` | the engineering execution agreement |
 
 Experiments are named `NNN_experiment_name` and mirrored across the folders above — except
 `tests/`, which mirrors the source root first: tests for `<root>/<path>/<stem>.py` live at
@@ -38,13 +37,11 @@ ordered identity params (`RUN_ID_PARAMS`) and its literal output-path layout pin
 
 ## Tracking
 
-- **`program.md`** — current scientific question, phase, next decision, and record links.
-- **`program/00-execution-agreement.md`** — explicit scientific/engineering modes, scope,
-  envelope, destinations, and protected choices.
+- **`program/00-execution-agreement.md`** — explicit engineering mode, envelope, destinations,
+  and protected choices.
 - **`EXPERIMENTS.md`** — state: which runs exist (todo/inpr/done/failed), in which wave, on
   which rig and GPU.
 - **`JOURNAL.md`** — story: prose log of what was done, why, and what was learned.
-- **Flywheel / `index.md`** — authoritative curated scientific lineage and its local mirror.
 
 ## Setup
 
@@ -53,7 +50,6 @@ ordered identity params (`RUN_ID_PARAMS`) and its literal output-path layout pin
    run the project GPU smoke.
 3. Configure the approved GitHub remote/dispatch branch and `sync.toml`, then use `rig-sync` and
    `environment-sync` to prepare and verify approved rig roots.
-4. Configure one canonical Flywheel root in `.flywheel.json` or `.env` before publishing nodes.
 
 ## Running
 
@@ -90,11 +86,7 @@ stated, ask rather than imitate. External source code enters only through
 
 - `EXPERIMENTS.md` — run tracking (state). Read it to know what exists/ran.
 - `JOURNAL.md` — prose history (story). Read it to know why things were done.
-- `program.md` — one-screen current scientific state and links.
-- `program/00-execution-agreement.md` — authoritative manual/auto modes and approval envelope.
-- `program/decision-register.md` — tracked material scientific decisions.
-- `index.md` — local Flywheel mirror; Flywheel remains authoritative.
-- `orchestration/` — ignored local traces; never stage or treat them as scientific results.
+- `program/00-execution-agreement.md` — authoritative manual/auto mode and approval envelope.
 - `README.md` — structure + setup.
 - Deepen further by reading `config/NNN_*/` and the experiment's `.py`: `RUN_ID_PARAMS` is the
   authoritative ordered run identity and `RUN_ID_PATH_LAYOUT` is the authoritative literal
@@ -137,36 +129,6 @@ Project notes live in `AGENTS.md`. Read @AGENTS.md before doing anything.
 <!-- append-only prose, chronological; entries under `## YYYY-MM-DD, HH:MM — title` -->
 ```
 
-## program.md (initial)
-
-```markdown
-# Research Program
-
-Active request: <not set>
-Current phase: setup
-Agreement: a1, approved: no (`program/00-execution-agreement.md`)
-Scientific mode: <manual|auto — required>
-Engineering mode: <manual|auto — required>
-Scientific question: <not set>
-Next decision: approve the initial agreement
-Engineering handoff: none
-Subagent plan: none
-Flywheel disposition: setup incomplete
-
-## Checklist
-
-- [ ] Execution agreement approved
-- [ ] Scientific question and decision criterion recorded
-- [ ] Engineering envelope and protected choices recorded
-- [ ] Required evidence or engineering handoff identified
-- [ ] Flywheel disposition recorded
-
-Decision register: `program/decision-register.md`
-Run state: `EXPERIMENTS.md`
-Narrative: `JOURNAL.md`
-Flywheel mirror: `index.md`
-```
-
 ## program/00-execution-agreement.md (initial)
 
 ```markdown
@@ -174,26 +136,15 @@ Flywheel mirror: `index.md`
 
 agreement_version: a1
 approved: no
-scientific_mode: <manual|auto — required>
 engineering_mode: <manual|auto — required>
-
-## Scientific contract
-
-- Active request:
-- Question / claim / hypothesis:
-- Live alternatives:
-- Evidence stage: exploratory
-- Decisive evidence and decision criterion:
-- Evaluation boundary and stop rule:
-- Included and excluded scientific scope:
 
 ## Engineering envelope
 
+- Active request:
 - Repository / branch / approved remotes:
 - Rigs / GPUs:
 - Compute / time / monetary ceilings:
 - Approved tracking and publication destinations:
-- Canonical Flywheel root id / title:
 
 ## Decision ownership
 
@@ -222,7 +173,7 @@ engineering_mode: <manual|auto — required>
     no plot path carries run_id segments and plot communication never touches RUN_ID_PATH_LAYOUT.
     The title states every selected RUN_ID param; how those params are arranged across title lines
     is a per-plot question the user answers each time, never chosen automatically and never reused
-    from another plot's arrangement. Only the user may approve these protected path choices; scientific-auto and
+    from another plot's arrangement. Only the user may approve these protected path choices;
     engineering-auto cannot bypass them. Rewriting a leaf whole on rerun is expected and needs no
     fresh approval while the path is unchanged; reject any destination that collides with a
     different script's output. If runtime values require a path template, the user
@@ -243,29 +194,10 @@ engineering_mode: <manual|auto — required>
 - Latest material revision:
 ```
 
-## program/decision-register.md (initial)
-
-```markdown
-# Decision Register
-
-<!-- Append material scientific/control decisions. Keep factual run state in EXPERIMENTS.md. -->
-```
-
-## index.md (initial)
-
-```markdown
-# Flywheel Node Index — {{PROJECT_NAME}}
-
-Local mirror of the Flywheel graph. The authoritative record lives in Flywheel.
-```
-
 ## .env.example (committed key mirror)
 
 ```bash
 WANDB_API_KEY=
-FLYWHEEL_ROOT_NODE_ID=
-FLYWHEEL_ROOT_NODE_SLUG=
-FLYWHEEL_ROOT_NODE_TITLE=
 
 # Hugging Face credentials (secrets; keep values only in .env)
 HF_TOKEN=
@@ -308,9 +240,6 @@ file naming a mount point that is true on exactly one machine.
 
 ```bash
 WANDB_API_KEY=
-FLYWHEEL_ROOT_NODE_ID=
-FLYWHEEL_ROOT_NODE_SLUG=
-FLYWHEEL_ROOT_NODE_TITLE=
 
 HF_TOKEN=
 HUGGING_FACE_HUB_TOKEN=
@@ -330,18 +259,6 @@ environment nor the project root provides, derive it from that machine's declare
 (`rig-sync` → `references/configuration.md`), accept that the file is now rig-specific and must be
 maintained per rig, and record why in the journal. `doctor` warns on every absolute value here.
 
-## .flywheel.json (only after root verification)
-
-```json
-{
-  "rootNodeId": "{{VERIFIED_FLYWHEEL_ROOT_NODE_ID}}",
-  "rootNodeTitle": "{{VERIFIED_FLYWHEEL_ROOT_NODE_TITLE}}"
-}
-```
-
-Do not create this file with placeholders. If no root is verified, leave it absent and keep the
-Flywheel disposition as setup-incomplete.
-
 ## .gitignore
 
 ```gitignore
@@ -349,7 +266,6 @@ Flywheel disposition as setup-incomplete.
 {{ENVIRONMENT_NAME}}/
 .rigsync_cache/
 storage/
-orchestration/
 shitpads/*
 !shitpads/.gitkeep
 logs/*

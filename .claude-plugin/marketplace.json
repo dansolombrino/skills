@@ -1,6 +1,6 @@
 {
   "name": "dansolombrino-skills",
-  "description": "Personal research skills: scientific orchestration, reproducible GPU experiments, and curated Flywheel lineage.",
+  "description": "Personal research skills: reproducible GPU experiments across verified rigs.",
   "owner": {
     "name": "Dan Solombrino",
     "email": "dansolombrino@gmail.com",
@@ -10,8 +10,8 @@
     {
       "name": "research",
       "source": "./plugins/research",
-      "description": "Orchestrate scientific research, publish curated Flywheel lineage, and materialize reproducible experiments across verified GPU rigs.",
-      "version": "4.1.0",
+      "description": "Materialize reproducible experiments across verified GPU rigs: scaffold projects, provision exact environments, deploy tested revisions, dispatch GPU waves, and visualize results.",
+      "version": "5.0.0",
       "category": "Developer Tools"
     }
   ]

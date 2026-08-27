@@ -14,7 +14,7 @@ layout or convention from another project on disk.
 Require the Research 2.0 scaffold and read the active execution agreement. Plot representation,
 placement, and execution follow `engineering_mode`: manual mode proposes and waits; auto mode may
 choose inside the approved envelope. Scientific interpretation and claim changes remain owned by
-the scientific layer. Plot communication approval is always user-owned and overrides both modes.
+the user. Plot communication approval is always user-owned and overrides the mode.
 
 ## Placement
 
@@ -140,7 +140,7 @@ network, no server, and no sibling files:
   prose alone does not satisfy the requirement.
 - Propose only. Wait for the user's explicit acceptance before editing plotting code.
   Re-propose and obtain approval on every later plotting-code edit even when the specification is
-  unchanged. Neither scientific-auto nor engineering-auto may bypass this gate. An unchanged-code
+  unchanged. Engineering-auto may not bypass this gate. An unchanged-code
   rerender may reuse approval only when every resolved concrete export path is byte-for-byte
   identical to the previously explicitly approved concrete path.
 - After rendering, open the file and verify that the accepted text is present, legible, and
@@ -149,13 +149,13 @@ network, no server, and no sibling files:
   are white. Do not silently repair wording, placement,
   or title arrangement; propose any correction and reopen the approval gate before editing.
 - **No fixed plot checklist**: manual mode asks what the user wants; auto mode chooses the smallest
-  visualization that answers the approved scientific handoff.
+  visualization that answers the approved plot specification.
 - Treat every plotting render as a direct, non-orchestrated fast path. Run its argparse command in
   the foreground on **`rig-4090`**, where evaluations converge. When another host is active,
   connect directly to `rig-4090` and run from its project checkout; stop if that checkout cannot
   be identified or reached.
-- Do not invoke `scientific-orchestrator`, `sweep-dispatch`, `rig-sync`, or
+- Do not invoke `sweep-dispatch`, `rig-sync`, or
   `experiments-tracking` for plotting. Do not create orchestration control state, mint a wave id,
   generate launch scripts, dispatch work, start tmux, or add/update `EXPERIMENTS.md` rows.
-- New plots produced ⇒ apply `research-journal` according to the event-owning layer's mode when
+- New plots produced ⇒ apply `research-journal` according to `engineering_mode` when
   they reveal something.

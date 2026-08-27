@@ -49,18 +49,13 @@ Cross-rig workflows require the bundled `rig-sync` and `environment-sync` contra
 access on every rig; the plugin stops before remote dispatch when source or runtime parity cannot
 be proven.
 
-Research 2.0 supports fresh projects only. Its scientific orchestrator requires an explicit
-scientific manual/auto mode and an independent engineering manual/auto mode, keeps current program
-records separate from `EXPERIMENTS.md` and `JOURNAL.md`, and hands concrete execution to the
-reproducible experiment stack. Unsupported legacy layouts stop without migration.
+Research 2.0 supports fresh projects only. Every scaffolded project carries an explicit
+engineering execution agreement with a manual/auto mode and an approved envelope; the engineering
+skills read it before any material action and stop when it is absent. `EXPERIMENTS.md` holds run
+state and `JOURNAL.md` holds the narrative. Unsupported legacy layouts stop without migration.
 
 Scaffolded projects get `AGENTS.md` as the canonical project doc plus a thin `CLAUDE.md` that
 points at it, so one set of notes serves both hosts.
-
-The same plugin includes the complete Flywheel skill family. Flywheel MCP authentication is
-machine-local; follow the bundled `flywheel` setup guidance for your host and verify a canonical
-project root before any graph write. Flywheel is the curated lineage authority, while `index.md`
-is only its local mirror.
 
 ## Update an installation
 
