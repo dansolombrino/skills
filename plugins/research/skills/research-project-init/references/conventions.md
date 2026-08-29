@@ -460,6 +460,14 @@ the number of GPUs actually free varies per dispatch: **ask the user which rigs 
 are free** before proposing an assignment (`sweep-dispatch`, pre-launch gates). For `behemoth`
 that math defaults to `2.0 × 1` (gpu0), and only a grant for this wave widens it.
 
+Those weights are **fixed nominal throughput priors**, not measurements, and they have two
+consumers. `sweep-dispatch` balances a wave's lanes with them so every lane is predicted to finish
+at the same time — the wave ends when its slowest lane ends, so an equal run count across a
+fourfold-spread fleet simply idles the fast cards. `experiments-tracking` uses the same numbers to
+convert `elapsed_s` between rigs (`cost = elapsed_s × weight`) rather than pooling runtimes from
+different cards as if they were comparable. A cross-rig estimate is therefore only as good as the
+prior; prefer same-rig history whenever it exists, and label the difference when reporting.
+
 ### behemoth is quota'd
 
 A shared machine shares its **disk** the same way it shares its cards, and `behemoth` enforces

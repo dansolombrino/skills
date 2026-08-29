@@ -71,14 +71,23 @@ Use this deterministic hierarchy:
    `remaining_s = elapsed_s * (progress_total - progress_completed) / progress_completed`.
    Its estimated completion is the observation time plus `remaining_s`; label the basis
    `structured progress`.
-2. At zero/missing structured progress, use the median `elapsed_s` of prior `done` rows with the
-   same run_id, minus current elapsed, floored at zero (`exact-run history`). If none exist, use
-   the median of all provenance-valid `done` rows in the same experiment (`experiment median`).
+2. At zero/missing structured progress, estimate from `done` rows in **rig-independent cost
+   units**: `cost = elapsed_s × weight(rig)`, using the fixed per-GPU speed weights in
+   `../research-project-init/references/conventions.md` § Rig fleet, and predict on the target rig
+   as `elapsed_pred = median(cost) / weight(target rig)`. Prefer prior `done` rows with the same
+   run_id **on the same rig** — those need no normalization, basis `exact-run history`; then the
+   same run_id on other rigs, basis `exact-run history (weight-normalized)`; then all
+   provenance-valid `done` rows in the same experiment, basis `experiment median
+   (weight-normalized)`. For an active run subtract its current elapsed and floor at zero. Never
+   pool elapsed values across rigs unnormalized: a behemoth runtime applied to a queued
+   `rig-3090-ti` run understates it fourfold. The weights are fixed nominal throughput priors, not
+   measurements, so a normalized basis is always weaker than a same-rig one — report which it is.
 3. A schema-v2 heartbeat older than three minutes, invalid numeric bounds, integrity mismatch,
    or unreachable rig makes the active ETA unavailable until resolved. State the reason.
 
 For a lane, add its active run's remaining estimate to the estimated full runtimes of queued runs
-in deterministic script/glob order, using the same exact-run then experiment-median hierarchy.
+in deterministic script/glob order, predicting every term for **that lane's own rig** with the
+hierarchy above.
 If any required term lacks a basis, report that lane ETA as unavailable. The wave ETA is the
 latest available lane completion only when every nonterminal lane is estimable; otherwise report
 the wave ETA as unavailable and name the blocking lane(s). Do not put queued-run estimates into

@@ -64,9 +64,19 @@ project unsupported. Telemetry does not join `RUN_ID_PARAMS`.
 set in the envelope after checking current load; never infer availability from `nvidia-smi`. On
 `behemoth`, gpu0 is the only default. Any additional named card requires an explicit per-wave user
 grant regardless of mode and is never persisted.
-3. **Build and authorize the assignment.** Balance disjoint lanes by the canonical per-GPU weights.
-Present or record run → rig/GPU, exact smoke command, staged files, journal entry, branch/remote,
-environment fingerprint, provisioning dry run, commit/tag/push, and fast-forward scope. Manual mode
+3. **Build and authorize the assignment.** The objective is to **minimize wave completion by
+equalizing predicted lane finish times**, never to hand each lane an equal run count: a lane's
+capacity is `weight × free GPUs` and the fleet spans a fourfold spread, so an even split makes the
+slowest card the wave's tail while the fastest idles. Estimate each run's cost on its candidate rig
+with the `experiments-tracking` hierarchy, then assign runs **longest-first to the disjoint lane
+with the earliest predicted finish**. Per-run costs are what let a grid of unequal runs balance
+itself. In-lane order stays lexicographic — the glob is the manifest, and order never changes a
+lane's total, only which run is in flight at a snapshot. Present or record run → rig/GPU, **each
+lane's predicted finish plus the spread across lanes**, exact smoke command, staged files, journal
+entry, branch/remote, environment fingerprint, provisioning dry run, commit/tag/push, and
+fast-forward scope. A spread wider than 20% of the wave ETA is either rebalanced or justified in
+the same breath — normally indivisibility: fewer runs than weighted capacity, or one dominant run.
+Below that, run granularity is coarser than the gain. Manual mode
 waits for approval; auto mode records that every item is within the envelope. Restate any shared-GPU
 grant verbatim.
 4. **Mint the wave id** when the assignment is authorized: `date '+%Y%m%d-%H%M%S'` on rig-4090.

@@ -11,7 +11,7 @@
       "name": "research",
       "source": "./plugins/research",
       "description": "Materialize reproducible experiments across verified GPU rigs: scaffold projects, provision exact environments, deploy tested revisions, dispatch GPU waves, and visualize results.",
-      "version": "5.0.0",
+      "version": "5.1.0",
       "category": "Developer Tools"
     }
   ]

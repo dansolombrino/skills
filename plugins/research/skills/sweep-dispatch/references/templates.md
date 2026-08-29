@@ -348,7 +348,32 @@ are unchanged.
 
 ## Assignment math
 
-Use the `sweep-dispatch` mandatory gates for the algorithm and
-`../../research-project-init/references/conventions.md` § Rig fleet for the canonical rig names,
-weights, ownership limits, and per-wave authorization rules. Do not duplicate those values in a
-generated artifact or another policy file.
+Objective: **minimize wave completion time** — the wave ends when its slowest lane ends, so lanes
+should be predicted to finish together. Equal run counts do not achieve this on a heterogeneous
+fleet.
+
+Procedure, run once before generation:
+
+1. **Capacity.** For each authorized lane, `capacity = weight × free GPUs in that lane`. Weights
+   and ownership limits: `../../research-project-init/references/conventions.md` § Rig fleet. Ask
+   which rigs and GPUs are free; never infer it from `nvidia-smi`.
+2. **Cost.** Estimate every run's cost in rig-independent units with the `experiments-tracking`
+   hierarchy (`cost = elapsed_s × weight`, preferring same-rig history). A run's predicted runtime
+   in a lane is `cost / capacity(lane)`. With no history at all, every run costs the same — say so,
+   and treat the resulting split as provisional.
+3. **Assign.** Sort runs by cost descending; place each into the lane with the smallest running
+   predicted finish. Longest-first matters: placing the biggest runs last is what strands one
+   oversized job on an already-full lane.
+4. **Check.** Compute each lane's predicted finish and the spread across lanes. Spread above 20% of
+   the wave ETA is rebalanced, or explained as indivisible (fewer runs than weighted capacity, one
+   dominant run, or a run pinned to a rig by VRAM). Report both figures in the gate-3 preview.
+
+Worked example — 12 equal-cost runs, one hour each on `rig-4090`, across `rig-4090` gpu0 (1.0),
+`rig-3090-ti` gpu0 (0.5), and `behemoth` gpu0 (2.0). Total capacity 3.5. Proportional shares are
+3.43 / 1.71 / 6.86, so the greedy pass lands 3 / 2 / 7, predicting 3.0 h / 4.0 h / 3.5 h — a 4.0 h
+wave. An even 4 / 4 / 4 split predicts 4.0 h / 8.0 h / 2.0 h: a 8.0 h wave, twice as long, with
+behemoth idle for six of them. The residual 1.0 h spread in the balanced case is indivisibility at
+one-hour granularity, not a balancing failure.
+
+Do not duplicate rig names, weights, or authorization rules into a generated artifact or another
+policy file; they are declared once in `conventions.md`.
