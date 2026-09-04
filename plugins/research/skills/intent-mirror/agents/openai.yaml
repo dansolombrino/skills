@@ -1,0 +1,4 @@
+interface:
+  display_name: "Intent Mirror"
+  short_description: "Reflect intent back before acting on anything"
+  default_prompt: "Use $intent-mirror to restate what I am asking and confirm alignment before doing anything else."

@@ -67,7 +67,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "5.1.0")
+        self.assertEqual(manifest["version"], "5.2.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -92,14 +92,17 @@ class ResearchContractTests(unittest.TestCase):
             path.parent.name
             for path in (ROOT / "plugins/research/skills").glob("*/SKILL.md")
         }
-        self.assertEqual(len(skill_names), 9)
+        self.assertEqual(len(skill_names), 12)
         self.assertEqual(
             skill_names,
             {
+                "brainstorm-hold",
                 "environment-sync",
                 "experiment-design",
                 "experiments-tracking",
                 "integrate-reference-code",
+                "intent-gate",
+                "intent-mirror",
                 "research-journal",
                 "research-project-init",
                 "rig-sync",
@@ -1389,6 +1392,47 @@ class ResearchContractTests(unittest.TestCase):
             skill = flat(ROOT / "plugins/research/skills" / skill_name / "SKILL.md")
             self.assertIn("Directives are closed", skill, skill_name)
             self.assertIn("another project on disk", skill, skill_name)
+
+    def test_intent_gate_family_is_congruent(self) -> None:
+        skills_root = ROOT / "plugins/research/skills"
+        contract_path = skills_root / "intent-gate/references/contract.md"
+        self.assertTrue(contract_path.is_file())
+        contract = " ".join(contract_path.read_text().split())
+        bodies = {
+            name: " ".join((skills_root / name / "SKILL.md").read_text().split())
+            for name in ("intent-mirror", "brainstorm-hold", "intent-gate")
+        }
+
+        # The two single-mode skills defer to the combined skill's contract as canon.
+        for name in ("intent-mirror", "brainstorm-hold"):
+            self.assertIn("../intent-gate/references/contract.md", bodies[name], name)
+        self.assertIn("references/contract.md", bodies["intent-gate"])
+
+        # Shared vocabulary appears in the contract and in every body.
+        for text_name, text in {"contract": contract, **bodies}.items():
+            self.assertIn("Did I sniff that right", text, text_name)
+            self.assertIn("greenlight", text, text_name)
+            self.assertIn("not doing yet", text, text_name)
+            self.assertIn("Engineering-auto may not bypass this gate", text, text_name)
+
+        # The hold forbids the host's planning mode, host-neutrally.
+        for text_name in ("contract", "brainstorm-hold", "intent-gate"):
+            text = contract if text_name == "contract" else bodies[text_name]
+            self.assertIn("planning mode", text, text_name)
+
+        # The combined skill confirms each detected mode separately.
+        self.assertIn("once per mode", bodies["intent-gate"].lower())
+        self.assertIn("Never bundle", bodies["intent-gate"])
+
+        # Exploration during a hold is negotiated, never assumed.
+        for text_name in ("contract", "brainstorm-hold", "intent-gate"):
+            text = contract if text_name == "contract" else bodies[text_name]
+            self.assertIn("Do you want exploration at this stage?", text, text_name)
+
+        # The mirror re-fires on every later directive once active.
+        for text_name in ("contract", "intent-mirror", "intent-gate"):
+            text = contract if text_name == "contract" else bodies[text_name]
+            self.assertIn("every later directive", text, text_name)
 
     def test_dispatch_guarantees_fixed_timestamped_status_updates(self) -> None:
         skill_root = ROOT / "plugins/research/skills/sweep-dispatch"

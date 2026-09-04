@@ -1,0 +1,4 @@
+interface:
+  display_name: "Brainstorm Hold"
+  short_description: "Discuss only, no plan or code until greenlight"
+  default_prompt: "Use $brainstorm-hold to keep this in brainstorm phase and produce no plan or code until I greenlight it."

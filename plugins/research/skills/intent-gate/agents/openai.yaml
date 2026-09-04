@@ -1,0 +1,4 @@
+interface:
+  display_name: "Intent Gate"
+  short_description: "Confirm intent and hold before any planning"
+  default_prompt: "Use $intent-gate to confirm which gate I want, mirror my intent, and hold before any planning or code."
