@@ -1,4 +1,4 @@
 interface:
   display_name: "Sweep Dispatch"
-  short_description: "Dispatch waves with live status and ETA updates"
-  default_prompt: "Use $sweep-dispatch to verify, authorize by engineering mode, dispatch, and monitor a GPU wave with ten-minute status and ETA updates."
+  short_description: "Dispatch waves to rigs or Slurm with status and ETA updates"
+  default_prompt: "Use $sweep-dispatch to verify, authorize by engineering mode, dispatch, and monitor a GPU wave across the rigs or CINECA Leonardo Slurm jobs with ten-minute status and ETA updates."

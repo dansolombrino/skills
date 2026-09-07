@@ -92,6 +92,13 @@ UV_CACHE_DIR = "/absolute/large-volume/path/cache/uv"
 TMPDIR = "/absolute/large-volume/path/tmp"
 ```
 
+A Slurm cluster such as `leonardo` is declared the same way, with two deliberate omissions:
+no `hostname`, because the alias lands on whichever login node is free, and no `quota_fs`, because
+`quota -w` prints nothing on its Lustre filesystems while `df -P <storage_root>` already reports
+the project quota, which is what the fallback measures. Its `storage_root` is the project's
+absolute `$WORK` path, one entry per project account. The exact entry is in
+`sweep-dispatch/references/cineca-slurm.md`.
+
 The `ssh` value is an alias from `~/.ssh/config`; ports, users, and keys remain there. Preserve
 legacy aliases that other projects may still reference. When `hostname` is present, `doctor`
 compares it exactly with the machine's `hostname` command and stops on a mismatch. Omit the field

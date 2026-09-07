@@ -270,6 +270,8 @@ shitpads/*
 !shitpads/.gitkeep
 logs/*
 !logs/.gitkeep
+# Slurm job-id history written beside a wave script by sweep-dispatch; state, not source
+scripts/**/leonardo.jobs
 references/*
 !references/.gitkeep
 checkpoints/*

@@ -52,7 +52,9 @@ smoke pass: exit 0 and evaluations/000_grokking/smoke/result.json says one step 
 
 - `wave` — the dispatch this execution belonged to (`YYYYMMDD-HHMMSS`, canon), whose annotated
   Git tag is `wave--<wave>`. `gpu` — the GPU set it occupied, opaque identity. Both are read from
-  `.status.json`; before the run starts they come from the generated script's path.
+  `.status.json`; before the run starts they come from the generated script's path. A run executed
+as a Slurm job on `leonardo` has `rig=leonardo`, `gpu=1` (the count requested, since the card index
+is Slurm's), and its job id(s) in `notes`.
 - Statuses: `todo` → `inpr` → `done` | `failed`. `started`/`ended` use `MM-DD HH:MM` (year only if
   ambiguous), and `elapsed` is compact (`45m`, `1h45m`, `2d3h`) from `elapsed_s`. **Elapsed values
   are the project's reference runtimes** — use them to estimate wall-clock and split temporal

@@ -1,11 +1,11 @@
 ---
 name: sweep-dispatch
-description: Generate, launch, and continuously monitor experiment runs/sweeps across the GPU rigs (rig-4090, rig-3090-ti, rig-3080-ti, behemoth — also "4090", "3080 ti", "pro 6000", "bw", "blackwell", "server-pro-6000-bw"). Use when the user asks to run, launch, sweep, or dispatch experiments, receive timestamped ten-minute status/ETA updates, monitor or babysit running experiments, split runs across machines or GPUs, rerun failed runs, or recover/resume a wave after a rig crash or reboot.
+description: Generate, launch, and continuously monitor experiment runs/sweeps across the GPU rigs (rig-4090, rig-3090-ti, rig-3080-ti, behemoth — also "4090", "3080 ti", "pro 6000", "bw", "blackwell", "server-pro-6000-bw") and the CINECA Leonardo Slurm cluster ("leonardo", "cineca", "slurm", "sbatch", "HPC"). Use when the user asks to run, launch, sweep, dispatch, or submit experiments or Slurm jobs, receive timestamped ten-minute status/ETA updates, monitor or babysit running experiments or queued jobs, split runs across machines, GPUs, or the cluster, rerun failed runs, resubmit jobs, fetch results from the cluster, or recover/resume a wave after a rig crash, reboot, or job interruption.
 ---
 
 # sweep-dispatch
 
-Launch machinery for runs and sweeps. Canon: `../research-project-init/references/conventions.md`. Templates: [references/templates.md](references/templates.md). Dispatch always happens **from rig-4090** (the hub). GitHub distributes one tested, tagged commit through `rig-sync`; `environment-sync` establishes runtime parity; rsync is only for artifacts. If either gate fails, stop.
+Launch machinery for runs and sweeps. Canon: `../research-project-init/references/conventions.md`. Templates: [references/templates.md](references/templates.md). CINECA Leonardo is one more target: when a wave assigns any run to `leonardo`, read [references/cineca-slurm.md](references/cineca-slurm.md) before gate 2 and follow it wherever it differs from this file; do not load it otherwise. Dispatch always happens **from rig-4090** (the hub). GitHub distributes one tested, tagged commit through `rig-sync`; `environment-sync` establishes runtime parity; rsync is only for artifacts. If either gate fails, stop.
 
 Read `program/00-execution-agreement.md` first and require the Research 2.0 surfaces. Stop on a
 legacy layout; do not offer migration or recover it as-is. In engineering-manual mode, preview and
@@ -14,7 +14,7 @@ inside the approved repo, branch, rigs/GPUs, compute/budget, and destination env
 `behemoth` cards beyond gpu0, new destinations, destructive actions, and envelope expansion remain
 protected in every mode.
 
-Vocabulary (canon): a **wave** is one dispatch decision, identified by `YYYYMMDD-HHMMSS`; a **slice** is the portion of a wave on one rig; a **lane** is the portion of a slice on one GPU set. Lanes run in parallel, runs within a lane run sequentially.
+Vocabulary (canon): a **wave** is one dispatch decision, identified by `YYYYMMDD-HHMMSS`; a **slice** is the portion of a wave on one rig; a **lane** is the portion of a slice on one GPU set. Lanes run in parallel, runs within a lane run sequentially. A **run** is one experiment execution; a **job** is one Slurm allocation on `leonardo`, which hosts exactly one run — the cluster has jobs, not lanes. Use both words strictly and never call a job a run or a lane.
 
 ## Before anything launches — mandatory gates
 
@@ -63,7 +63,10 @@ project unsupported. Telemetry does not join `RUN_ID_PARAMS`.
 2. **Resolve usable rigs and GPUs.** In manual mode, ask. In auto mode, use only the named rig/GPU
 set in the envelope after checking current load; never infer availability from `nvidia-smi`. On
 `behemoth`, gpu0 is the only default. Any additional named card requires an explicit per-wave user
-grant regardless of mode and is never persisted.
+grant regardless of mode and is never persisted. For `leonardo`, first pass the certificate
+precondition in `references/cineca-slurm.md` (print the login commands and wait when it fails),
+then require the project account for this wave and check its remaining budget with `saldo -b`;
+every job is one GPU, 8 cores, 128 GB unless the user states that a run needs more.
 3. **Build and authorize the assignment.** The objective is to **minimize wave completion by
 equalizing predicted lane finish times**, never to hand each lane an equal run count: a lane's
 capacity is `weight × free GPUs` and the fleet spans a fourfold spread, so an even split makes the
@@ -76,7 +79,11 @@ lane's predicted finish plus the spread across lanes**, exact smoke command, sta
 entry, branch/remote, environment fingerprint, provisioning dry run, commit/tag/push, and
 fast-forward scope. A spread wider than 20% of the wave ETA is either rebalanced or justified in
 the same breath — normally indivisibility: fewer runs than weighted capacity, or one dominant run.
-Below that, run granularity is coarser than the gain. Manual mode
+Below that, run granularity is coarser than the gain. `leonardo` is outside the balancing: its
+queue wait is not predictable, so the user decides how many runs go there, each becomes one job,
+and its slice ETA is reported as scheduler estimate plus run estimate. Preview for that slice the
+account, partition/QOS, resource line, per-job walltime and its basis, and the budget estimate
+(`runs × walltime_h × 8` core-hours). Manual mode
 waits for approval; auto mode records that every item is within the envelope. Restate any shared-GPU
 grant verbatim.
 4. **Mint the wave id** when the assignment is authorized: `date '+%Y%m%d-%H%M%S'` on rig-4090.
@@ -92,6 +99,7 @@ scripts/NNN_exp/<run_id_flat>/wave_<wave_id>/
     wave_<rig>_gpu<ids>.sh        # this run's invocation in this wave
 ```
 
+- On `leonardo` the wave script is the same file with an `#SBATCH` header (`references/cineca-slurm.md`) and is submitted with `sbatch`; the guards below are unchanged and run inside the job.
 - The wave script is **self-contained** (full python command with explicit hydra overrides, each rendered through `hydra_override_arg`) and **self-guarded**: it exits early only if its expected final artifact is present. A `.status.json` that says `done` while the artifact is absent is inconsistent, so the script warns and re-executes. That guard is what makes lane dispatch idempotent — there is no launcher file holding it. Whether a re-execution resumes or restarts was fixed at experiment design time, never re-asked here.
 - It exports `CUDA_VISIBLE_DEVICES`, `WAVE_ID`, and the approved `ENVIRONMENT_FINGERPRINT`.
   Before experiment Python it recomputes the fingerprint with the configured environment's
@@ -155,7 +163,11 @@ Each rig subagent:
 
 1. Runs `rig-sync verify-revision` and read-only `environment-sync verify` for its rig/lane
    immediately before launch, then **dispatches each
-   lane** as its own named tmux session — `<project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>` — running
+   lane** as its own named tmux session — except the `leonardo` subagent, which instead reruns the
+   certificate precondition and **submits each job** with the guarded `sbatch` command in
+   `references/cineca-slurm.md`, records every job id, and monitors with `squeue`/`sacct` plus the
+   three signals; its recovery is resubmission under the same wave id, mapped from the Slurm state
+   table there — — `<project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>` — running
    a glob loop over that lane's wave scripts (exact one-liner in
    [references/templates.md](references/templates.md)). Each queued script repeats the Git guard
    before Python. Every launch and recovery loop treats the complete reserved set as lane-stopping:
@@ -182,7 +194,7 @@ five minutes so a scheduled chat update never depends on an arbitrarily old poll
 
 Tell the user how to watch manually too: for a peer, `ssh <rig>` then
 `tmux attach -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>`; for the current local hub, run the
-`tmux attach` command directly.
+`tmux attach` command directly; for `leonardo`, `ssh leonardo squeue --me`.
 
 ## Machine faults — reboot/crash detection & auto-resume
 
@@ -202,6 +214,10 @@ Each rig subagent is also its rig's watchdog. A machine-level failure (crash, re
   blocks recovery. Never infer slash depth or substitute different paths. Route changed work to a
   new numbered sub-experiment; otherwise ordinary recovery continues only from the unchanged wave
   README/script, pin, tag, and revision.
+- **Slurm jobs** — a `leonardo` job never sees a rig reboot: `NODE_FAIL`, `PREEMPTED`, and
+  system cancellations are its machine faults, `TIMEOUT` is interrupted-by-walltime, `FAILED` and
+  `OUT_OF_MEMORY` are code failures, and an ssh failure to the login node is first a certificate
+  question. The mapping and the guarded resubmit command live in `references/cineca-slurm.md`.
 - **Autonomous, not silent** — relaunching already-approved work is not a new dispatch decision:
   don't ask permission, recover and report — which runs were already done (skipped), which were
   interrupted and relaunched, in which lanes, and whether each resumes or restarts.
@@ -223,7 +239,8 @@ Include:
 - wave counts: `done`, `running`, `queued`, `failed`, plus the estimated wave completion;
 - one line per lane: active run, display progress, heartbeat age, estimated active-run
   completion, queued count/next run, and estimated lane completion;
-- failures, stale telemetry, unreachable rigs, interruptions, and recovery actions;
+- failures, stale telemetry, unreachable rigs, interruptions, and recovery actions; for
+  `leonardo` also each job's id, Slurm state and pending reason, and remaining walltime;
 - the basis for each estimate (`structured progress`, `exact-run history`, or
   `experiment median`), or `ETA unavailable: <reason>`.
 

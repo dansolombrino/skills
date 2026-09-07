@@ -425,6 +425,13 @@ script filenames and tmux session names, so it must be the string that actually 
 | `rig-3090-ti`  | 3090, 3090 ti, `rig-3090ti`                                         | 1        | 0.5                  | dedicated volume | support |
 | `rig-3080-ti`  | 3080, 3080 ti, `rig-3080ti`                                         | 1        | 0.5                  | dedicated volume | support |
 | `behemoth`     | pro 6000, 6000, bw, blackwell, `rig-6000-pro-blackwell`, `server-pro-6000-bw` | 8 (only GPU 0 is ours) | 2.0 | **quota'd, home is small** | support |
+| `leonardo`     | cineca, leonardo booster, slurm, hpc                                | 1 per job (A100 64 GB; Slurm-allocated) | 1.0 | **per-project quota, scratch auto-cleaned** | Slurm target: jobs, not lanes; `sweep-dispatch` → `references/cineca-slurm.md` |
+
+`leonardo` is a batch cluster, not a machine we own: it has no fixed GPU count, no tmux lanes,
+and no reboot to detect. A **job** there is one Slurm allocation hosting one run, sized one GPU,
+8 cores, 128 GB unless the user states otherwise for a wave; its speed weight is the nominal
+1.0 per A100, and its queue wait keeps it out of the lane-balancing math. Access needs a
+12-hour certificate the agent cannot issue.
 
 The storage column is a property of the rig, not of a project. Its concrete values — which volume
 is the large one, where the storage root is, where the shared caches sit — live in the user's

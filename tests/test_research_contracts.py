@@ -67,7 +67,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "5.2.0")
+        self.assertEqual(manifest["version"], "5.3.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -1580,6 +1580,80 @@ class ResearchContractTests(unittest.TestCase):
         finally:
             del sys.modules["omegaconf"]
 
+
+    def test_dispatch_supports_leonardo_slurm_target(self) -> None:
+        """CINECA Leonardo is a Slurm dispatch target inside sweep-dispatch, not a new skill."""
+        skill_root = ROOT / "plugins/research/skills/sweep-dispatch"
+        skill = (skill_root / "SKILL.md").read_text()
+        templates = (skill_root / "references/templates.md").read_text()
+        reference = (skill_root / "references/cineca-slurm.md").read_text()
+        metadata = (skill_root / "agents/openai.yaml").read_text()
+        conventions = (
+            ROOT / "plugins/research/skills/research-project-init/references/conventions.md"
+        ).read_text()
+        rigsync_config = (
+            ROOT / "plugins/research/skills/rig-sync/references/configuration.md"
+        ).read_text()
+        tracking = (
+            ROOT / "plugins/research/skills/experiments-tracking/SKILL.md"
+        ).read_text()
+        gitignore = (
+            ROOT / "plugins/research/skills/research-project-init/references/templates.md"
+        ).read_text()
+
+        # triggering and lazy loading of the Slurm reference
+        for word in ("leonardo", "cineca", "slurm", "sbatch"):
+            self.assertIn(word, skill.split("\n---", 2)[1].lower(), word)
+        self.assertIn("references/cineca-slurm.md", skill)
+        self.assertIn("do not load it otherwise", skill)
+        self.assertIn("cineca-slurm.md", templates)
+        self.assertIn("Leonardo", metadata)
+
+        # vocabulary: run vs job, one run per job, no lanes
+        self.assertIn("a **job** is one Slurm allocation", skill)
+        self.assertIn("hosts **exactly one run**", reference)
+        self.assertIn("There are no lanes and no tmux sessions", " ".join(reference.split()))
+
+        # access precondition prints the login commands and waits
+        self.assertIn("ssh-keygen -L -f ~/.ssh/id_leonardo-cert.pub", reference)
+        self.assertIn("cineca-login", reference)
+        self.assertIn("--no-password --insecure", reference)
+        self.assertIn("rig-4090:~/.ssh/", reference)
+        self.assertIn("the agent can never issue it", " ".join(reference.split()))
+
+        # fixed resource line, budget gate, per-GPU billing
+        self.assertIn("--gres=gpu:1", reference)
+        self.assertIn("--cpus-per-task=8", reference)
+        self.assertIn("--mem=128G", reference)
+        self.assertIn("one GPU, 8 cores, 128 GB", skill)
+        self.assertIn("saldo -b", skill)
+        self.assertIn("runs × walltime_h × 8", skill)
+        self.assertIn("--no-requeue", reference)
+
+        # never double-submit; recovery is resubmission under the same wave id
+        self.assertIn("squeue --me --noheader --name=", reference)
+        self.assertIn("sbatch --parsable", reference)
+        self.assertIn("Resubmission is the entire recovery", reference)
+        self.assertIn("Recovery never edits the sbatch header", reference)
+        for state in ("PENDING", "RUNNING", "COMPLETED", "FAILED", "OUT_OF_MEMORY",
+                      "TIMEOUT", "NODE_FAIL", "PREEMPTED"):
+            self.assertIn(f"`{state}`", reference, state)
+        self.assertIn("never `scancel` without the user's approval", reference)
+
+        # site facts are cited, never from memory
+        self.assertGreaterEqual(reference.count("https://docs.hpc.cineca.it/"), 10)
+        self.assertIn("Compute nodes have no internet", reference)
+        self.assertIn("WANDB_MODE=offline", reference)
+        self.assertIn("40 days", reference)
+
+        # the cluster is outside lane balancing but inside the fleet, registry, and tracking
+        self.assertIn("`leonardo` is outside the balancing", skill)
+        self.assertIn("| `leonardo`", conventions)
+        self.assertIn("1.0 per A100", conventions)
+        self.assertIn("no `hostname`", rigsync_config)
+        self.assertIn("no `quota_fs`", rigsync_config)
+        self.assertIn("rig=leonardo", tracking)
+        self.assertIn("scripts/**/leonardo.jobs", gitignore)
 
 if __name__ == "__main__":
     unittest.main()

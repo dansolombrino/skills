@@ -210,6 +210,13 @@ Notes:
   wave script only writes the `failed` fallback, atomically, when the process died before python
   could finalize it.
 
+### Leonardo variant
+
+On `leonardo` the same script carries an `#SBATCH` header and omits the `CUDA_VISIBLE_DEVICES`
+export (Slurm sets it). The header, the `sbatch` submit command guarded against double submission,
+the `squeue`/`sacct` monitor, and the resubmit rule are in [cineca-slurm.md](cineca-slurm.md);
+nothing else in this file changes for a job.
+
 ## README.md — one per (run, wave), written once at launch
 
 Lives beside the wave script. It records **what was launched and why** — a launch-time statement
