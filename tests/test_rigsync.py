@@ -351,6 +351,42 @@ class RigSyncTests(unittest.TestCase):
             with self.assertRaisesRegex(rigsync.RigSyncError, "cannot inspect tmux"):
                 rigsync.project_activity(config, machine)
 
+    def run_status_probe(self, config: rigsync.Config, machine: rigsync.Machine) -> list[str]:
+        """Run project_activity with tmux absent and the find/grep probe executed for real."""
+
+        def fake_remote(target, argv, *, check=True):
+            if argv[0] == "tmux":
+                return subprocess.CompletedProcess(argv, 1, b"", b"")
+            return rigsync.run(argv, check=check)
+
+        with mock.patch.object(rigsync, "remote", side_effect=fake_remote):
+            return rigsync.project_activity(config, machine)
+
+    def test_project_activity_treats_only_finished_statuses_as_idle(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repo = Path(raw) / "repo"
+            for name, state in (("001/a", "done"), ("001/b", "done"), ("002/c", "failed")):
+                write(repo / "evaluations" / name / ".status.json", f'{{"state": "{state}"}}\n')
+            machine = rigsync.Machine("peer", "peer", None, repo, True)
+            config = rigsync.Config(
+                Path(raw) / "project", {"evaluations": {"path": "evaluations"}}, {"peer": machine}
+            )
+            self.assertEqual(self.run_status_probe(config, machine), [])
+
+    def test_project_activity_reports_running_statuses(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repo = Path(raw) / "repo"
+            write(repo / "evaluations/001/a/.status.json", '{"state": "done"}\n')
+            write(repo / "evaluations/001/b/.status.json", '{"state" : "running"}\n')
+            machine = rigsync.Machine("peer", "peer", None, repo, True)
+            config = rigsync.Config(
+                Path(raw) / "project", {"evaluations": {"path": "evaluations"}}, {"peer": machine}
+            )
+            self.assertEqual(
+                self.run_status_probe(config, machine),
+                [f"status:{repo / 'evaluations/001/b/.status.json'}"],
+            )
+
     def test_verify_revision_rejects_wrong_tag(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             config, machine, _old_revision, revision = self.make_git_fixture(Path(raw))

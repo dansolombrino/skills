@@ -369,8 +369,11 @@ def project_activity(config: Config, machine: Machine) -> list[str]:
             [
                 "sh",
                 "-c",
+                # `{} \;` (not `{} +`): with `+`, find propagates grep's exit
+                # status, and grep -l exits 1 whenever no file matches, so a rig
+                # holding only done/failed statuses would look like a probe failure.
                 "find \"$1\" -name .status.json -type f -exec "
-                "grep -l '\"state\"[[:space:]]*:[[:space:]]*\"running\"' {} + 2>/dev/null",
+                "grep -l '\"state\"[[:space:]]*:[[:space:]]*\"running\"' {} \\; 2>/dev/null",
                 "sh",
                 str(status_root),
             ],
