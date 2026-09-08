@@ -90,9 +90,16 @@ class Rig:
 
 
 @dataclass(frozen=True)
+class SlurmTarget:
+    name: str
+    ssh: str
+
+
+@dataclass(frozen=True)
 class BoardConfig:
     root: Path
     rigs: dict[str, Rig]
+    slurm: dict[str, SlurmTarget] = field(default_factory=dict)
     port: int = DEFAULT_PORT
     bind: str = "0.0.0.0"
     registry_path: Path = Path(DEFAULT_REGISTRY)
@@ -151,6 +158,17 @@ def load_config(registry_path: Path) -> BoardConfig:
             raise BoardError(f"{registry_path}: machines.{name}.ssh must be set")
         hostname = entry.get("hostname")
         rigs[name] = Rig(name, ssh, hostname if isinstance(hostname, str) else None, name in shared)
+    slurm_names = board.get("slurm", [])
+    if not isinstance(slurm_names, list) or not all(isinstance(n, str) for n in slurm_names):
+        raise BoardError(f"{registry_path}: board.slurm must be a list of machine names")
+    slurm: dict[str, SlurmTarget] = {}
+    for name in slurm_names:
+        entry = machines.get(name)
+        if not isinstance(entry, dict) or not isinstance(entry.get("ssh"), str) or not entry.get("ssh"):
+            raise BoardError(f"{registry_path}: board.slurm names unknown machine {name!r} (needs machines.{name}.ssh)")
+        if name in rigs:
+            raise BoardError(f"{registry_path}: {name!r} cannot be both a rig and a Slurm target")
+        slurm[name] = SlurmTarget(name, entry["ssh"])
     port = board.get("port", DEFAULT_PORT)
     if not isinstance(port, int) or not 1 <= port <= 65535:
         raise BoardError(f"{registry_path}: board.port must be a TCP port")
@@ -160,7 +178,7 @@ def load_config(registry_path: Path) -> BoardConfig:
     token = board.get("token")
     if token is not None and (not isinstance(token, str) or len(token) < 16):
         raise BoardError(f"{registry_path}: board.token must be a string of at least 16 characters")
-    return BoardConfig(root=root, rigs=rigs, port=port, bind=bind, registry_path=registry_path, token=token)
+    return BoardConfig(root=root, rigs=rigs, slurm=slurm, port=port, bind=bind, registry_path=registry_path, token=token)
 
 
 # ───────────────────────────── storage ─────────────────────────────
@@ -434,6 +452,76 @@ def unreachable_probe(rig: Rig, previous: dict | None) -> dict:
     }
 
 
+SQUEUE_FIELDS = ["job_id", "name", "state", "reason", "partition", "nodes", "elapsed", "time_left", "start", "submitted"]
+SQUEUE_FORMAT = "%i|%j|%T|%r|%P|%N|%M|%L|%S|%V"
+SQUEUE_SCRIPT = f"squeue --me --noheader --format='{SQUEUE_FORMAT}'; echo __SQUEUE_OK__"
+
+
+def run_slurm_probe(target: SlurmTarget) -> tuple[str | None, str]:
+    """(stdout when the probe answered, else None; a short failure reason)."""
+    cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", target.ssh, SQUEUE_SCRIPT]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=SSH_TIMEOUT_S, check=False)
+    except subprocess.TimeoutExpired:
+        return None, "ssh timed out"
+    except OSError as exc:
+        return None, f"ssh failed: {exc}"
+    if "__SQUEUE_OK__" in result.stdout:
+        return result.stdout, ""
+    err = result.stderr.strip().splitlines()
+    last = err[-1] if err else f"exit {result.returncode}"
+    if "Permission denied" in last or "publickey" in last:
+        return None, "ssh authentication failed: renew the cluster certificate"
+    if "squeue" in last and ("not found" in last or "command" in last):
+        return None, "squeue unavailable on the login node"
+    return None, last[:160]
+
+
+def parse_slurm_probe(target: SlurmTarget, output: str) -> dict:
+    jobs: list[dict] = []
+    for line in output.splitlines():
+        if line.strip() == "__SQUEUE_OK__" or "|" not in line:
+            continue
+        cells = line.split("|")
+        if len(cells) != len(SQUEUE_FIELDS):
+            continue
+        job = dict(zip(SQUEUE_FIELDS, (cell.strip() for cell in cells)))
+        parsed = parse_session_name(job["name"]) or {}
+        job["project"] = parsed.get("project")
+        job["experiment"] = parsed.get("experiment")
+        job["wave_id"] = parsed.get("wave_id")
+        for key in ("reason", "nodes", "start"):
+            if job[key] in ("None", "N/A", "(null)", ""):
+                job[key] = None
+        jobs.append(job)
+    order = {"RUNNING": 0, "COMPLETING": 1, "CONFIGURING": 2, "PENDING": 3}
+    jobs.sort(key=lambda j: (order.get(j["state"], 9), j["job_id"]))
+    return {
+        "rig": target.name,
+        "kind": "slurm",
+        "at": iso(now()),
+        "reachable": True,
+        "jobs": jobs,
+        "running": sum(1 for j in jobs if j["state"] == "RUNNING"),
+        "pending": sum(1 for j in jobs if j["state"] == "PENDING"),
+    }
+
+
+def unreachable_slurm_probe(target: SlurmTarget, previous: dict | None, reason: str) -> dict:
+    previous = previous or {}
+    return {
+        "rig": target.name,
+        "kind": "slurm",
+        "at": iso(now()),
+        "reachable": False,
+        "reason": reason,
+        "jobs": previous.get("jobs", []),
+        "running": previous.get("running", 0),
+        "pending": previous.get("pending", 0),
+        "last_reachable_at": previous.get("at") if previous.get("reachable") else previous.get("last_reachable_at"),
+    }
+
+
 def reconcile_rig(config: BoardConfig, rig: Rig, probe: dict) -> list[str]:
     """Apply the honesty rules for one rig. Returns human-readable change lines."""
     changes: list[str] = []
@@ -514,17 +602,28 @@ def reconcile_rig(config: BoardConfig, rig: Rig, probe: dict) -> list[str]:
 
 
 def reconcile(config: BoardConfig, rigs: list[str] | None = None, quiet: bool = False) -> int:
-    targets = [config.rigs[name] for name in (rigs or list(config.rigs))]
+    wanted = rigs or [*config.rigs, *config.slurm]
+    unknown = [name for name in wanted if name not in config.rigs and name not in config.slurm]
+    if unknown:
+        raise BoardError(f"unknown rig {unknown[0]!r}; board.rigs = {sorted(config.rigs)}, board.slurm = {sorted(config.slurm)}")
+    targets = [config.rigs[name] for name in wanted if name in config.rigs]
+    slurm_targets = [config.slurm[name] for name in wanted if name in config.slurm]
     outputs: dict[str, str | None] = {}
+    slurm_outputs: dict[str, tuple[str | None, str]] = {}
     threads = []
 
     def worker(rig: Rig) -> None:
         outputs[rig.name] = run_probe(rig)
 
+    def slurm_worker(target: SlurmTarget) -> None:
+        slurm_outputs[target.name] = run_slurm_probe(target)
+
     for rig in targets:
-        thread = threading.Thread(target=worker, args=(rig,), daemon=True)
+        threads.append(threading.Thread(target=worker, args=(rig,), daemon=True))
+    for target in slurm_targets:
+        threads.append(threading.Thread(target=slurm_worker, args=(target,), daemon=True))
+    for thread in threads:
         thread.start()
-        threads.append(thread)
     for thread in threads:
         thread.join(SSH_TIMEOUT_S + 5)
 
@@ -538,7 +637,26 @@ def reconcile(config: BoardConfig, rigs: list[str] | None = None, quiet: bool = 
             else:
                 probe = parse_probe(rig, output)
             changes.extend(reconcile_rig(config, rig, probe))
-        append_history(config, "reconcile", rigs=[rig.name for rig in targets], changes=changes)
+        for target in slurm_targets:
+            output, reason = slurm_outputs.get(target.name, (None, "probe did not finish"))
+            previous = read_json(config.rig_path(target.name))
+            if output is None:
+                probe = unreachable_slurm_probe(target, previous, reason)
+                if not previous or previous.get("reachable") is not False or previous.get("reason") != reason:
+                    changes.append(f"{target.name}: unreachable ({reason}); kept {len(probe['jobs'])} job(s) as last known")
+            else:
+                probe = parse_slurm_probe(target, output)
+                before = {j["job_id"]: j["state"] for j in (previous or {}).get("jobs", [])}
+                after = {j["job_id"]: j["state"] for j in probe["jobs"]}
+                for job_id in sorted(after.keys() - before.keys()):
+                    changes.append(f"{target.name}: job {job_id} appeared ({after[job_id]})")
+                for job_id in sorted(before.keys() - after.keys()):
+                    changes.append(f"{target.name}: job {job_id} left the queue (was {before[job_id]})")
+                for job_id in sorted(before.keys() & after.keys()):
+                    if before[job_id] != after[job_id]:
+                        changes.append(f"{target.name}: job {job_id} {before[job_id]} → {after[job_id]}")
+            write_json(config.rig_path(target.name), probe)
+        append_history(config, "reconcile", rigs=[t.name for t in targets] + [t.name for t in slurm_targets], changes=changes)
     if not quiet:
         for line in changes:
             print(f"[reconcile] {line}")
@@ -566,8 +684,22 @@ def snapshot(config: BoardConfig) -> dict:
         }
         probe.setdefault("foreign", [])
         probe["lanes"] = [lane for lane in lanes if lane.get("rig") == name]
+        probe.setdefault("kind", "rig")
         rigs.append(probe)
-    return {"generated_at": iso(now()), "board_root": str(config.root), "rigs": rigs}
+    slurm = []
+    for name in config.slurm:
+        probe = read_json(config.rig_path(name)) or {
+            "rig": name,
+            "kind": "slurm",
+            "at": None,
+            "reachable": None,
+            "reason": None,
+            "jobs": [],
+            "running": 0,
+            "pending": 0,
+        }
+        slurm.append(probe)
+    return {"generated_at": iso(now()), "board_root": str(config.root), "rigs": rigs, "slurm": slurm}
 
 
 def humanize(seconds: float | None) -> str:
@@ -613,6 +745,20 @@ def status(config: BoardConfig, args: argparse.Namespace) -> int:
             )
         for index in rig["foreign"]:
             print(f"  gpu{index}  foreign      busy without a lane on the board")
+    for cluster in data["slurm"]:
+        if cluster["reachable"] is False:
+            reach = f"unreachable: {cluster.get('reason') or '?'}; showing last known"
+        elif cluster["reachable"] is None:
+            reach = "never probed"
+        else:
+            reach = f"probed {age(cluster['at'])} ago"
+        print(f"\n{cluster['rig']}  [slurm, {reach}]  {cluster.get('running', 0)} running, {cluster.get('pending', 0)} pending")
+        if not cluster["jobs"]:
+            print("  no jobs in the queue")
+        for job in cluster["jobs"]:
+            who = f"{job['project']} / {job['experiment']}  wave {job['wave_id']}" if job.get("wave_id") else job["name"]
+            tail = f"elapsed {job['elapsed']}  left {job['time_left']}" if job["state"] == "RUNNING" else f"reason {job.get('reason') or '?'}  start {job.get('start') or '?'}"
+            print(f"  {job['job_id']:<10} {job['state']:<12} {who}  {job['partition']}  {job.get('nodes') or '-'}  {tail}")
     return 0
 
 
@@ -659,9 +805,9 @@ main{display:grid;gap:16px;padding:24px;grid-template-columns:repeat(auto-fill,m
 .pill{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
 .lane{border-radius:8px;padding:8px 10px;margin:8px 0;border:1px solid var(--line)}
 .lane.free{background:var(--freebg);border-color:transparent}.lane.running{background:var(--busybg);border-color:transparent}
-.lane.interrupted,.lane.unreachable{background:var(--badbg);border-color:transparent}.lane.foreign{background:var(--foreignbg);border-color:transparent}
+.lane.interrupted,.lane.unreachable{background:var(--badbg);border-color:transparent}.lane.foreign,.lane.pending{background:var(--foreignbg);border-color:transparent}
 .lane .top{display:flex;justify-content:space-between;font-weight:600}
-.state.free{color:var(--free)}.state.running{color:var(--busy)}.state.interrupted,.state.unreachable{color:var(--bad)}.state.foreign{color:var(--foreign)}
+.state.free{color:var(--free)}.state.running{color:var(--busy)}.state.interrupted,.state.unreachable{color:var(--bad)}.state.foreign,.state.pending{color:var(--foreign)}
 .meta{color:var(--muted);font-size:12px;margin-top:4px;word-break:break-all}
 .bar{height:5px;background:var(--line);border-radius:3px;margin-top:6px;overflow:hidden}.bar i{display:block;height:100%;background:var(--busy)}
 code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
@@ -693,6 +839,15 @@ for(const i of rig.foreign||[]){seen.add(i);const g=rig.gpus.find(x=>x.index===i
 const freeIdx=gpuIdx.filter(i=>!seen.has(i));
 if(freeIdx.length)card.insertAdjacentHTML("beforeend",`<div class="lane free"><div class="top"><span>gpu${freeIdx.join(", gpu")}</span><span class="state free">free</span></div></div>`);
 else if(!rig.lanes.length&&!(rig.foreign||[]).length)card.insertAdjacentHTML("beforeend",`<div class="lane free"><div class="top"><span>no lanes</span><span class="state free">free</span></div></div>`);
+main.appendChild(card)}
+for(const c of d.slurm||[]){const card=document.createElement("section");card.className="card";
+const reach=c.reachable===false?"unreachable · "+(c.reason||"?")+" · last "+ago(c.last_reachable_at,nowMs):c.reachable==null?"never probed":"probed "+ago(c.at,nowMs);
+card.innerHTML=`<h2><span>${esc(c.rig)} <span class="pill">slurm</span></span><span class="pill">${esc(reach)}</span></h2><div class="meta">${c.running||0} running · ${c.pending||0} pending</div>`;
+if(!c.jobs.length)card.insertAdjacentHTML("beforeend",`<div class="lane free"><div class="top"><span>queue empty</span><span class="state free">idle</span></div></div>`);
+for(const j of c.jobs){const run=j.state==="RUNNING";const cls=run?"running":(j.state==="PENDING"?"pending":"interrupted");const who=j.wave_id?`${esc(j.project)} / ${esc(j.experiment)} · wave ${esc(j.wave_id)}`:esc(j.name);
+card.insertAdjacentHTML("beforeend",`<div class="lane ${cls}"><div class="top"><span>${esc(j.job_id)} · ${who}</span><span class="state ${cls}">${esc(j.state)}</span></div>
+<div>${run?`elapsed ${esc(j.elapsed)} · left ${esc(j.time_left)} · ${esc(j.nodes||"?")}`:`reason ${esc(j.reason||"?")} · start ${esc(j.start||"unknown")} · submitted ${esc(j.submitted||"?")}`}</div>
+<div class="meta">${esc(j.partition)} · <code>${esc(j.name)}</code></div></div>`)}
 main.appendChild(card)}}
 async function tick(){try{const q=new URLSearchParams(location.search).get("token");const r=await fetch("/api/board"+(q?"?token="+encodeURIComponent(q):""),{cache:"no-store"});if(!r.ok)throw new Error(r.status+" "+r.statusText);render(await r.json());document.getElementById("err").hidden=true}catch(e){const el=document.getElementById("err");el.hidden=false;el.textContent="board unavailable: "+e.message}}
 tick();setInterval(tick,5000);
@@ -831,7 +986,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reason", default="lane terminal")
 
     p = sub.add_parser("reconcile", help="probe the rigs and correct the board")
-    p.add_argument("--rig", action="append", dest="rigs", help="limit to this rig (repeatable)")
+    p.add_argument("--rig", action="append", dest="rigs", help="limit to this rig or Slurm target (repeatable)")
 
     sub.add_parser("token", help="print a fresh random access token to put under [board] token in the registry")
 

@@ -10,6 +10,7 @@ The board is declared once, in the rigsync user registry `~/.config/rigsync/mach
 root   = "/mnt/<big volume>/Resources/rig_board"    # outside every project tree, on the big volume
 rigs   = ["rig-4090", "rig-3090-ti", "rig-3080-ti", "behemoth"]  # tmux/GPU machines only
 shared = ["behemoth"]                                # cards used by other people show as "foreign"
+slurm  = ["leonardo"]                                # Slurm targets: queue shown read-only, never lanes
 port   = 8765                                        # viewer
 bind   = "0.0.0.0"                                   # all interfaces: LAN and the private overlay
 token  = "<output of board.py token>"                # optional; required for any exposure beyond the LAN
@@ -17,7 +18,13 @@ token  = "<output of board.py token>"                # optional; required for an
 
 - `rigs` must name existing `[machines.<rig>]` entries; each needs `ssh`. The entry whose
   `hostname` matches the current machine is probed locally, without self-SSH.
-- Never list a Slurm target. The cluster has jobs, not lanes.
+- A Slurm target goes under `slurm`, never under `rigs`. The cluster has jobs, not lanes: the
+  board shows `squeue --me` (running and pending jobs with reason, partition, node, elapsed and
+  time left) under `rigs/<name>.json` with `kind = "slurm"`, and nothing on it can be claimed.
+  A job leaves the card when it leaves the queue. Job names that follow the lane session
+  convention are split into project, experiment and wave. When the login node refuses the
+  connection the card says why (typically an expired cluster certificate) and keeps the last
+  known queue.
 - `root` may be created empty; the script makes `lanes/`, `rigs/` and `history.jsonl`.
 
 ## Board layout

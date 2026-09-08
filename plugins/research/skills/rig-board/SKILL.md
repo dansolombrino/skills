@@ -1,6 +1,6 @@
 ---
 name: rig-board
-description: Read and maintain the fleet-wide GPU lane board shared by every Research 2.0 project on the hub, so any chat knows which rig GPUs are held, by which project and wave, since when, and with what ETA. Use when the user asks whether the GPUs or a rig are free or busy, says to wait for GPUs or for another project's runs to finish, asks what is running across projects, or when sweep-dispatch claims, refreshes, or releases a lane; also to run or install the read-only web viewer. Do not use for Slurm clusters, for per-run status, or to decide cross-project priority.
+description: Read and maintain the fleet-wide GPU lane board shared by every Research 2.0 project on the hub, so any chat knows which rig GPUs are held, by which project and wave, since when, and with what ETA, plus the read-only Slurm queue of a cluster such as Leonardo. Use when the user asks whether the GPUs or a rig are free or busy, says to wait for GPUs or for another project's runs to finish, asks what is running or queued across projects or on the cluster, or when sweep-dispatch claims, refreshes, or releases a lane; also to run or install the read-only web viewer. Do not use for per-run status, to submit or cancel jobs, or to decide cross-project priority.
 ---
 
 # rig-board
@@ -12,8 +12,9 @@ final artifact and schema-v2 `.status.json` (`experiments-tracking`). The board 
 stop guessing. Canon for rigs, lanes and waves: `../research-project-init/references/conventions.md`.
 
 Run this skill's bundled `scripts/board.py`. Configuration and the viewer service:
-[references/configuration.md](references/configuration.md). `leonardo` is out of scope: Slurm
-is its own coordination center and the cluster does not run out of cards.
+[references/configuration.md](references/configuration.md). A Slurm cluster such as `leonardo`
+is shown read-only (its `squeue --me` queue: running and pending jobs, reasons, time left) and
+is never a lane: Slurm is its own coordination center and the cluster does not run out of cards.
 
 ## Model
 
@@ -54,8 +55,10 @@ Set `RIGSYNC_REGISTRY` or pass `--registry` to use another registry.
 
 1. Run `status --reconcile` (or `free <rig> <gpu> --reconcile` for one lane). Report what the
    board says with its probe age: holder project, experiment, wave, active run, progress, ETA
-   and basis, plus foreign cards and unreachable rigs. Open the report with a message-written
-   timestamp as `experiments-tracking` requires.
+   and basis, plus foreign cards and unreachable rigs, and for each Slurm target its running
+   and pending jobs. Open the report with a message-written timestamp as `experiments-tracking`
+   requires. If a cluster is unreachable because SSH authentication failed, say that the
+   certificate needs renewing (`sweep-dispatch` → `references/cineca-slurm.md`).
 2. To wait, use the host's recurring wait/monitor primitive and re-run the check each tick;
    never busy-loop with shell `sleep`. Report when the lane frees up, then continue the
    original request. If the ETA is unavailable, say so and why (adopted lane, silent

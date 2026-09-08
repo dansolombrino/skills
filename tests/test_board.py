@@ -22,6 +22,16 @@ SPEC.loader.exec_module(board)
 
 
 SESSION = "grokking_000_grokking_20260908-101500_rig-4090_gpu0"
+SQUEUE_EMPTY = "__SQUEUE_OK__\n"
+SQUEUE_TWO = (
+    "100|qat_003_sweep_20260908-101500_leonardo_gpu1|RUNNING|None|boost_usr_prod|lrdn0421|0:40:00|1:20:00|2026-09-08T10:20:00|2026-09-08T10:15:00\n"
+    "101|adhoc-eval|PENDING|Priority|boost_usr_prod||0:00|2:00:00|N/A|2026-09-08T10:30:00\n"
+    "__SQUEUE_OK__\n"
+)
+SQUEUE_ONE_LEFT = (
+    "101|adhoc-eval|RUNNING|None|boost_usr_prod|lrdn0100|0:05:00|1:55:00|2026-09-08T11:00:00|2026-09-08T10:30:00\n"
+    "__SQUEUE_OK__\n"
+)
 
 
 def probe_output(sessions: list[str], gpus: list[tuple[int, int, int]], boot: str) -> str:
@@ -45,6 +55,7 @@ class BoardTests(unittest.TestCase):
                 root = "{self.board_root}"
                 rigs = ["rig-4090", "behemoth"]
                 shared = ["behemoth"]
+                slurm = ["leonardo"]
 
                 [machines.rig-4090]
                 ssh = "rig-4090"
@@ -205,14 +216,88 @@ class BoardTests(unittest.TestCase):
 
     # ── reconcile ──
 
-    def reconcile_with(self, outputs: dict[str, str | None]) -> tuple[int, str]:
+    def reconcile_with(
+        self, outputs: dict[str, str | None], slurm: dict[str, tuple[str | None, str]] | None = None
+    ) -> tuple[int, str]:
         def fake(rig: board.Rig) -> str | None:
             return outputs.get(rig.name)
 
+        def fake_slurm(target: board.SlurmTarget) -> tuple[str | None, str]:
+            return (slurm or {}).get(target.name, (SQUEUE_EMPTY, ""))
+
         out = io.StringIO()
-        with mock.patch.object(board, "run_probe", side_effect=fake), redirect_stdout(out):
+        with mock.patch.object(board, "run_probe", side_effect=fake), mock.patch.object(
+            board, "run_slurm_probe", side_effect=fake_slurm
+        ), redirect_stdout(out):
             code = board.main(["--registry", str(self.registry), "reconcile"])
         return code, out.getvalue()
+
+    # ── slurm ──
+
+    def test_registry_rejects_a_machine_that_is_both_rig_and_slurm(self) -> None:
+        self.registry.write_text(self.registry.read_text().replace('slurm = ["leonardo"]', 'slurm = ["behemoth"]'))
+        with self.assertRaisesRegex(board.BoardError, "both a rig and a Slurm target"):
+            board.load_config(self.registry)
+
+    def test_slurm_probe_lists_jobs_and_diffs_the_queue(self) -> None:
+        probe = probe_output([], [(0, 0, 0)], "2026-09-01 08:00:00")
+        rigs = {"rig-4090": probe, "behemoth": probe}
+        code, out = self.reconcile_with(rigs, {"leonardo": (SQUEUE_TWO, "")})
+        self.assertEqual(code, 0)
+        self.assertIn("leonardo: job 100 appeared (RUNNING)", out)
+        self.assertIn("leonardo: job 101 appeared (PENDING)", out)
+        cluster = board.read_json(self.config.rig_path("leonardo"))
+        assert cluster is not None
+        self.assertEqual(cluster["kind"], "slurm")
+        self.assertEqual((cluster["running"], cluster["pending"]), (1, 1))
+        running, pending = cluster["jobs"]
+        self.assertEqual(running["job_id"], "100")
+        self.assertEqual(running["project"], "qat")
+        self.assertEqual(running["experiment"], "003_sweep")
+        self.assertEqual(running["wave_id"], "20260908-101500")
+        self.assertEqual(running["time_left"], "1:20:00")
+        self.assertEqual(pending["reason"], "Priority")
+        self.assertIsNone(pending["nodes"])
+        self.assertIsNone(pending["project"])
+        _, out = self.reconcile_with(rigs, {"leonardo": (SQUEUE_ONE_LEFT, "")})
+        self.assertIn("leonardo: job 100 left the queue (was RUNNING)", out)
+        self.assertIn("leonardo: job 101 PENDING → RUNNING", out)
+        code, out, _ = self.run_cli("status")
+        self.assertIn("leonardo  [slurm, probed", out)
+        self.assertIn("101        RUNNING", out)
+        code, out, _ = self.run_cli("status", "--json")
+        data = json.loads(out)
+        self.assertEqual(data["slurm"][0]["rig"], "leonardo")
+        self.assertEqual([r["rig"] for r in data["rigs"]], ["rig-4090", "behemoth"])
+
+    def test_slurm_unreachable_keeps_last_known_jobs_and_names_the_reason(self) -> None:
+        probe = probe_output([], [(0, 0, 0)], "2026-09-01 08:00:00")
+        rigs = {"rig-4090": probe, "behemoth": probe}
+        self.reconcile_with(rigs, {"leonardo": (SQUEUE_TWO, "")})
+        _, out = self.reconcile_with(rigs, {"leonardo": (None, "ssh authentication failed: renew the cluster certificate")})
+        self.assertIn("leonardo: unreachable (ssh authentication failed: renew the cluster certificate); kept 2 job(s)", out)
+        _, out = self.reconcile_with(rigs, {"leonardo": (None, "ssh authentication failed: renew the cluster certificate")})
+        self.assertNotIn("leonardo: unreachable", out)
+        cluster = board.read_json(self.config.rig_path("leonardo"))
+        assert cluster is not None
+        self.assertFalse(cluster["reachable"])
+        self.assertEqual(len(cluster["jobs"]), 2)
+        self.assertIsNotNone(cluster["last_reachable_at"])
+        code, out, _ = self.run_cli("status")
+        self.assertIn("unreachable: ssh authentication failed", out)
+
+    def test_slurm_probe_failure_reasons(self) -> None:
+        class Result:
+            def __init__(self, stdout: str, stderr: str, rc: int) -> None:
+                self.stdout, self.stderr, self.returncode = stdout, stderr, rc
+
+        target = self.config.slurm["leonardo"]
+        with mock.patch.object(board.subprocess, "run", return_value=Result("", "user@login: Permission denied (publickey).", 255)):
+            self.assertEqual(board.run_slurm_probe(target), (None, "ssh authentication failed: renew the cluster certificate"))
+        with mock.patch.object(board.subprocess, "run", return_value=Result(SQUEUE_TWO, "", 0)):
+            self.assertEqual(board.run_slurm_probe(target)[1], "")
+        with mock.patch.object(board.subprocess, "run", side_effect=board.subprocess.TimeoutExpired("ssh", 1)):
+            self.assertEqual(board.run_slurm_probe(target), (None, "ssh timed out"))
 
     def test_reconcile_keeps_live_lane_and_records_orchestrator_silence(self) -> None:
         self.claim()

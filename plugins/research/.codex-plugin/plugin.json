@@ -1,6 +1,6 @@
 {
   "name": "research",
-  "version": "5.6.1",
+  "version": "5.7.0",
   "description": "Materialize reproducible experiments across verified GPU rigs: scaffold projects, provision exact environments, deploy tested revisions, dispatch GPU waves, keep a fleet-wide GPU lane board, visualize results, and gate action behind confirmed intent and explicit greenlights.",
   "author": {
     "name": "Dan Solombrino",
