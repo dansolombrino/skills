@@ -33,7 +33,7 @@ Experiments are named `NNN_experiment_name` and mirrored across the folders abov
 `tests/<root>/<path>/<stem>/test_*.py`, and are optional per script.
 Each run is identified by its **run_id**. The experiment's `.py` is authoritative for both its
 ordered identity params (`RUN_ID_PARAMS`) and its literal output-path layout pin
-(`RUN_ID_PATH_LAYOUT = "nested"|"collapsed-v1"`).
+(`RUN_ID_PATH_LAYOUT = "nested"|"collapsed-v1"|"hashed-v1"`).
 
 ## Tracking
 
@@ -115,7 +115,8 @@ Project notes live in `AGENTS.md`. Read @AGENTS.md before doing anything.
 
 <!-- state only; the story lives in JOURNAL.md. One section per NNN_experiment; each section
      header mirrors the experiment .py's ordered RUN_ID_PARAMS and exact literal pin,
-     `RUN_ID_PATH_LAYOUT: nested` or `RUN_ID_PATH_LAYOUT: collapsed-v1`.
+     `RUN_ID_PATH_LAYOUT: nested`, `RUN_ID_PATH_LAYOUT: collapsed-v1`, or `RUN_ID_PATH_LAYOUT: hashed-v1`
+     (the last also names `run_id map: evaluations/<experiment_path>/RUN_ID_MAP.json`).
      Run tables, one row per (run, wave):
      | <run_id params...> | wave | rig | gpu | status | started | progress | eta | ended | elapsed | notes |
      (schema: experiments-tracking skill) -->
@@ -159,8 +160,9 @@ engineering_mode: <manual|auto — required>
     `collapsed-v1` alternative; show none otherwise. When an applicable fixed-param list has zero
     or one item, show its byte-identical `nested`/`collapsed-v1` path once, not as a separate
     alternative; label it as both layouts' rendering and state the experiment's pinned literal.
-    That path is approvable under the pin. Wait for explicit user layout selection;
-    neither automatic mode may select it. Record one experiment-wide RUN_ID_PATH_LAYOUT and use it
+    That path is approvable under the pin. Show a `hashed-v1` alternative only when both other
+    renderings overflow a filesystem limit or the user asks. Wait for explicit user layout selection;
+    neither automatic mode may select `collapsed-v1` or `hashed-v1`. Record one experiment-wide RUN_ID_PATH_LAYOUT and use it
     for both artifact surfaces. Offer this choice only before any checkpoint, evaluation, or wave
     README/script exists. After that boundary, preserve the checked-in
     renderer and literal pin forever; never propose or perform an in-place layout change, including
@@ -546,11 +548,16 @@ Scripts that use wandb must call wandb.init(config=wandb_config(cfg)) — the wh
 resolved config, never a subset.
 """
 
+import hashlib
 import json
 import os
 import shlex
 from pathlib import Path
 from urllib.parse import quote
+
+RUN_ID_HASH_PREFIX = "rid-"
+RUN_ID_HASH_HEX = 16
+RUN_ID_MAP_NAME = "RUN_ID_MAP.json"
 
 
 def _run_id_component(value) -> str:
@@ -575,25 +582,70 @@ def run_id_path(cfg, params, *, layout="nested") -> Path:
 
     ``nested`` renders ``model=mlp/lr=0.001/seed=0``. ``collapsed-v1`` renders
     the exact same ordered, percent-encoded pairs in one component:
-    ``model=mlp,lr=0.001,seed=0``. The latter is opt-in and must be recorded as
-    the experiment's RUN_ID_PATH_LAYOUT only after explicit user approval.
+    ``model=mlp,lr=0.001,seed=0``. ``hashed-v1`` renders one short component
+    ``rid-<16 hex>`` (sha256 of the collapsed-v1 string) for filesystems whose
+    limits the other two overflow; guard_run_config() then records the two-way
+    hash<->params map (.run_id.json per run, RUN_ID_MAP.json per experiment).
+    Both non-nested layouts are opt-in and must be recorded as the experiment's
+    RUN_ID_PATH_LAYOUT only after explicit user approval.
 
     With zero or one pair the two layouts are byte-identical (``.`` or the one
     ``key=value`` component). Presentation code shows that path once, labels it
     as both layouts' rendering plus the pinned literal.
 
     Use one layout consistently under checkpoints/ and evaluations/. plots/ does
-    not use run_id paths at all. Do not truncate, hash, or otherwise rewrite
-    pairs to evade a collision or filesystem limit.
+    not use run_id paths at all. Do not truncate, hash outside hashed-v1, or
+    otherwise rewrite pairs to evade a collision or filesystem limit.
     """
     pairs = _run_id_pairs(cfg, params)
     if layout == "nested":
         return Path(*pairs)
     if layout == "collapsed-v1":
         return Path(",".join(pairs))
+    if layout == "hashed-v1":
+        return Path(run_id_hash(cfg, params))
     raise ValueError(
-        f"invalid run_id path layout {layout!r}; expected 'nested' or 'collapsed-v1'"
+        f"invalid run_id path layout {layout!r}; "
+        "expected 'nested', 'collapsed-v1', or 'hashed-v1'"
     )
+
+
+def run_id_hash(cfg, params) -> str:
+    """The hashed-v1 component: ``rid-`` + first 16 hex of sha256(run_id_flat)."""
+    digest = hashlib.sha256(run_id_flat(cfg, params).encode("utf-8")).hexdigest()
+    return RUN_ID_HASH_PREFIX + digest[:RUN_ID_HASH_HEX]
+
+
+def run_id_record(cfg, params) -> dict:
+    """The .run_id.json payload: the full two-way mapping for one run."""
+    return {
+        "layout": "hashed-v1",
+        "hash": run_id_hash(cfg, params),
+        "run_id_flat": run_id_flat(cfg, params),
+        "run_id": run_id_dict(cfg, params),
+    }
+
+
+def write_run_id_map(experiment_root: Path) -> Path:
+    """Regenerate <experiment_root>/RUN_ID_MAP.json from every run's .run_id.json.
+
+    Derived index only, safe to regenerate on any rig: ``by_hash`` maps
+    hash -> {run_id_flat, run_id}; ``by_run_id_flat`` maps flat -> hash.
+    """
+    by_hash, by_flat = {}, {}
+    for record_file in sorted(experiment_root.glob("*/.run_id.json")):
+        record = json.loads(record_file.read_text())
+        by_hash[record["hash"]] = {
+            "run_id_flat": record["run_id_flat"],
+            "run_id": record["run_id"],
+        }
+        by_flat[record["run_id_flat"]] = record["hash"]
+    payload = {"layout": "hashed-v1", "by_hash": by_hash, "by_run_id_flat": by_flat}
+    map_file = experiment_root / RUN_ID_MAP_NAME
+    tmp = map_file.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    os.replace(tmp, map_file)
+    return map_file
 
 
 def run_id_flat(cfg, params) -> str:
@@ -617,10 +669,17 @@ def resolved_config(cfg) -> dict:
     built from this, so the two can never disagree. Do not resolve a config
     anywhere else; do not record a hand-picked subset anywhere.
     """
-    from omegaconf import OmegaConf
+    try:
+        from omegaconf import OmegaConf
+    except ImportError:  # plain-dict configs (tests, tooling) need no hydra
+        OmegaConf = None
 
     # json round-trip so every consumer sees exactly what a stored snapshot stores
-    raw = OmegaConf.to_container(cfg, resolve=True) if OmegaConf.is_config(cfg) else cfg
+    raw = (
+        OmegaConf.to_container(cfg, resolve=True)
+        if OmegaConf is not None and OmegaConf.is_config(cfg)
+        else cfg
+    )
     return json.loads(json.dumps(raw, sort_keys=True, default=str))
 
 
@@ -650,15 +709,34 @@ def wandb_config(cfg) -> dict:
     return resolved
 
 
-def guard_run_config(cfg, params, run_dir: Path) -> None:
+def guard_run_config(cfg, params, run_dir: Path, *, layout="nested") -> None:
     """Refuse to reuse a run dir whose config differs from the current one.
 
     Writes the full resolved config to <run_dir>/.run_config.json on first run.
     On later runs with the same run_id, hard-fails if ANY param differs — that is
     a run_id collision: a param changed that is not in RUN_ID_PARAMS. Same-config
     reruns (resume/retry) pass. Call BEFORE writing any artifact.
+
+    Under ``hashed-v1`` it also writes <run_dir>/.run_id.json (hash <-> params),
+    hard-fails if an existing record maps the hash to a different run_id_flat,
+    and regenerates the experiment-wide RUN_ID_MAP.json next to the run dirs.
     """
     resolved = resolved_config(cfg)
+    if layout == "hashed-v1":
+        record = run_id_record(cfg, params)
+        record_file = run_dir / ".run_id.json"
+        if record_file.exists():
+            existing = json.loads(record_file.read_text())
+            if existing["run_id_flat"] != record["run_id_flat"]:
+                raise RuntimeError(
+                    f"hashed-v1 hash collision at {run_dir}: {record['hash']} already maps to "
+                    f"{existing['run_id_flat']!r}, not {record['run_id_flat']!r}. Stop and "
+                    "re-elect the layout or params in a new numbered sub-experiment."
+                )
+        else:
+            run_dir.mkdir(parents=True, exist_ok=True)
+            record_file.write_text(json.dumps(record, indent=2, sort_keys=True))
+        write_run_id_map(run_dir.parent)
     snapshot_file = run_dir / ".run_config.json"
     if snapshot_file.exists():
         snapshot = json.loads(snapshot_file.read_text())

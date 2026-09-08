@@ -19,7 +19,7 @@ set -uo pipefail
 cd "$(dirname "$0")/../../../.." || exit 1  # → project root; adjust for sub-experiments
 
 RUN_ID_FLAT="<flat run_id>"
-RUN_ID_PATH_LAYOUT="<nested | collapsed-v1, copied from the experiment record>"
+RUN_ID_PATH_LAYOUT="<nested | collapsed-v1 | hashed-v1, copied from the experiment record>"
 CHECKPOINT_DIR="<exact checkpoint directory resolved by canonical run_id_path>"
 EVAL_DIR="<exact evaluation directory resolved by canonical run_id_path>"
 STATUS_PATH="$EVAL_DIR/.status.json"
@@ -157,7 +157,7 @@ Notes:
 - The overrides list is the FULL run_id (and any non-default fixed params) — explicit, so the
   script is meaningful standalone. Produce each array token with
   `code/common/run_id.py::hydra_override_arg`; never interpolate raw config values into shell.
-- Read the experiment's literal `RUN_ID_PATH_LAYOUT` (`nested` or `collapsed-v1`). Produce the
+- Read the experiment's literal `RUN_ID_PATH_LAYOUT` (`nested`, `collapsed-v1`, or `hashed-v1`). Produce the
   checkpoint and evaluation suffix once with canonical
   `run_id_path(cfg, params, layout=RUN_ID_PATH_LAYOUT)`, and materialize the resulting exact
   `CHECKPOINT_DIR`, `EVAL_DIR`, `STATUS_PATH`, and `ARTIFACT` in the generated script. The
@@ -252,7 +252,7 @@ Full wave: 4 runs — 3 on rig-4090 (gpu 0), 1 on behemoth (gpu 0).
 ```
 
 The four run-path fields above are concrete launch records, not templates. Generate all of them
-from the same selected `RUN_ID_PATH_LAYOUT`; for `collapsed-v1` their concrete values will differ.
+from the same selected `RUN_ID_PATH_LAYOUT`; for `collapsed-v1` and `hashed-v1` their concrete values will differ.
 Monitoring and recovery consume these recorded paths verbatim and never infer a layout from slash
 depth. `RUN_ID_PARAMS` may change only while no checkpoint or evaluation and no wave
 README or script exists. After the first such surface, any identity-schema change under `nested` or

@@ -23,18 +23,19 @@ config param added/changed since this experiment's last runs, must be in `RUN_ID
 **halt** and route through `experiment-design` before generating anything — otherwise new runs
 collide with old artifacts: overwritten, or silently skipped as "done". `RUN_ID_PARAMS` may change
 only while no checkpoint, evaluation, or plot output and no wave README or script exists. After the
-first such surface, any identity-schema change under `nested` or `collapsed-v1` requires a new
-numbered sub-experiment; never backfill, rename, move, or rewrite the established tree. The artifact
+first such surface, any identity-schema change under `nested`, `collapsed-v1`, or `hashed-v1`
+requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the established tree. The artifact
 guard is only sound under this gate: `guard_run_config` catches collisions after Python starts, but
 an artifact-skipped run never enters Python.
 1b. **helper safety check** — verify `code/common/run_id.py` provides the canonical percent-encoded
-`run_id_path(cfg, params, *, layout='nested')`/`run_id_flat` renderers, `hydra_override_arg`, and
+`run_id_path(cfg, params, *, layout='nested')`/`run_id_flat` renderers (with `hashed-v1` support
+and the `.run_id.json`/`RUN_ID_MAP.json` writer when the experiment pins that layout), `hydra_override_arg`, and
 the single config resolver
 `resolved_config`/`wandb_config` (a wandb run whose config is anything less than the whole
 resolved config is unfixable after the fact). Any older helper makes the project
 unsupported; halt without upgrading it in place.
 1c. **run-path layout check** — read the experiment's literal `RUN_ID_PATH_LAYOUT`; it must be
-`nested` or `collapsed-v1`. Treat that record as pinned for the project, pass it to the canonical
+`nested`, `collapsed-v1`, or `hashed-v1`. Treat that record as pinned for the project, pass it to the canonical
 `run_id_path` helper, and resolve the checkpoint and evaluation run directories before generating
 the wave. They must use the same selected layout. Plot paths use the same helper and recorded layout
 after their plot-specific prefix. Never infer the layout from directory depth, reconstruct it from a

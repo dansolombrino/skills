@@ -180,13 +180,21 @@ The per-experiment **ordered** set of config params that uniquely identifies a r
 - Two renderings via `code/common/run_id.py`:
   - **path form** → used under `checkpoints/` and `evaluations/`, and by plotting code to
     **read** them; `plots/` output paths never use it. Every experiment records one authoritative
-    `RUN_ID_PATH_LAYOUT = "nested"|"collapsed-v1"` beside `RUN_ID_PARAMS` and passes it as the
+    `RUN_ID_PATH_LAYOUT = "nested"|"collapsed-v1"|"hashed-v1"` beside `RUN_ID_PARAMS` and passes it as the
     keyword-only `layout` argument to `run_id_path`. The default and canonical proposal is
     `nested`, e.g. `model=mlp/lr=1e-3/seed=0/`. `collapsed-v1` is the opt-in rendering
     `model=mlp,lr=1e-3,seed=0/`: it collapses all eligible ordered `RUN_ID_PARAMS` into one path
     component using the exact same percent-encoded `key=value` pairs and comma separators as
     `run_id_flat`. Keys and values are percent-encoded by the shared helper so `/`, spaces,
     commas, shell metacharacters, and structured values cannot alter the hierarchy.
+    `hashed-v1` is the overflow rendering, opt-in with explicit user consent only: one component
+    `rid-<16 hex>`, the first 16 hex digits of sha256 over the exact `collapsed-v1` string. It is
+    never lossy: `guard_run_config` writes `.run_id.json` (`{layout, hash, run_id_flat, run_id}`)
+    into every run directory and regenerates the experiment-wide two-way map
+    `evaluations/<experiment_path>/RUN_ID_MAP.json` (`hash -> {run_id_flat, run_id}` plus the
+    reverse `run_id_flat -> hash`) from those entries, so the user can always glance from a hash
+    to its params and back. The map is a derived index that any rig may regenerate; the run's
+    `.run_id.json` and `.run_config.json` remain the identity record.
   - **flat form** — e.g. `model=mlp,lr=1e-3,seed=0` → uses the same percent-encoded components
     and is used for `scripts/` and `logs/`
     run-folder names, wandb run names, and log lines. Flat name ≡ wandb run, 1:1; it maps to
@@ -202,6 +210,12 @@ than two are eligible. The alternative collapses all applicable ordered params, 
 group. Wait for explicit user layout selection; neither automatic mode may
 select `collapsed-v1`. Without explicit user approval, record `RUN_ID_PATH_LAYOUT = "nested"`.
 
+Preflight every shown path against the target filesystems' component and full-path limits. When
+`nested` and `collapsed-v1` both overflow, or when the user asks, show one additional
+`hashed-v1` alternative rendered by the same helper, say which limit it resolves, and wait.
+Neither automatic mode may select `hashed-v1`. Never silently hash: hashing without explicit
+user consent never happens, and no ad-hoc hash, truncation, or rewrite outside `hashed-v1` exists.
+
 For any proposed path whose applicable fixed-param list has zero or one item, `nested` and
 `collapsed-v1` render byte-identically. Show that path once, not as a separate alternative, and
 label it explicitly as both layouts' byte-identical rendering. Also state the experiment's pinned
@@ -215,9 +229,10 @@ call `run_id_path(..., layout=RUN_ID_PATH_LAYOUT)` with the applicable full or p
 param list. `scripts/` and `logs/` folders, WandB run names, log-line identity, and
 EXPERIMENTS.md row identity continue to use `run_id_flat`; choosing a path layout does not rename
 or redefine them. Do not introduce a second layout constant, hand-build a path, shorten a pair,
-drop a param, hash/truncate a component, or silently fall back when a rendered component or full
-path exceeds a filesystem limit. Preflight the exact proposed paths; any collision, ambiguity, or
-overflow stops for a revised explicit decision.
+drop a param, truncate a component, hash outside the approved `hashed-v1` layout, or silently
+fall back when a rendered component or full path exceeds a filesystem limit. Preflight the exact
+proposed paths; any collision, ambiguity, or overflow stops for a revised explicit decision, which
+may be user approval of `hashed-v1`.
 
 Layout election is available only while the experiment has no checkpoint, evaluation, or plot
 output and no wave record. Inspect those surfaces before presenting the
@@ -294,8 +309,8 @@ worse, being skipped by an artifact-guarded wave script as "already done".
 - **Before any checkpoint, evaluation, or plot output or wave README/script exists** — update and
   re-elect `RUN_ID_PARAMS` normally under the active engineering mode. Update the constant and
   EXPERIMENTS.md section header before the first launch.
-- **After any one of those surfaces exists** — `RUN_ID_PARAMS` is immutable under both `nested` and
-  `collapsed-v1`. Never change the identity schema in place. Create a new numbered sub-experiment
+- **After any one of those surfaces exists** — `RUN_ID_PARAMS` is immutable under every layout
+  (`nested`, `collapsed-v1`, `hashed-v1`). Never change the identity schema in place. Create a new numbered sub-experiment
   with the re-elected params and its own pinned layout; leave the established experiment and all of
   its records untouched.
 - **Runtime guard (canon)** — every run writes its **full resolved config snapshot** to

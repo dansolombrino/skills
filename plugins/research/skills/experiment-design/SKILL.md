@@ -44,22 +44,33 @@ Integrity gates and protected choices never become delegable.
    user must explicitly approve `collapsed-v1`; otherwise `nested` is the default regardless of
    engineering mode. Preflight exact component and full-path limits and collisions; never silently
    hash, truncate, drop params, fall back, or accept an ambiguous mapping.
+   Hashing is allowed only as the third layout `hashed-v1`, and only with explicit user consent:
+   when preflight shows that `nested` and `collapsed-v1` both overflow a component or full-path
+   limit, or when the user asks for it, show one `hashed-v1` alternative (one component
+   `rid-<16 hex>` = sha256 of the exact `collapsed-v1` string), state which limit it resolves,
+   and wait. Neither engineering mode may select `hashed-v1` on its own; no other hash, truncation,
+   or rewrite scheme exists. `hashed-v1` is never lossy: the helper writes the full mapping
+   `{hash, run_id_flat, run_id dict}` to `.run_id.json` inside every run directory and regenerates
+   the experiment-wide two-way map `evaluations/<experiment_path>/RUN_ID_MAP.json` from those
+   entries, so a hash can always be read back into its params at a glance and vice versa. That
+   map is a derived index, never the identity source; the EXPERIMENTS.md section header names its
+   path and every row keeps one column per param plus the `hash` column.
    For any checkpoint or evaluation path with zero or one applicable fixed
    param, `nested` and `collapsed-v1` are byte-identical: show the path once, not as a separate
    alternative; label it as both layouts' rendering and state the experiment's selected or existing
    pinned literal. That one path is approvable under the pin. This does not relax
    the exactly-one alternative rule for any path with two or more applicable fixed params.
 4. Record `RUN_ID_PARAMS = [...]` and the one authoritative experiment-wide
-   `RUN_ID_PATH_LAYOUT = "nested"|"collapsed-v1"` beside it in the experiment's `.py`; mirror
+   `RUN_ID_PATH_LAYOUT = "nested"|"collapsed-v1"|"hashed-v1"` beside it in the experiment's `.py`; mirror
    both in the experiment's EXPERIMENTS.md section header. Make ALL artifact paths go through
    `code/common/run_id.py`: checkpoints and evaluations call
    `run_id_path(..., layout=RUN_ID_PATH_LAYOUT)` with their applicable ordered params, while
    scripts/logs/WandB and EXPERIMENTS.md row identity keep using `run_id_flat` unchanged. Never
    mix layouts across the authoritative artifact surfaces.
-5. Wire `guard_run_config(cfg, RUN_ID_PARAMS, <eval run dir>)` into every training/eval script,
+5. Wire `guard_run_config(cfg, RUN_ID_PARAMS, <eval run dir>, layout=RUN_ID_PATH_LAYOUT)` into every training/eval script,
    **before the StatusWriter starts and before any artifact is written** — it snapshots the full
    config to `.run_config.json` and hard-fails on run_id collisions (same run_id, different
-   config).
+   config); under `hashed-v1` it also writes `.run_id.json` and regenerates `RUN_ID_MAP.json`.
 
 ## 2b. run_id evolution — config changes to an EXISTING experiment
 
@@ -72,15 +83,16 @@ Any change that adds/removes/renames a behavior-affecting config param (integrat
    If none exists, update `RUN_ID_PARAMS` and the EXPERIMENTS.md section header normally before the
    first launch.
 3. Once any checkpoint, evaluation, or plot output or wave README/script exists,
-   `RUN_ID_PARAMS` is immutable under both `nested` and `collapsed-v1`. Never change the identity
+   `RUN_ID_PARAMS` is immutable under every layout (`nested`, `collapsed-v1`, `hashed-v1`). Never change the identity
    schema in place. Create a new numbered sub-experiment with the re-elected params and its own
    pinned layout; leave the old experiment and all of its records untouched.
 
 ## 2c. layout immutability for an EXISTING experiment
 
 Inspect checkpoints, evaluations, plots, and wave records before offering a layout
-choice. If none exists, present `nested` then the eligible `collapsed-v1` alternative under section
-2 and record the chosen literal. Once any output or wave record exists, preserve the checked-in
+choice. If none exists, present `nested` then the eligible `collapsed-v1` alternative, and the
+`hashed-v1` alternative only on overflow or user request, under section 2 and record the chosen
+literal. Once any output or wave record exists, preserve the checked-in
 renderer and `RUN_ID_PATH_LAYOUT` forever. Never propose or perform an in-place layout change, even
 when zero/one-param renderings are byte-identical. To use another layout, create a new numbered
 sub-experiment and leave the old experiment untouched.

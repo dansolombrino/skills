@@ -17,11 +17,13 @@ in every engineering mode and does not require a narrative or scientific decisio
 - Ground truth is NOT the md — it is the three on-disk signals (hierarchy in `conventions.md`): the per-run status first proves the current wave's Git revision/tag and environment fingerprint; after that, the **expected final artifact** is golden for completion, followed by `.status.json` state/timing/progress and the latest run log. A missing `.status.json`/dir means the run never started (or its outputs were deleted ⇒ it is no longer done).
 - **One (run, wave) = one table row = one line.** A run re-launched in a later wave gets a **new row**, never an in-place update — the table itself carries the execution history. One line per row keeps parallel-session git merges clean.
 - A row's run identity is semantic: the ordered `RUN_ID_PARAMS` values, independent of whether
-  `RUN_ID_PATH_LAYOUT` is `nested` or `collapsed-v1`. Read the experiment's recorded selection
+  `RUN_ID_PATH_LAYOUT` is `nested`, `collapsed-v1`, or `hashed-v1`. Read the experiment's recorded selection
   and consume the exact checkpoint, evaluation, status, and final-artifact paths materialized in
   the generated wave record. Never derive identity from path segment count, reconstruct an
-  artifact path from the flat id, or treat the two layouts as different runs. Scripts, logs, and
-  wandb remain keyed by the unchanged flat rendering.
+  artifact path from the flat id, or treat the layouts as different runs. Scripts, logs, and
+  wandb remain keyed by the unchanged flat rendering. Under `hashed-v1`, resolve a hash through
+  the run's `.run_id.json` or the experiment's `evaluations/<experiment_path>/RUN_ID_MAP.json`;
+  never recompute or guess it.
 - **Every status report to the user opens with its message-written time** — obtain a local
   timezone-bearing timestamp immediately before sending (for example
   `date '+%Y-%m-%dT%H:%M:%S%:z'`) and lead exactly with
@@ -31,9 +33,11 @@ in every engineering mode and does not require a narrative or scientific decisio
 ## Format
 
 One section per `NNN_experiment`; its preamble restates both authoritative source decisions: the
-ordered `RUN_ID_PARAMS` and the literal `RUN_ID_PATH_LAYOUT` (`nested` or `collapsed-v1`). The
-table has **one column per run_id param** (dict form — never a single flat-string column), then
-placement, status, and timing. The layout line is durable experiment metadata, not a run-row
+ordered `RUN_ID_PARAMS` and the literal `RUN_ID_PATH_LAYOUT` (`nested`, `collapsed-v1`, or
+`hashed-v1`). The table has **one column per run_id param** (dict form — never a single
+flat-string column), then placement, status, and timing. Under `hashed-v1` the preamble adds
+`run_id map: evaluations/<experiment_path>/RUN_ID_MAP.json` and the table adds a `hash` column
+right after the param columns, so params and hash are readable side by side. The layout line is durable experiment metadata, not a run-row
 identity field:
 
 ```markdown
@@ -97,8 +101,8 @@ their `eta` table cells: lane/wave roll-ups belong in chat reports, while the ta
 an active-run field.
 
 `RUN_ID_PARAMS` may change only while no checkpoint, evaluation, or plot output and no wave README
-or script exists. After the first such surface, any identity-schema change under `nested` or
-`collapsed-v1` requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the
+or script exists. After the first such surface, any identity-schema change under `nested`,
+`collapsed-v1`, or `hashed-v1` requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the
 established tree. The recorded `RUN_ID_PATH_LAYOUT` is immutable after the same boundary, and exact
 wave paths remain authoritative. A layout mismatch or mixed checkpoint/evaluation tree blocks
 reconciliation and routes changed work to a new numbered sub-experiment; never move, rename, or

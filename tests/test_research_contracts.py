@@ -328,6 +328,58 @@ class ResearchContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid run_id path layout"):
             run_id_path(cfg, params, layout="collapsed")
 
+    def test_hashed_v1_is_consent_gated_and_never_lossy(self) -> None:
+        import hashlib
+        import tempfile
+
+        namespace: dict[str, object] = {}
+        exec(compile(run_id_template(), "run_id.py", "exec"), namespace)
+        run_id_path = namespace["run_id_path"]
+        run_id_flat = namespace["run_id_flat"]
+        guard_run_config = namespace["guard_run_config"]
+
+        cfg = {"model": "vit/base", "lr": 0.001, "seed": 3}
+        params = ["model", "lr", "seed"]
+        flat = run_id_flat(cfg, params)
+        hashed = run_id_path(cfg, params, layout="hashed-v1")
+        expected = "rid-" + hashlib.sha256(flat.encode()).hexdigest()[:16]
+        self.assertEqual(hashed.parts, (expected,))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            exp_root = Path(tmp) / "evaluations" / "009_schema"
+            run_dir = exp_root / hashed
+            guard_run_config(cfg, params, run_dir, layout="hashed-v1")
+            record = json.loads((run_dir / ".run_id.json").read_text())
+            self.assertEqual(record["hash"], expected)
+            self.assertEqual(record["run_id_flat"], flat)
+            self.assertEqual(record["run_id"], {"model": "vit/base", "lr": 0.001, "seed": 3})
+            run_map = json.loads((exp_root / "RUN_ID_MAP.json").read_text())
+            self.assertEqual(run_map["by_hash"][expected]["run_id"], record["run_id"])
+            self.assertEqual(run_map["by_run_id_flat"][flat], expected)
+            # same run again: idempotent
+            guard_run_config(cfg, params, run_dir, layout="hashed-v1")
+            # a different flat id claiming the same hash directory is a hard error
+            (run_dir / ".run_id.json").write_text(
+                json.dumps({**record, "run_id_flat": flat + ",extra=1"})
+            )
+            with self.assertRaisesRegex(RuntimeError, "hash collision"):
+                guard_run_config(cfg, params, run_dir, layout="hashed-v1")
+
+        skills = ROOT / "plugins/research/skills"
+        design = " ".join((skills / "experiment-design/SKILL.md").read_text().split())
+        conventions = " ".join(
+            (skills / "research-project-init/references/conventions.md").read_text().split()
+        )
+        tracking = " ".join((skills / "experiments-tracking/SKILL.md").read_text().split())
+        for text in (design, conventions):
+            self.assertIn("never silently hash", text.lower())
+            self.assertIn("hashed-v1", text)
+            self.assertIn("RUN_ID_MAP.json", text)
+            self.assertRegex(text, r"(?i)explicit user (?:consent|approval)")
+            self.assertRegex(text, r"(?i)neither (?:engineering|automatic) mode may select")
+        self.assertIn("`hash` column", tracking)
+        self.assertIn("RUN_ID_MAP.json", tracking)
+
     def test_run_path_layout_is_one_choice_across_artifact_surfaces(self) -> None:
         skills = ROOT / "plugins/research/skills"
         design = (skills / "experiment-design/SKILL.md").read_text()
@@ -506,18 +558,18 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("Inspect checkpoints, evaluations, plots, and wave records", design_schema)
         self.assertIn("If none exists, update `RUN_ID_PARAMS`", design_schema)
         self.assertIn("normally before the first launch", design_schema)
-        self.assertIn("immutable under both `nested` and `collapsed-v1`", design_schema)
+        self.assertIn("immutable under every layout (`nested`, `collapsed-v1`, `hashed-v1`)", design_schema)
         self.assertIn("Never change the identity schema in place", design_schema)
         self.assertRegex(design_schema, r"(?i)create a new numbered sub-experiment")
 
         self.assertIn("Before any checkpoint, evaluation, or plot output or wave README/script exists", conventions)
         self.assertIn("After any one of those surfaces exists", conventions)
-        self.assertIn("immutable under both `nested` and `collapsed-v1`", conventions)
+        self.assertIn("immutable under every layout (`nested`, `collapsed-v1`, `hashed-v1`)", conventions)
         self.assertIn("new numbered sub-experiment", conventions)
-        self.assertIn("any identity-schema change under `nested` or `collapsed-v1` requires a new numbered sub-experiment", dispatch)
+        self.assertIn("any identity-schema change under `nested`, `collapsed-v1`, or `hashed-v1` requires a new numbered sub-experiment", dispatch)
 
         def schema_decision(layout: str, surfaces: set[str]) -> str:
-            if layout not in {"nested", "collapsed-v1"}:
+            if layout not in {"nested", "collapsed-v1", "hashed-v1"}:
                 raise ValueError("unsupported layout")
             return (
                 "update-before-first-launch"
@@ -555,7 +607,7 @@ class ResearchContractTests(unittest.TestCase):
             re.MULTILINE,
         )
         layout_match = re.search(
-            r"^run_id path layout:\s*(?P<layout>nested|collapsed-v1)\s+"
+            r"^run_id path layout:\s*(?P<layout>nested|collapsed-v1|hashed-v1)\s+"
             r"\(mirrors RUN_ID_PATH_LAYOUT in (?P<source>[^)]+)\)$",
             example,
             re.MULTILINE,
@@ -644,7 +696,7 @@ class ResearchContractTests(unittest.TestCase):
             proposed: str,
             existing_surfaces: dict[str, tuple[str, ...]],
         ) -> str:
-            if proposed not in {"nested", "collapsed-v1"}:
+            if proposed not in {"nested", "collapsed-v1", "hashed-v1"}:
                 raise ValueError("unsupported layout")
             if not any(existing_surfaces.values()):
                 return proposed
