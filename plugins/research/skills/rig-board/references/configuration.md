@@ -12,6 +12,7 @@ rigs   = ["rig-4090", "rig-3090-ti", "rig-3080-ti", "behemoth"]  # tmux/GPU mach
 shared = ["behemoth"]                                # cards used by other people show as "foreign"
 port   = 8765                                        # viewer
 bind   = "0.0.0.0"                                   # all interfaces: LAN and the private overlay
+token  = "<output of board.py token>"                # optional; required for any exposure beyond the LAN
 ```
 
 - `rigs` must name existing `[machines.<rig>]` entries; each needs `ssh`. The entry whose
@@ -80,7 +81,18 @@ systemctl --user status rig-board.service --no-pager
 ```
 
 Then open `http://<hub LAN address>:8765` (or the hub's private overlay address). The page is
-read-only and unauthenticated; keep the port off the public internet.
+read-only.
+
+### Access token
+
+With `[board] token` set, every path except `/healthz` answers 401 unless the request carries
+the token as `?token=<token>`, an `X-Board-Token` header, or `Authorization: Bearer <token>`.
+Opening the page once with `?token=` sets an HttpOnly cookie for a year, so the bookmark is
+`http://<address>:<port>/?token=<token>` and later visits need nothing. Generate one with
+`board.py token` and restart the service after changing the registry. Without a token the
+server prints `OPEN` at startup; never forward such a port from a router. The token travels in
+clear over plain HTTP, so treat it as a shared secret for your own devices, and rotate it by
+replacing the registry value.
 
 Point the unit at a **stable** copy of `board.py` (for example the currently installed skill
 path) and re-point it after a skill release that changes the script.

@@ -22,9 +22,11 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hmac
 import json
 import os
 import re
+import secrets
 import socket
 import subprocess
 import sys
@@ -34,7 +36,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from http.cookies import SimpleCookie
+from urllib.parse import parse_qs, urlparse
 
 SCHEMA_VERSION = 1
 DEFAULT_REGISTRY = "~/.config/rigsync/machines.toml"
@@ -93,6 +96,7 @@ class BoardConfig:
     port: int = DEFAULT_PORT
     bind: str = "0.0.0.0"
     registry_path: Path = Path(DEFAULT_REGISTRY)
+    token: str | None = None
 
     @property
     def lanes_dir(self) -> Path:
@@ -153,7 +157,10 @@ def load_config(registry_path: Path) -> BoardConfig:
     bind = board.get("bind", "0.0.0.0")
     if not isinstance(bind, str) or not bind:
         raise BoardError(f"{registry_path}: board.bind must be a string")
-    return BoardConfig(root=root, rigs=rigs, port=port, bind=bind, registry_path=registry_path)
+    token = board.get("token")
+    if token is not None and (not isinstance(token, str) or len(token) < 16):
+        raise BoardError(f"{registry_path}: board.token must be a string of at least 16 characters")
+    return BoardConfig(root=root, rigs=rigs, port=port, bind=bind, registry_path=registry_path, token=token)
 
 
 # ───────────────────────────── storage ─────────────────────────────
@@ -687,10 +694,31 @@ const freeIdx=gpuIdx.filter(i=>!seen.has(i));
 if(freeIdx.length)card.insertAdjacentHTML("beforeend",`<div class="lane free"><div class="top"><span>gpu${freeIdx.join(", gpu")}</span><span class="state free">free</span></div></div>`);
 else if(!rig.lanes.length&&!(rig.foreign||[]).length)card.insertAdjacentHTML("beforeend",`<div class="lane free"><div class="top"><span>no lanes</span><span class="state free">free</span></div></div>`);
 main.appendChild(card)}}
-async function tick(){try{const r=await fetch("/api/board",{cache:"no-store"});if(!r.ok)throw new Error(r.status+" "+r.statusText);render(await r.json());document.getElementById("err").hidden=true}catch(e){const el=document.getElementById("err");el.hidden=false;el.textContent="board unavailable: "+e.message}}
+async function tick(){try{const q=new URLSearchParams(location.search).get("token");const r=await fetch("/api/board"+(q?"?token="+encodeURIComponent(q):""),{cache:"no-store"});if(!r.ok)throw new Error(r.status+" "+r.statusText);render(await r.json());document.getElementById("err").hidden=true}catch(e){const el=document.getElementById("err");el.hidden=false;el.textContent="board unavailable: "+e.message}}
 tick();setInterval(tick,5000);
 </script></body></html>
 """
+
+
+COOKIE_NAME = "rig_board_token"
+DENIED = b"rig-board: access token required. Open the page as /?token=<token> once; it is then remembered by a cookie.\n"
+
+
+def presented_token(handler: BaseHTTPRequestHandler, url) -> tuple[str | None, bool]:
+    """(token the client presented, whether it came from the query string)."""
+    query = parse_qs(url.query).get("token")
+    if query:
+        return query[0], True
+    header = handler.headers.get("X-Board-Token")
+    if header:
+        return header, False
+    auth = handler.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[7:].strip(), False
+    cookie = SimpleCookie(handler.headers.get("Cookie", ""))
+    if COOKIE_NAME in cookie:
+        return cookie[COOKIE_NAME].value, False
+    return None, False
 
 
 def make_handler(config: BoardConfig):
@@ -699,22 +727,34 @@ def make_handler(config: BoardConfig):
             pass
 
         def do_GET(self) -> None:  # noqa: N802
-            path = urlparse(self.path).path
+            url = urlparse(self.path)
+            path = url.path
+            if path == "/healthz":
+                self._send(200, "text/plain; charset=utf-8", b"ok\n")
+                return
+            set_cookie = None
+            if config.token is not None:
+                token, from_query = presented_token(self, url)
+                if token is None or not hmac.compare_digest(token, config.token):
+                    self._send(401, "text/plain; charset=utf-8", DENIED)
+                    return
+                if from_query:
+                    set_cookie = f"{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000"
             if path == "/api/board":
                 body = json.dumps(snapshot(config)).encode()
-                self._send(200, "application/json; charset=utf-8", body)
+                self._send(200, "application/json; charset=utf-8", body, set_cookie)
             elif path in ("/", "/index.html"):
-                self._send(200, "text/html; charset=utf-8", PAGE.encode())
-            elif path == "/healthz":
-                self._send(200, "text/plain; charset=utf-8", b"ok\n")
+                self._send(200, "text/html; charset=utf-8", PAGE.encode(), set_cookie)
             else:
                 self._send(404, "text/plain; charset=utf-8", b"not found\n")
 
-        def _send(self, code: int, ctype: str, body: bytes) -> None:
+        def _send(self, code: int, ctype: str, body: bytes, set_cookie: str | None = None) -> None:
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            if set_cookie:
+                self.send_header("Set-Cookie", set_cookie)
             self.end_headers()
             self.wfile.write(body)
 
@@ -735,7 +775,8 @@ def serve(config: BoardConfig, args: argparse.Namespace) -> int:
     if args.reconcile_every > 0:
         threading.Thread(target=loop, daemon=True).start()
     server = ThreadingHTTPServer((args.bind or config.bind, args.port or config.port), make_handler(config))
-    print(f"[serve] rig-board on http://{server.server_address[0]}:{server.server_address[1]}  root={config.root}")
+    guard = "token required" if config.token else "OPEN: no board.token in the registry"
+    print(f"[serve] rig-board on http://{server.server_address[0]}:{server.server_address[1]}  root={config.root}  ({guard})")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -792,6 +833,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("reconcile", help="probe the rigs and correct the board")
     p.add_argument("--rig", action="append", dest="rigs", help="limit to this rig (repeatable)")
 
+    sub.add_parser("token", help="print a fresh random access token to put under [board] token in the registry")
+
     p = sub.add_parser("serve", help="read-only web viewer with periodic reconcile")
     p.add_argument("--port", type=int)
     p.add_argument("--bind")
@@ -818,6 +861,9 @@ def main(argv: list[str] | None = None) -> int:
             return reconcile(config, rigs=args.rigs)
         if args.command == "serve":
             return serve(config, args)
+        if args.command == "token":
+            print(secrets.token_urlsafe(32))
+            return 0
     except BoardError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

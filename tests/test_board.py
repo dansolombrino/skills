@@ -325,6 +325,67 @@ class BoardTests(unittest.TestCase):
         self.assertIn("grokking / 000_grokking", out)
         self.assertIn("never probed", out)
 
+    def fake_request(self, config: board.BoardConfig):
+        handler = board.make_handler(config)
+
+        class Fake(handler):  # type: ignore[misc,valid-type]
+            def __init__(self, path: str, headers: dict[str, str] | None = None) -> None:
+                self.path = path
+                self.headers = headers or {}
+                self.wfile = io.BytesIO()
+                self.headers_sent: list[tuple[str, str]] = []
+
+            def send_response(self, code: int, message: str | None = None) -> None:
+                self.code = code
+
+            def send_header(self, key: str, value: str) -> None:
+                self.headers_sent.append((key, value))
+
+            def end_headers(self) -> None:
+                pass
+
+        return Fake
+
+    def test_viewer_requires_the_token_when_configured(self) -> None:
+        self.claim()
+        token = "x" * 24
+        config = board.BoardConfig(root=self.config.root, rigs=self.config.rigs, token=token)
+        Fake = self.fake_request(config)
+        for path in ("/", "/api/board", "/?token=wrong"):
+            denied = Fake(path)
+            denied.do_GET()
+            self.assertEqual(denied.code, 401, path)
+            self.assertNotIn(b"grokking", denied.wfile.getvalue())
+        health = Fake("/healthz")
+        health.do_GET()
+        self.assertEqual(health.code, 200)
+        page = Fake(f"/?token={token}")
+        page.do_GET()
+        self.assertEqual(page.code, 200)
+        cookie = dict(page.headers_sent)["Set-Cookie"]
+        self.assertIn(f"{board.COOKIE_NAME}={token}", cookie)
+        self.assertIn("HttpOnly", cookie)
+        by_cookie = Fake("/api/board", {"Cookie": cookie.split(";")[0]})
+        by_cookie.do_GET()
+        self.assertEqual(by_cookie.code, 200)
+        self.assertNotIn("Set-Cookie", dict(by_cookie.headers_sent))
+        by_header = Fake("/api/board", {"X-Board-Token": token})
+        by_header.do_GET()
+        self.assertEqual(by_header.code, 200)
+        by_bearer = Fake("/api/board", {"Authorization": f"Bearer {token}"})
+        by_bearer.do_GET()
+        self.assertEqual(by_bearer.code, 200)
+
+    def test_registry_rejects_a_short_token(self) -> None:
+        self.registry.write_text(self.registry.read_text().replace("[board]\n", '[board]\ntoken = "short"\n', 1))
+        with self.assertRaisesRegex(board.BoardError, "board.token"):
+            board.load_config(self.registry)
+
+    def test_token_command_prints_a_fresh_secret(self) -> None:
+        code, out, _ = self.run_cli("token")
+        self.assertEqual(code, 0)
+        self.assertGreaterEqual(len(out.strip()), 32)
+
     def test_viewer_serves_page_and_json(self) -> None:
         self.claim()
         handler = board.make_handler(self.config)
@@ -332,6 +393,7 @@ class BoardTests(unittest.TestCase):
         class Fake(handler):  # type: ignore[misc,valid-type]
             def __init__(self, path: str) -> None:
                 self.path = path
+                self.headers = {}
                 self.wfile = io.BytesIO()
                 self.headers_sent: list[tuple[str, str]] = []
 

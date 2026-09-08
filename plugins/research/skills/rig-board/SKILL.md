@@ -45,6 +45,7 @@ python3 scripts/board.py claim --rig <rig> --gpu <ids> --project <name> --experi
 python3 scripts/board.py refresh --rig <rig> --gpu <ids> --wave <wave_id> --active-run <run_id_flat> --progress "<display>" --eta <ISO|''> --eta-basis "<basis>" --runs-done <n>
 python3 scripts/board.py release --rig <rig> --gpu <ids> --reason "<why>"
 python3 scripts/board.py serve [--port 8765] [--reconcile-every 120]
+python3 scripts/board.py token                            # fresh access token for [board] token
 ```
 
 Set `RIGSYNC_REGISTRY` or pass `--registry` to use another registry.
@@ -80,7 +81,9 @@ one row per GPU: free, running, interrupted, foreign, unreachable, with holder, 
 held-since, orchestrator silence and the `tmux attach` command), `/api/board` is the JSON
 behind it. It reconciles on its own timer so the page stays honest when no chat is alive. It
 takes no write actions. Install it as a user service on the hub per the configuration
-reference; the URL is `http://<hub address>:<port>`.
+reference; the URL is `http://<hub address>:<port>`. With `[board] token` set, the page and
+the API require that token (query once, then a cookie); require it before exposing the port
+beyond the LAN.
 
 ## Hard limits
 
