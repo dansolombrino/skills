@@ -61,7 +61,9 @@ selection drive both revision and runtime parity. `rigsync.py` preserves but doe
 Keep SSH identity in `~/.config/rigsync/machines.toml`. This file is written **once per user, per
 machine**, and every project on that rig reuses it — so it is a prerequisite for scaffolding a
 project, not a step inside one. A rig with no entry here cannot be declared in any `sync.toml`:
-`load_config` stops rather than inventing an SSH alias or a volume.
+`load_config` stops rather than inventing an SSH alias or a volume. The same file carries the
+fleet board declaration, a top-level `[board]` table read only by `rig-board` (`root`, `rigs`,
+`shared`, `port`, `bind`; see that skill's `references/configuration.md`); rigsync ignores it.
 
 ```toml
 [machines.rig-4090]

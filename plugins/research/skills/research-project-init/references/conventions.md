@@ -478,8 +478,10 @@ templates), which the scripts also enforce at runtime.
 
 The weight is **per GPU**, so a rig's capacity in the assignment math is
 `weight × (number of free GPUs)`. Never hardcode the server's card count — it can change, and
-the number of GPUs actually free varies per dispatch: **ask the user which rigs AND which GPUs
-are free** before proposing an assignment (`sweep-dispatch`, pre-launch gates). For `behemoth`
+the number of GPUs actually free varies per dispatch: **read the fleet board (`rig-board`) and,
+in manual mode, confirm with the user which rigs AND which GPUs are free** before proposing an
+assignment (`sweep-dispatch`, pre-launch gates). The board is the only cross-project view: a lane
+held by another project is not free capacity, and a foreign card on a shared rig is never ours. For `behemoth`
 that math defaults to `2.0 × 1` (gpu0), and only a grant for this wave widens it.
 
 Those weights are **fixed nominal throughput priors**, not measurements, and they have two

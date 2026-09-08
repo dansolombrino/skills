@@ -1,0 +1,12 @@
+[Unit]
+Description=rig-board: read-only GPU lane viewer with periodic reconcile
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 __BOARD_PY__ serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

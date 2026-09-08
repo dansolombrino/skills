@@ -61,8 +61,12 @@ The helper must provide timezone-aware timestamps, live elapsed time, and its au
 60-second heartbeat; entrypoints call
 `heartbeat(completed=<done>, total=<total>, unit=<label>)`. Display-only telemetry makes the
 project unsupported. Telemetry does not join `RUN_ID_PARAMS`.
-2. **Resolve usable rigs and GPUs.** In manual mode, ask. In auto mode, use only the named rig/GPU
-set in the envelope after checking current load; never infer availability from `nvidia-smi`. On
+2. **Resolve usable rigs and GPUs.** First read the fleet board: `rig-board` `status --reconcile`
+shows every lane held by any project on the hub, foreign cards, and unreachable rigs. Held and
+foreign lanes are not free capacity in any mode. In manual mode, present the board and ask. In
+auto mode, use only the named rig/GPU set in the envelope that the board shows free; if the
+envelope's lane is held, stop and report the holder and its ETA rather than waiting silently or
+moving elsewhere. Never infer availability from `nvidia-smi`. On
 `behemoth`, gpu0 is the only default. Any additional named card requires an explicit per-wave user
 grant regardless of mode and is never persisted. For `leonardo`, first pass the certificate
 precondition in `references/cineca-slurm.md` (print the login commands and wait when it fails),
@@ -175,6 +179,10 @@ Each rig subagent:
    source-drift `86`, environment-drift `87`, and insufficient storage `88`; ordinary run failures
    continue the queue.
    Sequencing remains a shell loop so it survives subagent death, compaction, and multi-day queues.
+   Report each confirmed session back at once; the **orchestrator** then runs `rig-board` `claim`
+   for that lane (rig, GPU set, project, experiment, wave id, hub project root, run count). A
+   claim that exits 3 means another project holds the lane: kill nothing, report, and stop that
+   lane. Subagents never write the board.
 2. **Monitors** its queues to completion, judging each run by the three signals (hierarchy in
 `conventions.md` — artifacts are golden). Read each run's exact status and artifact paths from its
 generated wave record; do not recreate paths from the flat id or slash depth. Batch all lanes/status
@@ -210,6 +218,7 @@ Each rig subagent is also its rig's watchdog. A machine-level failure (crash, re
   session names, tag, and commit). Completed runs skip; interrupted ones re-execute.
 - **Recovery never re-decides GPU placement** — a relaunch re-executes the *same* wave script, so it inherits that wave's authorization (including its `# GPU auth:` header and guard) unchanged. Never widen a lane's GPU set during recovery, and never move a lane to a different card on `behemoth` to work around a busy GPU 0. If placement genuinely must change, that is a new wave, needing authorization under the active engineering mode and — for anything past gpu0 on `behemoth` — a fresh grant from the user.
 - **Never double-launch** — immediately before relaunching a lane, check `tmux has-session -t <lane session>` again; if it exists, just monitor it.
+- **Board across a fault** — `rig-board` `reconcile` marks the lane *interrupted* after a reboot and keeps it held, so no other project takes the card mid-recovery. After the relaunch, the orchestrator re-runs `claim` with the same session name (a re-claim, not a new hold). If recovery is blocked and the user abandons the lane, release it with that reason.
 - **Unsupported layouts** — any noncanonical or mixed checkpoint/evaluation layout, or any wave
   whose recorded status/artifact paths disagree with the experiment's pinned `RUN_ID_PATH_LAYOUT`,
   blocks recovery. Never infer slash depth or substitute different paths. Route changed work to a
@@ -227,10 +236,13 @@ Each rig subagent is also its rig's watchdog. A machine-level failure (crash, re
 
 Anchor `next_update` to the confirmed launch time and advance it in exact 600-second increments;
 collection or message latency must not drift later ticks. At every tick, even if nothing changed,
-the orchestrator reconciles EXPERIMENTS.md from the newest per-rig snapshots and posts one compact
-aggregate update. A completion, failure, suspected hang, rig outage, or recovery is reported as
-soon as observed and does not reset `next_update`. When every run is terminal, post the final
-summary immediately and stop the schedule.
+the orchestrator reconciles EXPERIMENTS.md from the newest per-rig snapshots, runs `rig-board`
+`refresh` for each of its lanes (active run, progress, ETA and basis, runs done), and posts one
+compact aggregate update. A completion, failure, suspected hang, rig outage, or recovery is reported as
+soon as observed and does not reset `next_update`. When every run is terminal, `rig-board`
+`release` every lane of the wave, post the final summary immediately, and stop the schedule. A
+lane that stops early on a reserved exit (`86`/`87`/`88`) or is deliberately abandoned is
+released in the same turn with that reason.
 
 Immediately before every scheduled, urgent, and final message, obtain a timezone-bearing local
 timestamp (for example `date '+%Y-%m-%dT%H:%M:%S%:z'`) and open exactly with
@@ -252,6 +264,7 @@ unavailable until liveness is resolved. Non-schema-v2 status makes the project u
 ## Tracking side-effects (same turn)
 
 - Append `todo` rows to EXPERIMENTS.md for every generated run — **one row per (run, wave)**, carrying its wave id, rig and gpu. A run re-launched in a later wave gets a **new row**, never an in-place update.
+- Board: `claim` per confirmed lane session, `refresh` per tick, `release` per terminal lane (`rig-board`); the board is fleet state and never replaces any signal below.
 - Flip launched rows to `inpr` and fill `started`; on completion reports flip to `done`/`failed` and fill `ended`/`elapsed`; keep `progress`/`eta` fresh while runs are in flight (format + single-writer rules: `experiments-tracking` skill).
 - Put the exact launch entry in the assignment record (`research-journal` skill). Apply its
   mode-aware authorization before the dispatch commit; never bypass the journal hook. The entry names

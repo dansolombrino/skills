@@ -109,6 +109,16 @@ reconciliation and routes changed work to a new numbered sub-experiment; never m
 rewrite old artifacts or wave records. The new sub-experiment gets a fresh EXPERIMENTS section with
 no edits to historical rows.
 
+## Fleet questions go to the board
+
+EXPERIMENTS.md sees one project. "Are the GPUs free", "what is running on the 3090", "wait for
+the rigs", or any question about another project's runs is answered from `rig-board`
+(`status --reconcile`), which lists every held lane across projects with holder, wave, active
+run, progress, ETA and basis, plus foreign cards and unreachable rigs. Report it with the same
+`Status written <timestamp> —` opener and the probe age. Waiting uses the host's recurring
+wait primitive with a board check per tick, never shell `sleep`. The board never changes a row
+here: a lane on the board is not evidence that a run is done, failed, or even started.
+
 ## Who writes what (same turn as the action)
 
 - Wave generation ⇒ append `todo` rows (one per generated run), pre-filled with `wave`, `rig`, `gpu` from the generated script paths.

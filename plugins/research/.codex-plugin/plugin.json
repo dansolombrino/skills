@@ -1,7 +1,7 @@
 {
   "name": "research",
-  "version": "5.5.0",
-  "description": "Materialize reproducible experiments across verified GPU rigs: scaffold projects, provision exact environments, deploy tested revisions, dispatch GPU waves, visualize results, and gate action behind confirmed intent and explicit greenlights.",
+  "version": "5.6.0",
+  "description": "Materialize reproducible experiments across verified GPU rigs: scaffold projects, provision exact environments, deploy tested revisions, dispatch GPU waves, keep a fleet-wide GPU lane board, visualize results, and gate action behind confirmed intent and explicit greenlights.",
   "author": {
     "name": "Dan Solombrino",
     "email": "dansolombrino@gmail.com",
@@ -19,6 +19,7 @@
     "reference-code",
     "adaptation",
     "visualization",
+    "gpu-board",
     "alignment",
     "brainstorm",
     "greenlight"
@@ -27,7 +28,7 @@
   "interface": {
     "displayName": "Research",
     "shortDescription": "Reproducible GPU experiments across verified rigs",
-    "longDescription": "Scaffold fresh Research 2.0 projects under an explicit engineering execution agreement, integrate reference implementations through protected deviation approval, provision exact uv environments, deploy tested revisions, dispatch and monitor GPU waves, reconcile run state, maintain a narrative journal, and create approved result visualizations. Gate action behind confirmed intent: mirror the user's request back before acting, and hold brainstorm phases with no plan or code until an explicit greenlight.",
+    "longDescription": "Scaffold fresh Research 2.0 projects under an explicit engineering execution agreement, integrate reference implementations through protected deviation approval, provision exact uv environments, deploy tested revisions, dispatch and monitor GPU waves, keep a fleet-wide board of which rig GPUs every project holds, reconcile run state, maintain a narrative journal, and create approved result visualizations. Gate action behind confirmed intent: mirror the user's request back before acting, and hold brainstorm phases with no plan or code until an explicit greenlight.",
     "developerName": "Dan Solombrino",
     "category": "Developer Tools",
     "capabilities": [
@@ -40,6 +41,7 @@
       "Provision the exact uv environment and verify parity across my rigs.",
       "Compile an approved research step into a reproducible experiment and monitor its GPU wave through completion.",
       "Plot my evaluation results as approved self-contained interactive HTML.",
+      "Which GPUs are free across my projects right now, and who holds the rest until when?",
       "Show me that you understood my request before doing anything, then hold in brainstorm phase until I greenlight the plan."
     ],
     "screenshots": []

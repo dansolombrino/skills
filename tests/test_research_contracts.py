@@ -67,7 +67,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "5.5.0")
+        self.assertEqual(manifest["version"], "5.6.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -92,7 +92,7 @@ class ResearchContractTests(unittest.TestCase):
             path.parent.name
             for path in (ROOT / "plugins/research/skills").glob("*/SKILL.md")
         }
-        self.assertEqual(len(skill_names), 12)
+        self.assertEqual(len(skill_names), 13)
         self.assertEqual(
             skill_names,
             {
@@ -105,6 +105,7 @@ class ResearchContractTests(unittest.TestCase):
                 "intent-mirror",
                 "research-journal",
                 "research-project-init",
+                "rig-board",
                 "rig-sync",
                 "sweep-dispatch",
                 "visualizations",

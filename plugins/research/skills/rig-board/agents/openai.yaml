@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rig Board"
+  short_description: "Fleet-wide GPU lane occupancy across the rigs"
+  default_prompt: "Use $rig-board to check which rig GPUs are free or held across every project, wait for a lane, or maintain the board during a $sweep-dispatch wave."
