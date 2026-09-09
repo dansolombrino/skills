@@ -53,7 +53,7 @@ main{display:grid;gap:14px;padding:16px 20px;grid-template-columns:repeat(auto-f
 .pill{font-size:11px;padding:1px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
 .pill.bad{color:var(--bad);border-color:var(--bad)}.pill.warn{color:var(--warn);border-color:var(--warn)}
 .sub{color:var(--muted);font-size:12px;margin-bottom:6px;display:flex;flex-wrap:wrap;gap:4px 12px}
-.lane{border-radius:8px;padding:8px 10px;margin:8px 0;border:1px solid var(--line);border-left-width:4px}
+.lane{border-radius:8px;padding:8px 10px;margin:8px 0;border:1px solid var(--line);border-left-width:4px;min-width:0;overflow:hidden}
 .lane.free{background:var(--freebg);border-color:var(--free)}
 .lane.running,.lane.claimed{background:var(--busybg);border-color:var(--busy)}
 .lane.silent{background:var(--warnbg);border-color:var(--warn)}
@@ -84,12 +84,13 @@ main{display:grid;gap:14px;padding:16px 20px;grid-template-columns:repeat(auto-f
 .bar.stacked{display:flex}.bar.stacked i{display:block;height:100%}.bar.stacked i.seg-completed{background:var(--free)}.bar.stacked i.seg-failed{background:var(--bad)}.bar.stacked i.seg-running{background:var(--busy)}.bar.stacked i.seg-pending{background:var(--pend)}
 .f-completed{color:var(--free)}.f-failed,.f-timeout{color:var(--bad)}.f-cancelled{color:var(--warn)}
 .bar.mem i{background:var(--foreign)}.bar.free i{background:var(--free)}.bar.util i{background:var(--pend)}
-.gauges{display:flex;gap:10px;margin-top:5px;font-size:11px;color:var(--muted)}
-.gauges div{flex:1}
-.gauges .bar{margin-top:2px;height:4px}.gauges .barrow{margin-top:2px;gap:4px}.gauges .pct{min-width:44px}
+.gauges{display:flex;flex-direction:column;gap:1px;margin-top:5px;font-size:11px;color:var(--muted);min-width:0}
+.gauges div{display:flex;align-items:baseline;gap:6px;min-width:0}.gauges .gl{width:26px;flex:0 0 auto}.gauges .gx{margin-left:auto;white-space:nowrap}
+.tbar{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;letter-spacing:-.5px;white-space:nowrap}.tbar .blk.empty{color:var(--line2)!important}.tbar.mem .blk{color:var(--foreign)}.tbar.util .blk{color:var(--pend)}.tbar .pct{min-width:0;color:var(--ink);letter-spacing:0}
 .copy{padding:1px 6px;font-size:11px;border-radius:4px;background:transparent}
 .copy.ok{color:var(--free);border-color:var(--free)}
 abbr,[title]{text-decoration:none;cursor:help}
+details.inline{margin:0;display:inline-block;vertical-align:top}details.inline summary{font-size:12.5px;color:var(--ink);display:inline}details.inline .params{margin-top:3px}
 details{margin-top:6px}summary{cursor:pointer;color:var(--muted);font-size:12px;user-select:none}
 details ul{margin:4px 0 0;padding-left:18px;font-size:12px}
 .hist{padding:0 20px 20px}
@@ -198,8 +199,10 @@ function drawHeader(d,nowMs){const s=d.summary||{};$("stamp").innerHTML=`board r
   const col=(s.interrupted||s.unreachable_rigs)?"#b91c1c":s.free?"#15803d":"#b45309";$("favicon").href="data:image/svg+xml,"+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="4" fill="${col}"/><text x="8" y="12" font-size="10" text-anchor="middle" fill="#fff" font-family="sans-serif" font-weight="700">${s.free??"?"}</text></svg>`)}
 
 // ── cards ──
-function gpuGauges(g){if(!g)return "";const tot=g.memory_total_mib,used=g.memory_used_mib;const pct=tot?Math.round(100*used/tot):null;
-  return `<div class="gauges"><div>mem ${esc(mib(used))}${bar(used,tot||0,"mem",mib(used)+" of "+mib(tot))}</div><div>util${bar(g.utilization||0,100,"util","GPU utilization (nvidia-smi reports whole percent)")}</div>${g.temperature_c!=null?`<div style="flex:0 0 auto">${g.temperature_c}°C${g.power_w!=null?" · "+g.power_w+" W":""}</div>`:""}</div>`}
+const blocks=(a,b,n)=>{const f=b>0?Math.max(0,Math.min(1,a/b)):0;const full=Math.round(f*n);return "█".repeat(full)+"░".repeat(n-full)};
+const tbar=(a,b,cls,title)=>{const f=b>0?Math.max(0,Math.min(1,a/b)):0;const n=12,full=Math.round(f*n);return `<span class="tbar ${cls||""}" title="${esc(title||"")}"><span class="blk">${"█".repeat(full)}</span><span class="blk empty">${"░".repeat(n-full)}</span> <span class="pct">${pct2(a,b)}</span></span>`};
+function gpuGauges(g){if(!g)return "";const tot=g.memory_total_mib,used=g.memory_used_mib;
+  return `<div class="gauges"><div><span class="gl">mem</span>${tbar(used,tot||0,"mem",mib(used)+" of "+mib(tot))}<small class="gx">${esc(mib(used))}</small></div><div><span class="gl">util</span>${tbar(g.utilization||0,100,"util","GPU utilization (nvidia-smi reports whole percent)")}${g.temperature_c!=null?`<small class="gx">${g.temperature_c}°C${g.power_w!=null?" · "+g.power_w+" W":""}</small>`:""}</div></div>`}
 function gpuName(g){if(!g||!g.name)return "";const short=g.name.replace(/^NVIDIA\s+/,"").replace(/\bGeForce\s+/,"").replace(/\s+Server Edition$/,"").replace(/\s+Blackwell\b/,"");return `<abbr title="${esc(g.name)}">${esc(short)}</abbr>`+(g.memory_total_mib?` · ${esc(mib(g.memory_total_mib))}`:"")}
 function procList(g){const ps=(g&&g.processes)||[];if(!ps.length)return "";return `<div class="kv">${ps.map(p=>`<span>${esc(p.user||"?")}</span><span class="mono" title="${esc(p.name||"")}">${esc(base(p.name))} · pid ${p.pid} · ${esc(mib(p.memory_mib))}${p.elapsed_s!=null?" · running "+fmtAge(p.elapsed_s):""}</span>`).join("")}</div>`}
 const EMO={free:"🟢",running:"🟠",claimed:"🟡",silent:"🔇",interrupted:"🔴",unreachable:"⚫",unknown:"❓",foreign:"🟣",pending:"🔵",idle:"🟢",unverified:"❓",
@@ -210,6 +213,8 @@ const dec=t=>{try{return decodeURIComponent(t)}catch(e){return t}};
 function params(text,opts){if(!text)return "";const o=opts||{};const toks=String(text).split(/\/|__|,(?=[A-Za-z_][\w.-]*=)/).map(t=>t.trim()).filter(Boolean);
   const chips=[],dirs=[];for(const t of toks){const i=t.indexOf("=");if(i>0)chips.push([t.slice(0,i),dec(t.slice(i+1))]);else if(!o.hideDirs)dirs.push(t)}
   return `<span class="params" title="${esc(text)}">${dirs.length?`<span class="dir">${esc(dirs.join("/"))}</span>`:""}${chips.map(([k,v])=>`<span class="chip"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></span>`).join("")}</span>`}
+function runParams(key,text){if(!text)return "?";const n=String(text).split(/\/|__|,(?=[A-Za-z_][\w.-]*=)/).filter(t=>t.includes("=")).length;const k=key+"/params";
+  return `<details class="inline" data-key="${esc(k)}" ${open.has(k)?"open":""}><summary title="${esc(text)}">${n} parameter${n===1?"":"s"}</summary>${params(text,{hideDirs:true})}</details>`}
 function liveRows(l,nowMs){const r=l.observed&&l.observed.run;const tail=l.observed&&l.observed.last_output;let out="";
   if(r){const hasPct=typeof r.completed==="number"&&typeof r.total==="number"&&r.total>0;const hb=r.heartbeat_age_s!=null?`heartbeat ${fmtAge(r.heartbeat_age_s)} ago`:"no heartbeat";
     const stateCol=r.state==="running"?(r.heartbeat_stale?"var(--warn)":"var(--busy)"):r.state==="done"?"var(--free)":"var(--bad)";
@@ -227,7 +232,7 @@ function laneHtml(rig,l,gpus,nowMs){const st=laneState(l);const gIdx=String(l.gp
     :st==="unreachable"?`<div style="color:var(--unk);font-size:12px;margin-top:4px">Rig unreachable; shown as last known.</div>`:"";
   return `<div class="lane ${st}"><div class="top"><span class="gpu"><b>GPU ${esc(l.gpu)}</b>${gIdx.length>1?` <small class="stamp">(${gIdx.length} cards)</small>`:""} · ${esc(l.project)} <span class="stamp">/ ${esc(l.experiment)}</span></span><span class="state ${st}">${emo(st)}${label}</span></div>
   <div class="kv"><span>wave</span><span class="mono">${esc(l.wave_id)}${adopted?' <span class="pill" title="adopted from a live tmux session; no orchestrator has reported yet">adopted</span>':""}</span>
-  <span>run</span><span>${params(l.active_run||(l.observed&&l.observed.run&&l.observed.run.path),{hideDirs:true})||"?"}${l.progress?` <span style="color:var(--busy)" title="as last reported by the orchestrator">${esc(l.progress)}</span>`:""}</span>
+  <span>run</span><span>${runParams(rig.rig+"/"+l.gpu,l.active_run||(l.observed&&l.observed.run&&l.observed.run.path))}${l.progress?` <span style="color:var(--busy)" title="as last reported by the orchestrator">${esc(l.progress)}</span>`:""}</span>
   ${liveRows(l,nowMs)}
   <span>wave ETA</span><span>${l.eta?until(l.eta,nowMs)+(l.eta_basis?` <small class="stamp">· ${esc(l.eta_basis)}</small>`:""):adopted?`<i>none yet</i> <small class="stamp">· adopted from the live tmux session; the orchestrator has not reported progress for this lane</small>`:`<i>none yet</i> <small class="stamp">· ${esc(l.eta_basis?l.eta_basis.replace(/^unavailable:\s*/,""):"waiting for the orchestrator's first ten-minute report")}</small>`}</span>
   ${tot?`<span>runs</span><span>${done??"?"} / ${tot} done${overall!=null?` · overall <b>${pct2(overall,tot)}</b> <small class="stamp">(finished runs plus ${frac>0?pct2(frac,1)+" of the current one":"nothing of the current one yet"})</small>`:""}</span>`:""}</div>
