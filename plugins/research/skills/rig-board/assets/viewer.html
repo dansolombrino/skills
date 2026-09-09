@@ -83,7 +83,7 @@ main{display:grid;gap:14px;padding:16px 20px;grid-template-columns:repeat(auto-f
 .bar i{display:block;height:100%;background:var(--busy);transition:width .4s}
 .bar.stacked{display:flex}.bar.stacked i{display:block;height:100%}.bar.stacked i.seg-completed{background:var(--free)}.bar.stacked i.seg-failed{background:var(--bad)}.bar.stacked i.seg-running{background:var(--busy)}.bar.stacked i.seg-pending{background:var(--pend)}
 .f-completed{color:var(--free)}.f-failed,.f-timeout{color:var(--bad)}.f-cancelled{color:var(--warn)}
-.bar.free i{background:var(--free)}.bar.lvl.lo i{background:var(--free)}.bar.lvl.mid i{background:var(--warn)}.bar.lvl.hi i{background:var(--bad)}
+.bar.free i{background:var(--free)}.bar.ramp i{transition:none}
 .gauges{display:flex;flex-direction:column;gap:1px;margin-top:5px;font-size:11px;color:var(--muted);min-width:0}
 .gauges div{display:flex;align-items:center;gap:6px;min-width:0}.gauges .gl{width:26px;flex:0 0 auto}.gauges .gx{margin-left:auto;white-space:nowrap}.gauges .barrow{flex:1;margin-top:0;min-width:0}.gauges .bar{height:5px}
 
@@ -200,8 +200,15 @@ function drawHeader(d,nowMs){const s=d.summary||{};$("stamp").innerHTML=`board r
 
 // ── cards ──
 const blocks=(a,b,n)=>{const f=b>0?Math.max(0,Math.min(1,a/b)):0;const full=Math.round(f*n);return "█".repeat(full)+"░".repeat(n-full)};
-const level=(a,b)=>{const p=b>0?100*a/b:0;return p>=85?"hi":p>=60?"mid":"lo"};
-const lbar=(a,b,title)=>bar(a,b,"lvl "+level(a,b),title);
+// Same ramp as the Claude Code status line: hue 120 (green) → 0 (red) over 0–100 % used,
+// integer HSV→RGB with SAT=90, VAL=78 (C=179, m=19).
+const rampRGB=p=>{p=Math.max(0,Math.min(100,Math.round(p)));const C=Math.floor(255*78*90/10000),m=Math.floor(255*78/100)-C;const h=120-Math.floor(120*p/100);let r,g;
+  if(h<60){const x=Math.floor(C*h/60);r=C+m;g=x+m}else{const x=Math.floor(C*(120-h)/60);r=x+m;g=C+m}return `rgb(${r},${g},${m})`};
+const RAMP=Array.from({length:11},(_,i)=>`${rampRGB(i*10)} ${i*10}%`).join(",");
+// The fill is painted with the whole ramp stretched to the track width, so its leading edge sits
+// at the colour of the current value, exactly like the status-line meter.
+const lbar=(a,b,title)=>{const p=b>0?Math.max(0,Math.min(100,100*a/b)):0;const fill=p>0?`<i style="width:${p}%;background:linear-gradient(90deg,${RAMP});background-size:${10000/p}% 100%"></i>`:"";
+  return `<div class="barrow" title="${esc(title||"")}"><div class="bar ramp">${fill}</div><small class="pct" style="color:${rampRGB(p)}">${pct2(a,b)}</small></div>`};
 function gpuGauges(g){if(!g)return "";const tot=g.memory_total_mib,used=g.memory_used_mib;
   return `<div class="gauges"><div><span class="gl">mem</span>${lbar(used,tot||0,mib(used)+" of "+mib(tot))}<small class="gx">${esc(mib(used))}</small></div><div><span class="gl">util</span>${lbar(g.utilization||0,100,"GPU utilization (nvidia-smi reports whole percent)")}${g.temperature_c!=null?`<small class="gx">${g.temperature_c}°C${g.power_w!=null?" · "+g.power_w+" W":""}</small>`:""}</div></div>`}
 function gpuName(g){if(!g||!g.name)return "";const short=g.name.replace(/^NVIDIA\s+/,"").replace(/\bGeForce\s+/,"").replace(/\s+Server Edition$/,"").replace(/\s+Blackwell\b/,"");return `<abbr title="${esc(g.name)}">${esc(short)}</abbr>`+(g.memory_total_mib?` · ${esc(mib(g.memory_total_mib))}`:"")}
