@@ -63,7 +63,9 @@ Set `RIGSYNC_REGISTRY` or pass `--registry` to use another registry.
    `nvidia-smi` failed (GPU state unknown, never "free"); and for each Slurm target its running
    and pending jobs, folded into sweep groups with the varying configuration per job and the
    group's completed / failed / cancelled / timeout counts (from `sacct`, last three days) as a
-   share of its total. Open the
+   share of its total, and the account budgets from `saldo` (hours used and left, this month's
+   allowance, expiry, flagged when exhausted, used up for the month or expiring; nightly data,
+   so today's jobs are not yet counted). Open the
    report with a message-written timestamp as `experiments-tracking` requires. If a cluster is
    unreachable because SSH authentication failed, say that the certificate needs renewing
    (`sweep-dispatch` → `references/cineca-slurm.md`). `history` answers "what happened while
@@ -97,7 +99,8 @@ copy buttons for `tmux attach` and the project path; foreign cards with the owni
 process, memory and age; a collapsed list of stray sessions), a Slurm card that folds sweep
 jobs into groups (running / pending / completed / failed counts with their share of everything
 submitted in the accounting window, a stacked bar, end-time window, earliest pending start,
-shared configuration, per job the varying part of the name), a filter box, state chips, free-first sort, light/dark
+shared configuration, per job the varying part of the name) with the account budgets above the
+queue and footnotes for the nightly lag and the accounting unit, a filter box, state chips, free-first sort, light/dark
 theme, optional browser notifications on lane changes, and a "history" panel of the last 24 h.
 The tab title and favicon carry the free count. Polling pauses while the pointer is over a
 card or text is selected, and a lost server shows the last good read as stale. `/api/board`

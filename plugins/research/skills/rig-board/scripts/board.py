@@ -314,9 +314,10 @@ def claim(config: BoardConfig, args: argparse.Namespace) -> int:
             "active_run": existing.get("active_run") if existing else None,
             "progress": existing.get("progress") if existing else None,
             "eta": existing.get("eta") if existing else None,
-            "eta_basis": existing.get("eta_basis") if existing else None,
+            # an adopted lane carried a placeholder basis; the orchestrator now owns the lane
+            "eta_basis": (existing.get("eta_basis") if existing and not (existing.get("observed") or {}).get("adopted") else None),
             "updated_at": stamp,
-            "observed": (existing or {}).get("observed", {"at": None, "session_alive": None, "state": "claimed"}),
+            "observed": {k: v for k, v in (existing or {}).get("observed", {"at": None, "session_alive": None, "state": "claimed"}).items() if k != "adopted"},
         }
         write_json(path, lane)
         append_history(config, "reclaim" if existing else "claim", rig=rig.name, gpu=gpu, session=session)
@@ -578,8 +579,11 @@ SACCT_WINDOW = "now-3days"
 SACCT_FORMAT = "JobID,JobName%256,State,End,WorkDir%256,Account,QOS"
 SQUEUE_SCRIPT = (
     f"squeue --me --noheader --format='{SQUEUE_FORMAT}'; echo __SACCT__; "
-    f"sacct -X -P --noheader -S {SACCT_WINDOW} --format={SACCT_FORMAT} 2>/dev/null; echo __SQUEUE_OK__"
+    f"sacct -X -P --noheader -S {SACCT_WINDOW} --format={SACCT_FORMAT} 2>/dev/null; "
+    "echo __SALDO__; saldo -b -n 2>/dev/null; echo __SQUEUE_OK__"
 )
+BUDGET_EXPIRING_DAYS = 30
+BUDGET_LOW_PCT = 90.0
 FINISHED_STATES = {"COMPLETED": "completed", "FAILED": "failed", "CANCELLED": "cancelled", "TIMEOUT": "timeout", "OUT_OF_MEMORY": "failed", "NODE_FAIL": "failed", "DEADLINE": "timeout", "PREEMPTED": "cancelled", "BOOT_FAIL": "failed"}
 FINISHED_KINDS = ("completed", "failed", "cancelled", "timeout")
 
@@ -631,8 +635,91 @@ def parse_sacct(text: str) -> list[dict]:
     return finished
 
 
+def _saldo_date(raw: str) -> str | None:
+    try:
+        return datetime.strptime(raw, "%Y%m%d").date().isoformat()
+    except ValueError:
+        return None
+
+
+def parse_saldo(text: str, in_use: set[str] | None = None) -> list[dict]:
+    """`saldo -b -n` rows (CINECA budgets): account, validity, total / consumed / monthly local hours.
+
+    Adds derived fields: remaining hours, days to expiry, whether the account is currently in use
+    on the queue, and a status flag. Accounts are compared case-insensitively because Slurm lowers
+    them (`iscrc_qatt`) while saldo keeps the original case (`IscrC_QATT`)."""
+    today = now().date()
+    used = {a.lower() for a in (in_use or set())}
+    rows: list[dict] = []
+    for line in text.splitlines():
+        cells = line.split()
+        if len(cells) < 9 or cells[0] == "account":
+            continue
+        try:
+            total, local, consumed = float(cells[3]), float(cells[4]), float(cells[5])
+            pct = float(cells[6])
+            month_total, month_consumed = float(cells[7]), float(cells[8])
+        except ValueError:
+            continue
+        start, end = _saldo_date(cells[1]), _saldo_date(cells[2])
+        end_date = datetime.fromisoformat(end).date() if end else None
+        days_left = (end_date - today).days if end_date else None
+        remaining = total - consumed
+        month_remaining = (month_total - month_consumed) if month_total else None
+        if days_left is not None and days_left < 0:
+            status = "expired"
+        elif remaining <= 0:
+            status = "exhausted"
+        elif month_total and month_consumed >= month_total:
+            status = "month_exhausted"
+        elif days_left is not None and days_left <= BUDGET_EXPIRING_DAYS:
+            status = "expiring"
+        elif pct >= BUDGET_LOW_PCT or (month_total and 100 * month_consumed / month_total >= BUDGET_LOW_PCT):
+            status = "low"
+        else:
+            status = "ok"
+        rows.append(
+            {
+                "account": cells[0],
+                "start": start,
+                "end": end,
+                "days_left": days_left,
+                "total_h": total,
+                "local_consumed_h": local,
+                "consumed_h": consumed,
+                "consumed_pct": pct,
+                "remaining_h": remaining,
+                "month_total_h": month_total or None,
+                "month_consumed_h": month_consumed,
+                "month_remaining_h": month_remaining,
+                "month_pct": (100 * month_consumed / month_total) if month_total else None,
+                "in_use": cells[0].lower() in used,
+                "status": status,
+            }
+        )
+    rows.sort(key=lambda r: (not r["in_use"], r["status"] == "expired", r["end"] or ""))
+    return rows
+
+
+def budget_alerts(cluster: dict) -> list[str]:
+    """Human lines for budgets that block or threaten the accounts in use."""
+    alerts: list[str] = []
+    for b in cluster.get("budgets", []):
+        if not b.get("in_use") or b.get("status") in ("ok", "low"):
+            continue
+        text = {
+            "expired": f"expired {b['end']}",
+            "exhausted": f"exhausted ({b['consumed_pct']:.1f}% of {b['total_h']:.0f} h used)",
+            "month_exhausted": f"monthly allowance used up ({b['month_consumed_h']:.0f} of {b['month_total_h']:.0f} h)",
+            "expiring": f"expires {b['end']} ({b['days_left']} days)",
+        }.get(b["status"], b["status"])
+        alerts.append(f"{cluster['rig']} account {b['account']}: {text}")
+    return alerts
+
+
 def parse_slurm_probe(target: SlurmTarget, output: str) -> dict:
-    queue_text, _, sacct_text = output.partition("__SACCT__")
+    queue_text, _, rest = output.partition("__SACCT__")
+    sacct_text, _, saldo_text = rest.partition("__SALDO__")
     jobs: list[dict] = []
     for line in queue_text.splitlines():
         if line.strip() == "__SQUEUE_OK__" or "|" not in line:
@@ -655,6 +742,7 @@ def parse_slurm_probe(target: SlurmTarget, output: str) -> dict:
     order = {"RUNNING": 0, "COMPLETING": 1, "CONFIGURING": 2, "PENDING": 3}
     jobs.sort(key=lambda j: (order.get(j["state"], 9), j["job_id"]))
     finished = parse_sacct(sacct_text)
+    in_use = {j["account"] for j in [*jobs, *finished] if j.get("account")}
     return {
         "rig": target.name,
         "kind": "slurm",
@@ -662,6 +750,8 @@ def parse_slurm_probe(target: SlurmTarget, output: str) -> dict:
         "reachable": True,
         "jobs": jobs,
         "finished": finished,
+        "budgets": parse_saldo(saldo_text, in_use),
+        "budgets_at": iso(now()) if saldo_text.strip() else None,
         "finished_window": SACCT_WINDOW,
         "groups": group_jobs(jobs, finished),
         "running": sum(1 for j in jobs if j["state"] == "RUNNING"),
@@ -831,6 +921,8 @@ def unreachable_slurm_probe(target: SlurmTarget, previous: dict | None, reason: 
         "reason": reason,
         "jobs": previous.get("jobs", []),
         "finished": previous.get("finished", []),
+        "budgets": previous.get("budgets", []),
+        "budgets_at": previous.get("budgets_at"),
         "accounts": previous.get("accounts", []),
         "finished_window": previous.get("finished_window", SACCT_WINDOW),
         "groups": previous.get("groups", group_jobs(list(previous.get("jobs", [])), list(previous.get("finished", [])))),
@@ -1022,6 +1114,7 @@ def snapshot(config: BoardConfig) -> dict:
             "reason": None,
             "jobs": [],
             "groups": [],
+            "budgets": [],
             "running": 0,
             "pending": 0,
         }
@@ -1071,6 +1164,7 @@ def summarize(rigs: list[dict], slurm: list[dict]) -> dict:
         next_free.pop("_eta")
     counts["slurm_running"] = sum(int(c.get("running") or 0) for c in slurm)
     counts["slurm_pending"] = sum(int(c.get("pending") or 0) for c in slurm)
+    counts["budget_alerts"] = [line for c in slurm for line in budget_alerts(c)]
     counts["next_free"] = next_free
     return counts
 
@@ -1233,6 +1327,8 @@ def status(config: BoardConfig, args: argparse.Namespace) -> int:
         nf = summary["next_free"]
         line += f" · next ETA {nf['rig']} gpu{nf['gpu']} ({nf['project']}) {nf['eta']}"
     print(line)
+    for alert in summary.get("budget_alerts", []):
+        print(f"budget alert: {alert}")
     for rig in data["rigs"]:
         reach = "unreachable" if rig["reachable"] is False else ("never probed" if rig["reachable"] is None else f"probed {age(rig['at'])} ago")
         print(f"\n{rig['rig']}  [{reach}]" + ("  shared" if rig.get("shared") else ""))
@@ -1268,6 +1364,15 @@ def status(config: BoardConfig, args: argparse.Namespace) -> int:
             + (f"; last {cluster.get('finished_window', SACCT_WINDOW).replace('now-', '')}: {done}" if done else "")
             + (f"  account {', '.join(cluster['accounts'])}" if cluster.get("accounts") else "")
         )
+        for b in cluster.get("budgets", []):
+            if not b.get("in_use") and b.get("status") == "expired":
+                continue
+            month = f"  month {b['month_consumed_h']:.0f}/{b['month_total_h']:.0f} h ({b['month_pct']:.2f}%)" if b.get("month_total_h") else ""
+            flag = "" if b["status"] == "ok" else f"  [{b['status'].replace('_', ' ')}]"
+            print(
+                f"  budget {b['account']:<16} {b['consumed_h']:.0f}/{b['total_h']:.0f} h ({b['consumed_pct']:.2f}%)  remaining {b['remaining_h']:.0f} h"
+                f"{month}  until {b['end']} ({b['days_left']} d){'  in use' if b.get('in_use') else ''}{flag}  (saldo, nightly)"
+            )
         if not cluster["jobs"]:
             print("  no jobs in the queue")
         groups = cluster.get("groups") or group_jobs(list(cluster["jobs"]), list(cluster.get("finished", [])))

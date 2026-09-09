@@ -94,6 +94,18 @@ cluster) and the experiment is the `scripts/NNN_…/NNN_…` chain in the job's 
 carries its Slurm account (the cluster project id that is charged) and QOS; the group and the
 card list the accounts in use.
 
+## Cluster budgets
+
+The Slurm probe also runs `saldo -b -n` (CINECA's budget report). Each account row keeps its
+validity window, total / consumed / monthly local hours, and gets `remaining_h`,
+`month_remaining_h`, `days_left`, `in_use` (an account charged by a queued or recently finished
+job) and a `status`: `ok`, `low` (≥ 90 % of the total or of the month), `expiring` (≤ 30 days),
+`month_exhausted`, `exhausted`, `expired`. The monthly rule outranks expiry because it blocks
+submissions first. Budgets of accounts in use that are not `ok` or `low` become
+`summary.budget_alerts`, counted under the viewer's issues tile. `saldo` is recomputed by
+CINECA overnight, so consumed hours lag by up to a day; the viewer says so in its footnotes and
+shows local hours verbatim, never converted.
+
 ## History
 
 `history.jsonl` keeps every event. `board.py history` and `/api/history` read it newest first,

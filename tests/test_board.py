@@ -378,6 +378,22 @@ class BoardTests(unittest.TestCase):
         assert lane is not None
         self.assertEqual(lane["observed"]["state"], "running")
 
+    def test_reclaim_after_adoption_clears_the_placeholder_basis(self) -> None:
+        probe = probe_output([SESSION], [(0, 8000, 90)], "2026-09-01 08:00:00")
+        self.reconcile_with({"rig-4090": probe, "behemoth": probe})
+        lane = self.lane()
+        assert lane is not None
+        self.assertTrue(lane["observed"]["adopted"])
+        self.assertTrue(lane["eta_basis"].startswith("unavailable:"))
+        code, out, _ = self.claim()
+        self.assertEqual(code, 0)
+        self.assertIn("[claimed]", out)
+        lane = self.lane()
+        assert lane is not None
+        self.assertIsNone(lane["eta_basis"])
+        self.assertNotIn("adopted", lane["observed"])
+        self.assertEqual(lane["runs_total"], 6)
+
     def test_reconcile_adopts_live_session_without_a_lane(self) -> None:
         session = "other_proj_002_ablation_20260908-093000_behemoth_gpu0"
         code, out = self.reconcile_with(
@@ -509,7 +525,12 @@ class BoardTests(unittest.TestCase):
             "90|old_wave_20260901-000000_leonardo_gpu0|TIMEOUT|2026-09-08T23:00:00",
             "91|eval_3|OUT_OF_MEMORY|2026-09-08T22:00:00",
         ]
-        output = "\n".join(lines) + "\n__SACCT__\n" + "\n".join(sacct) + "\n__SQUEUE_OK__\n"
+        saldo = [
+            "IscrC_OLD           20250620    20260320         80000               86430         86430           108.0             0                  0",
+            "IscrC_QATT          20260702    20270402         68000                   0             0             0.0          7445                  0",
+            "IscrC_SOON          20260101    20260920         10000                9500          9500            95.0          1000                200",
+        ]
+        output = "\n".join(lines) + "\n__SACCT__\n" + "\n".join(sacct) + "\n__SALDO__\n" + "\n".join(saldo) + "\n__SQUEUE_OK__\n"
         probe = probe_output([], [(0, 0, 0)], "2026-09-01 08:00:00")
         code, out = self.reconcile_with({"rig-4090": probe, "behemoth": probe}, {"leonardo": (output, "")})
         self.assertIn("leonardo: 7 jobs appeared (PENDING) [203…301]", out)
@@ -521,6 +542,24 @@ class BoardTests(unittest.TestCase):
         self.assertEqual((sweep["project"], sweep["experiment"], sweep["wave_id"]), ("qat-transfer", "000_finetune/000_vision/001_class_subsets", "20260909-121443"))
         self.assertEqual((sweep["accounts"], sweep["qos"]), (["iscrc_qatt"], ["normal", "boost_qos_dbg"]))
         self.assertEqual(cluster["accounts"], ["iscrc_qatt"])
+        budgets = {b["account"]: b for b in cluster["budgets"]}
+        qatt = budgets["IscrC_QATT"]
+        self.assertTrue(qatt["in_use"])
+        self.assertEqual((qatt["status"], qatt["remaining_h"], qatt["month_total_h"], qatt["month_remaining_h"], qatt["end"]), ("ok", 68000.0, 7445.0, 7445.0, "2027-04-02"))
+        self.assertEqual(budgets["IscrC_OLD"]["status"], "expired")
+        self.assertFalse(budgets["IscrC_OLD"]["in_use"])
+        self.assertEqual(budgets["IscrC_SOON"]["status"], "expiring")
+        self.assertEqual([b["account"] for b in cluster["budgets"]][0], "IscrC_QATT")
+        data = json.loads(self.run_cli("status", "--json")[1])
+        self.assertEqual(data["summary"]["budget_alerts"], [])
+        with mock.patch.object(board, "now", return_value=datetime.fromisoformat("2027-03-20T10:00:00+02:00")):
+            expiring = board.parse_saldo(saldo[1], {"iscrc_qatt"})[0]
+        self.assertEqual((expiring["status"], expiring["days_left"]), ("expiring", 13))
+        self.assertEqual(board.budget_alerts({"rig": "leonardo", "budgets": [expiring]}), ["leonardo account IscrC_QATT: expires 2027-04-02 (13 days)"])
+        used_up = board.parse_saldo("IscrC_X 20260101 20270101 100 100 100 100.0 10 10", {"iscrc_x"})[0]
+        self.assertEqual(used_up["status"], "exhausted")
+        monthly = board.parse_saldo("IscrC_Y 20260101 20270101 100 10 10 10.0 10 10", {"iscrc_y"})[0]
+        self.assertEqual(monthly["status"], "month_exhausted")
         self.assertEqual(by_id_acct := {j["job_id"]: j.get("account") for j in cluster["finished"]}["150"], "iscrc_qatt")
         self.assertEqual(by_project := {j["job_id"]: j["project_inferred"] for j in cluster["jobs"]}["200"], "qat-transfer")
         self.assertEqual((sweep["running"], sweep["pending"], len(sweep["jobs"])), (3, 5, 8))
@@ -543,6 +582,9 @@ class BoardTests(unittest.TestCase):
         code, out, _ = self.run_cli("status")
         self.assertIn("── qat-transfer · wave 20260909-121443  boost  account iscrc_qatt  qos normal, boost_qos_dbg  12 total: 3 running (left 0:20:00…0:20:00) · 5 pending", out)
         self.assertIn("account iscrc_qatt", out.split("leonardo  [slurm")[1].splitlines()[0])
+        self.assertIn("budget IscrC_QATT       0/68000 h (0.00%)  remaining 68000 h  month 0/7445 h (0.00%)  until 2027-04-02", out)
+        self.assertIn("budget IscrC_SOON", out)
+        self.assertNotIn("budget IscrC_OLD", out)
         self.assertIn("experiment: 000_finetune/000_vision/001_class_subsets", out)
         self.assertIn("2 completed (16.67%) · 1 failed (8.33%) · 1 cancelled (8.33%)", out)
         self.assertIn("last 3days: 2 completed, 2 failed, 1 cancelled, 1 timeout", out)

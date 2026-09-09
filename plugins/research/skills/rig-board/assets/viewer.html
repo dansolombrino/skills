@@ -98,6 +98,7 @@ details ul{margin:4px 0 0;padding-left:18px;font-size:12px}
 .empty{color:var(--muted);padding:20px;text-align:center}
 .paused{color:var(--warn);font-size:12px}
 footer{color:var(--faint);font-size:11px;padding:0 20px 16px}
+.notes{color:var(--muted);font-size:12px;padding:4px 20px 12px;border-top:1px solid var(--line);margin:8px 20px 0;padding-left:0;padding-right:0}.notes div{margin:4px 0}.notes sup,sup a{color:var(--accent);text-decoration:none;font-size:10px}
 @media(max-width:600px){header{padding:10px 12px 8px}main{padding:12px;gap:10px}.hist{padding:0 12px 12px}.tile{min-width:52px}.kv{grid-template-columns:1fr}.kv span:nth-child(odd){margin-top:3px}}
 </style></head><body>
 <header>
@@ -123,6 +124,11 @@ footer{color:var(--faint);font-size:11px;padding:0 20px 16px}
 <div class="banner" id="banner" hidden></div>
 <main id="main"></main>
 <section class="hist" id="hist" hidden></section>
+<section class="notes" id="notes">
+  <div id="fn-saldo"><sup>1</sup> Budgets come from the cluster's <code>saldo -b</code>, which CINECA recomputes overnight: consumed hours lag by up to a day, so today's jobs are not yet counted. Flags: <i>expiring</i> within 30 days, <i>low</i> above 90% of the total or of the month, <i>exhausted</i> and <i>month used up</i> when nothing is left.</div>
+  <div id="fn-localh"><sup>2</sup> "Local hours" are CINECA's accounting unit for this cluster, not wall-clock GPU hours; the board shows them as reported and does not convert them.</div>
+  <div id="fn-month"><sup>3</sup> The monthly allowance is the share of the budget released for the current month; reaching it blocks new submissions until the next month even when total hours remain.</div>
+</section>
 <footer id="foot"></footer>
 <script>
 "use strict";
@@ -168,18 +174,19 @@ document.addEventListener("click",async e=>{const b=e.target.closest("button.cop
 function laneState(l){const st=(l.observed&&l.observed.state)||"claimed";if(st==="running"&&l.observed&&l.observed.orchestrator_silent_s!=null&&l.observed.orchestrator_silent_s>1800)return "silent";return st}
 function laneKey(rig,l){return rig+" GPU "+l.gpu}
 function rigMatches(rig,q){if(!q)return true;const hay=[rig.rig,...(rig.lanes||[]).flatMap(l=>[l.project,l.experiment,l.wave_id,l.active_run,l.progress,l.tmux_session]),...(rig.gpus||[]).flatMap(g=>(g.processes||[]).flatMap(p=>[p.user,p.name])),...(rig.jobs||[]).flatMap(j=>[j.name,j.project,j.experiment,j.job_id,j.partition,j.nodes])].join(" ").toLowerCase();return hay.includes(q)}
-function rigCats(rig){const c=new Set();if(rig.kind==="slurm"){c.add("slurm");return c}
+function rigCats(rig){const c=new Set();if(rig.kind==="slurm"){c.add("slurm");if(rig.reachable===false||(rig.budgets||[]).some(b=>b.in_use&&!["ok","low"].includes(b.status)))c.add("issues");return c}
   if((rig.free_gpus||[]).length)c.add("free");if((rig.lanes||[]).length)c.add("held");if((rig.foreign||[]).length)c.add("foreign");
   if(rig.reachable===false||rig.gpu_probe_ok===false||(rig.lanes||[]).some(l=>["interrupted","silent","unreachable"].includes(laneState(l))))c.add("issues");return c}
 function visible(rig){if(!rigMatches(rig,ui.q))return false;if(!ui.states.size)return true;const c=rigCats(rig);for(const s of ui.states)if(c.has(s))return true;return false}
 
 // ── header ──
 function drawHeader(d,nowMs){const s=d.summary||{};$("stamp").innerHTML=`board read ${esc(clock(d.generated_at))}`;
-  const tiles=[["free","free",s.free,"free GPUs"],["held","held",s.held,"held GPUs"],["foreign","foreign",s.foreign,"foreign GPUs"],["issues","bad",(s.interrupted||0)+(s.unreachable_rigs||0),"interrupted / unreachable"],["issues","warn",s.silent||0,"silent orchestrators"],["slurm","pend",(s.slurm_running||0)+"+"+(s.slurm_pending||0),"slurm running+pending"]];
+  const tiles=[["free","free",s.free,"free GPUs"],["held","held",s.held,"held GPUs"],["foreign","foreign",s.foreign,"foreign GPUs"],["issues","bad",(s.interrupted||0)+(s.unreachable_rigs||0)+((s.budget_alerts||[]).length),"interrupted / unreachable / budget"],["issues","warn",s.silent||0,"silent orchestrators"],["slurm","pend",(s.slurm_running||0)+"+"+(s.slurm_pending||0),"slurm running+pending"]];
   $("tiles").innerHTML=tiles.map(([k,cls,v,l])=>`<div class="tile ${cls} ${ui.states.has(k)?"on":""}" data-s="${k}" title="click to filter"><b>${esc(v??"?")}</b><small>${l}</small></div>`).join("");
   for(const b of $("chips").querySelectorAll("button"))b.classList.toggle("on",ui.states.has(b.dataset.s));
   $("freefirst").classList.toggle("on",ui.freeFirst);$("notif").textContent="notify: "+(ui.notify?"on":"off");$("notif").classList.toggle("on",ui.notify);$("histbtn").classList.toggle("on",ui.hist);
-  const nf=s.next_free;$("next").innerHTML=nf?`Next lane expected to free: <b>${esc(nf.rig)} GPU ${esc(nf.gpu)}</b> (${esc(nf.project)} / ${esc(nf.experiment)}) ${until(nf.eta,nowMs)}${nf.eta_basis?` <small class="stamp">· ${esc(nf.eta_basis)}</small>`:""}`:(s.held?`<span class="stamp">No lane has reported an ETA yet.</span>`:`<span class="stamp">Nothing is held on the board.</span>`);
+  const alerts=(s.budget_alerts||[]).map(a=>`<div style="color:var(--bad)"><b>Budget:</b> ${esc(a)}<sup><a href="#fn-saldo">1</a></sup></div>`).join("");
+  const nf=s.next_free;$("next").innerHTML=alerts+nf?`Next lane expected to free: <b>${esc(nf.rig)} GPU ${esc(nf.gpu)}</b> (${esc(nf.project)} / ${esc(nf.experiment)}) ${until(nf.eta,nowMs)}${nf.eta_basis?` <small class="stamp">· ${esc(nf.eta_basis)}</small>`:""}`:(s.held?`<span class="stamp">No lane has reported an ETA yet.</span>`:`<span class="stamp">Nothing is held on the board.</span>`);
   const sv=d.serve||{};let rec="";if(sv.reconciling)rec="probing rigs now…";else if(sv.last_reconcile_at&&sv.reconcile_every_s){const next=Date.parse(sv.last_reconcile_at)+sv.reconcile_every_s*1000-nowMs;rec=`rigs probed ${fmtAge((nowMs-Date.parse(sv.last_reconcile_at))/1000)} ago · next in ${fmtAge(next/1000)}`}else if(sv.reconcile_every_s===null)rec="viewer does not probe (reconcile disabled)";
   if(sv.last_reconcile_error)rec+=` · <span style="color:var(--bad)">last reconcile failed: ${esc(sv.last_reconcile_error)}</span>`;$("recon").innerHTML=rec;
   $("rootpath").textContent=d.board_root||"";
@@ -200,7 +207,7 @@ function laneHtml(rig,l,gpus,nowMs){const st=laneState(l);const gIdx=String(l.gp
   return `<div class="lane ${st}"><div class="top"><span class="gpu"><b>GPU ${esc(l.gpu)}</b>${gIdx.length>1?` <small class="stamp">(${gIdx.length} cards)</small>`:""} · ${esc(l.project)} <span class="stamp">/ ${esc(l.experiment)}</span></span><span class="state ${st}">${label}</span></div>
   <div class="kv"><span>wave</span><span class="mono">${esc(l.wave_id)}${adopted?' <span class="pill" title="adopted from a live tmux session; no orchestrator has reported yet">adopted</span>':""}</span>
   <span>run</span><span class="mono">${esc(l.active_run||"?")}${l.progress?` <span style="color:var(--busy)">${esc(l.progress)}</span>`:""}</span>
-  <span>ETA</span><span>${until(l.eta,nowMs)}${l.eta_basis?` <small class="stamp">· ${esc(l.eta_basis)}</small>`:""}</span>
+  <span>ETA</span><span>${l.eta?until(l.eta,nowMs)+(l.eta_basis?` <small class="stamp">· ${esc(l.eta_basis)}</small>`:""):adopted?`<i>none yet</i> <small class="stamp">· adopted from the live tmux session; the orchestrator has not reported progress for this lane</small>`:`<i>none yet</i> <small class="stamp">· ${esc(l.eta_basis?l.eta_basis.replace(/^unavailable:\s*/,""):"waiting for the orchestrator's first ten-minute report")}</small>`}</span>
   ${tot?`<span>runs</span><span>${done??"?"} / ${tot} done${pct!=null?` <small class="stamp">(${pct}%)</small>`:""}</span>`:""}</div>
   ${pct!=null?bar(done,tot,"",done+" of "+tot+" runs done"):""}${note}
   ${g?gpuGauges(g):""}
@@ -240,6 +247,14 @@ function slurmCard(c,nowMs){const card=document.createElement("section");card.cl
   if((c.accounts||[]).length)card.querySelector(".sub").insertAdjacentHTML("beforeend",`<span title="Slurm account (the cluster project id) charged by these jobs">account <span class="mono">${esc(c.accounts.join(", "))}</span></span>`);
   const byGroup=new Map();for(const j of jobs){const k=j.group??j.name;if(!byGroup.has(k))byGroup.set(k,[]);byGroup.get(k).push(j)}
   const groups=(c.groups&&c.groups.length)?c.groups:[...byGroup.keys()].map(k=>({key:k,jobs:byGroup.get(k).map(j=>j.job_id),running:byGroup.get(k).filter(j=>j.state==="RUNNING").length,pending:byGroup.get(k).filter(j=>j.state==="PENDING").length,other:0}));
+  const budgets=(c.budgets||[]).filter(b=>b.in_use||b.status!=="expired");const oldB=(c.budgets||[]).filter(b=>!b.in_use&&b.status==="expired");
+  for(const b of budgets){const st=b.status;const cls=st==="ok"?"free":st==="low"||st==="expiring"?"silent":"interrupted";
+    const label={ok:"budget ok",low:"budget low",expiring:"expiring",expired:"expired",exhausted:"exhausted",month_exhausted:"month used up"}[st]||st;
+    card.insertAdjacentHTML("beforeend",`<div class="lane ${cls}"><div class="top"><span class="gpu"><b>${esc(b.account)}</b> <span class="stamp">budget<sup><a href="#fn-saldo">1</a></sup></span>${b.in_use?' <span class="pill">in use</span>':""}</span><span class="state ${cls}">${label}</span></div>
+      <div class="kv"><span>total</span><span>${fmtH(b.consumed_h)} of ${fmtH(b.total_h)} h<sup><a href="#fn-localh">2</a></sup> used · <b>${fmtH(b.remaining_h)} h left</b>${bar(b.consumed_h,b.total_h,st==="ok"?"free":"","consumed share of the whole budget")}</span>
+      ${b.month_total_h?`<span>this month</span><span>${fmtH(b.month_consumed_h)} of ${fmtH(b.month_total_h)} h<sup><a href="#fn-month">3</a></sup> · <b>${fmtH(b.month_remaining_h)} h left</b>${bar(b.month_consumed_h,b.month_total_h,st==="ok"?"free":"","consumed share of this month's allowance")}</span>`:""}
+      <span>valid</span><span>${esc(b.start||"?")} → ${esc(b.end||"?")}${b.days_left!=null?` <small class="stamp">· ${b.days_left<0?"ended "+(-b.days_left)+" days ago":b.days_left+" days left"}</small>`:""}</span></div></div>`)}
+  if(oldB.length){const k=c.rig+"/oldbudgets";card.insertAdjacentHTML("beforeend",`<details data-key="${esc(k)}" ${open.has(k)?"open":""}><summary>${oldB.length} expired account${oldB.length>1?"s":""} not in use</summary><div class="kv">${oldB.map(b=>`<span class="mono">${esc(b.account)}</span><span>${fmtH(b.consumed_h)} of ${fmtH(b.total_h)} h (${b.consumed_pct.toFixed(2)}%) · ended ${esc(b.end)}</span>`).join("")}</div></details>`)}
   const doneOnly=[];
   for(const g of groups){const members=byGroup.get(g.key)||[];const fd=g.finished||{};const ft=g.finished_total||0;const total=g.total||members.length;
     if(!members.length){doneOnly.push(g);continue}
@@ -261,6 +276,7 @@ function slurmCard(c,nowMs){const card=document.createElement("section");card.cl
       <details data-key="${esc(k)}" ${open.has(k)?"open":""}><summary>${members.length} jobs${g.partition?" · "+esc(g.partition):""}</summary><div>${members.map(j=>jobRow(j,nowMs,true)).join("")}</div></details></div>`)}
   if(doneOnly.length){const k=c.rig+"/done";card.insertAdjacentHTML("beforeend",`<details data-key="${esc(k)}" ${open.has(k)?"open":""}><summary>${doneOnly.length} sweep${doneOnly.length>1?"s":""} finished in the last ${esc(F)} (nothing queued)</summary><div class="kv">${doneOnly.map(g=>`<span>${g.project?`<b>${esc(g.project)}</b> `:""}<span class="mono">${esc(g.wave_id?"wave "+g.wave_id:g.key)}</span></span><span>${["completed","failed","cancelled","timeout"].filter(x=>g.finished[x]).map(x=>`<b class="f-${x}">${g.finished[x]} ${x}</b> <small class="stamp">(${pct2(g.finished[x],g.total)})</small>`).join(" · ")}${g.last_end?` <small class="stamp">· last ended ${ago(g.last_end,nowMs)}</small>`:""}</span>`).join("")}</div></details>`)}
   return card}
+const fmtH=n=>n==null?"?":Math.round(n).toLocaleString();
 function stacked(parts,total,title){const segs=parts.filter(([,n])=>n>0).map(([k,n])=>`<i class="seg-${k}" style="width:${total>0?100*n/total:0}%"></i>`).join("");return `<div class="barrow" title="${esc(title||"")}"><div class="bar stacked">${segs}</div><small class="pct">${pct2(parts[0][1],total)}</small></div>`}
 function hms(s){if(!s)return null;const p=String(s).split("-");let days=0,t=p[0];if(p.length===2){days=+p[0];t=p[1]}const parts=t.split(":").map(Number);if(parts.some(isNaN))return null;let sec=0;for(const x of parts)sec=sec*60+x;if(parts.length===1)sec*=60;return days*86400+sec}
 
