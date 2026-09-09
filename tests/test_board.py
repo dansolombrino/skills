@@ -498,7 +498,16 @@ class BoardTests(unittest.TestCase):
         lines.append("300|eval_7|PENDING|Resources|boost||0:00|1:00:00|N/A|2026-09-09T11:30:00")
         lines.append("301|eval_8|PENDING|Resources|boost||0:00|1:00:00|N/A|2026-09-09T11:30:00")
         lines.append("302|qat_003_sweep_20260908-101500_leonardo_gpu1|RUNNING|None|boost|lrdn9|0:40:00|1:20:00|2026-09-08T10:20:00|2026-09-08T10:15:00")
-        output = "\n".join(lines) + "\n__SQUEUE_OK__\n"
+        sacct = [
+            "150|20260909-121443__model=vit,seed=1,pct=5,combo=0|COMPLETED|2026-09-09T11:50:00",
+            "151|20260909-121443__model=vit,seed=1,pct=5,combo=1|COMPLETED|2026-09-09T11:52:00",
+            "152|20260909-121443__model=vit,seed=1,pct=5,combo=2|FAILED|2026-09-09T11:40:00",
+            "153|20260909-121443__model=vit,seed=1,pct=5,combo=3|CANCELLED by 1000|2026-09-09T11:41:00",
+            "200|20260909-121443__model=vit,seed=1,pct=10,combo=0|RUNNING|Unknown",
+            "90|old_wave_20260901-000000_leonardo_gpu0|TIMEOUT|2026-09-08T23:00:00",
+            "91|eval_3|OUT_OF_MEMORY|2026-09-08T22:00:00",
+        ]
+        output = "\n".join(lines) + "\n__SACCT__\n" + "\n".join(sacct) + "\n__SQUEUE_OK__\n"
         probe = probe_output([], [(0, 0, 0)], "2026-09-01 08:00:00")
         code, out = self.reconcile_with({"rig-4090": probe, "behemoth": probe}, {"leonardo": (output, "")})
         self.assertIn("leonardo: 7 jobs appeared (PENDING) [203…301]", out)
@@ -508,6 +517,14 @@ class BoardTests(unittest.TestCase):
         groups = {g["key"]: g for g in cluster["groups"]}
         sweep = groups["20260909-121443"]
         self.assertEqual((sweep["running"], sweep["pending"], len(sweep["jobs"])), (3, 5, 8))
+        self.assertEqual(sweep["finished"], {"completed": 2, "failed": 1, "cancelled": 1, "timeout": 0})
+        self.assertEqual((sweep["finished_total"], sweep["total"], sweep["last_end"]), (4, 12, "2026-09-09T11:52:00"))
+        self.assertEqual((cluster["completed"], cluster["failed"], cluster["cancelled"], cluster["timeout"]), (2, 2, 1, 1))
+        self.assertEqual([j["job_id"] for j in cluster["finished"]][:2], ["151", "150"])
+        self.assertEqual(groups["eval"]["finished"]["failed"], 1)
+        self.assertEqual(groups["eval"]["total"], 3)
+        old_wave = groups["old_wave / 20260901-000000 · wave 20260901-000000"] if "old_wave / 20260901-000000 · wave 20260901-000000" in groups else None
+        self.assertTrue(any(g["jobs"] == [] and g["finished"]["timeout"] == 1 for g in cluster["groups"]))
         self.assertEqual(sweep["common"], "model=vit,seed=1")
         self.assertEqual(sweep["min_time_left"], "0:20:00")
         self.assertEqual(sweep["reasons"], ["Priority"])
@@ -517,7 +534,9 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(groups["eval"]["jobs"], ["300", "301"])
         self.assertEqual(groups["qat / 003_sweep · wave 20260908-101500"]["running"], 1)
         code, out, _ = self.run_cli("status")
-        self.assertIn("── 20260909-121443  boost  3 running (left 0:20:00…0:20:00) · 5 pending", out)
+        self.assertIn("── 20260909-121443  boost  12 total: 3 running (left 0:20:00…0:20:00) · 5 pending", out)
+        self.assertIn("2 completed (16.67%) · 1 failed (8.33%) · 1 cancelled (8.33%)", out)
+        self.assertIn("last 3days: 2 completed, 2 failed, 1 cancelled, 1 timeout", out)
         self.assertIn("common: model=vit,seed=1", out)
         self.assertIn("… 5 more in this group (status --all lists every job)", out)
         code, out, _ = self.run_cli("status", "--all")

@@ -557,7 +557,14 @@ def unreachable_probe(rig: Rig, previous: dict | None) -> dict:
 
 SQUEUE_FIELDS = ["job_id", "name", "state", "reason", "partition", "nodes", "elapsed", "time_left", "start", "submitted"]
 SQUEUE_FORMAT = "%i|%j|%T|%r|%P|%N|%M|%L|%S|%V"
-SQUEUE_SCRIPT = f"squeue --me --noheader --format='{SQUEUE_FORMAT}'; echo __SQUEUE_OK__"
+SACCT_WINDOW = "now-3days"
+SACCT_FORMAT = "JobID,JobName%256,State,End"
+SQUEUE_SCRIPT = (
+    f"squeue --me --noheader --format='{SQUEUE_FORMAT}'; echo __SACCT__; "
+    f"sacct -X -P --noheader -S {SACCT_WINDOW} --format={SACCT_FORMAT} 2>/dev/null; echo __SQUEUE_OK__"
+)
+FINISHED_STATES = {"COMPLETED": "completed", "FAILED": "failed", "CANCELLED": "cancelled", "TIMEOUT": "timeout", "OUT_OF_MEMORY": "failed", "NODE_FAIL": "failed", "DEADLINE": "timeout", "PREEMPTED": "cancelled", "BOOT_FAIL": "failed"}
+FINISHED_KINDS = ("completed", "failed", "cancelled", "timeout")
 
 
 def run_slurm_probe(target: SlurmTarget) -> tuple[str | None, str]:
@@ -580,9 +587,31 @@ def run_slurm_probe(target: SlurmTarget) -> tuple[str | None, str]:
     return None, last[:160]
 
 
+def parse_sacct(text: str) -> list[dict]:
+    """Finished jobs from `sacct -X -P`; running/pending ones are the queue's business."""
+    finished: list[dict] = []
+    for line in text.splitlines():
+        cells = line.split("|")
+        if len(cells) != 4 or not cells[0].strip():
+            continue
+        job_id, name, state, end = (cell.strip() for cell in cells)
+        kind = FINISHED_STATES.get(state.split()[0] if state else "")
+        if kind is None:
+            continue
+        job = {"job_id": job_id, "name": name, "state": state.split()[0], "kind": kind, "end": end or None}
+        parsed = parse_session_name(name) or {}
+        job["project"] = parsed.get("project")
+        job["experiment"] = parsed.get("experiment")
+        job["wave_id"] = parsed.get("wave_id")
+        finished.append(job)
+    finished.sort(key=lambda j: (j["end"] or "", j["job_id"]), reverse=True)
+    return finished
+
+
 def parse_slurm_probe(target: SlurmTarget, output: str) -> dict:
+    queue_text, _, sacct_text = output.partition("__SACCT__")
     jobs: list[dict] = []
-    for line in output.splitlines():
+    for line in queue_text.splitlines():
         if line.strip() == "__SQUEUE_OK__" or "|" not in line:
             continue
         cells = line.split("|")
@@ -599,15 +628,19 @@ def parse_slurm_probe(target: SlurmTarget, output: str) -> dict:
         jobs.append(job)
     order = {"RUNNING": 0, "COMPLETING": 1, "CONFIGURING": 2, "PENDING": 3}
     jobs.sort(key=lambda j: (order.get(j["state"], 9), j["job_id"]))
+    finished = parse_sacct(sacct_text)
     return {
         "rig": target.name,
         "kind": "slurm",
         "at": iso(now()),
         "reachable": True,
         "jobs": jobs,
-        "groups": group_jobs(jobs),
+        "finished": finished,
+        "finished_window": SACCT_WINDOW,
+        "groups": group_jobs(jobs, finished),
         "running": sum(1 for j in jobs if j["state"] == "RUNNING"),
         "pending": sum(1 for j in jobs if j["state"] == "PENDING"),
+        **{kind: sum(1 for j in finished if j["kind"] == kind) for kind in FINISHED_KINDS},
     }
 
 
@@ -629,15 +662,32 @@ def job_group_key(job: dict) -> tuple[str, str]:
     return TRAILING_INDEX_RE.sub("", name) or name, name
 
 
-def group_jobs(jobs: list[dict]) -> list[dict]:
-    """Fold a queue into groups; annotates every job with `group` and `variant` in place."""
+def new_group(key: str, partition: str | None) -> dict:
+    return {
+        "key": key, "jobs": [], "_varying": [], "running": 0, "pending": 0, "other": 0, "nodes": [], "partition": partition,
+        "finished": {kind: 0 for kind in FINISHED_KINDS}, "finished_total": 0, "total": 0, "last_end": None,
+    }
+
+
+def group_jobs(jobs: list[dict], finished: list[dict] | None = None) -> list[dict]:
+    """Fold a queue (plus recently finished jobs) into groups; annotates every queued job with
+    `group` and `variant` in place. A group's `total` is queued + finished, so the finished
+    shares are fractions of everything the sweep submitted within the accounting window."""
     groups: dict[str, dict] = {}
+    for job in finished or []:
+        key, _ = job_group_key(job)
+        job["group"] = key
+        group = groups.setdefault(key, new_group(key, None))
+        group["finished"][job["kind"]] += 1
+        group["finished_total"] += 1
+        if job.get("end") and (group["last_end"] is None or job["end"] > group["last_end"]):
+            group["last_end"] = job["end"]
     for job in jobs:
         key, varying = job_group_key(job)
         job["group"] = key
-        group = groups.setdefault(
-            key, {"key": key, "jobs": [], "_varying": [], "running": 0, "pending": 0, "other": 0, "nodes": [], "partition": job.get("partition")}
-        )
+        group = groups.setdefault(key, new_group(key, job.get("partition")))
+        if group["partition"] is None:
+            group["partition"] = job.get("partition")
         group["jobs"].append(job["job_id"])
         group["_varying"].append(varying)
         state = job.get("state")
@@ -651,6 +701,7 @@ def group_jobs(jobs: list[dict]) -> list[dict]:
             group["other"] += 1
     out: list[dict] = []
     for key, group in groups.items():
+        group["total"] = len(group["jobs"]) + group["finished_total"]
         token_lists = [v.split(",") if v else [] for v in group.pop("_varying")]
         common = set(token_lists[0]) if token_lists and token_lists[0] else set()
         for tokens in token_lists[1:]:
@@ -668,7 +719,7 @@ def group_jobs(jobs: list[dict]) -> list[dict]:
         group["earliest_start"] = min((j["start"] for j in pending if j.get("start")), default=None)
         group["reasons"] = sorted({j["reason"] for j in pending if j.get("reason")})
         out.append(group)
-    out.sort(key=lambda g: (-g["running"], -g["pending"], g["key"]))
+    out.sort(key=lambda g: (-g["running"], -g["pending"], -(g["finished_total"]), g["key"]))
     return out
 
 
@@ -732,7 +783,10 @@ def unreachable_slurm_probe(target: SlurmTarget, previous: dict | None, reason: 
         "reachable": False,
         "reason": reason,
         "jobs": previous.get("jobs", []),
-        "groups": previous.get("groups", group_jobs(list(previous.get("jobs", [])))),
+        "finished": previous.get("finished", []),
+        "finished_window": previous.get("finished_window", SACCT_WINDOW),
+        "groups": previous.get("groups", group_jobs(list(previous.get("jobs", [])), list(previous.get("finished", [])))),
+        **{kind: previous.get(kind, 0) for kind in FINISHED_KINDS},
         "running": previous.get("running", 0),
         "pending": previous.get("pending", 0),
         "last_reachable_at": previous.get("at") if previous.get("reachable") else previous.get("last_reachable_at"),
@@ -1160,20 +1214,29 @@ def status(config: BoardConfig, args: argparse.Namespace) -> int:
             reach = "never probed"
         else:
             reach = f"probed {age(cluster['at'])} ago"
-        print(f"\n{cluster['rig']}  [slurm, {reach}]  {cluster.get('running', 0)} running, {cluster.get('pending', 0)} pending")
+        done = ", ".join(f"{cluster.get(kind, 0)} {kind}" for kind in FINISHED_KINDS if cluster.get(kind))
+        print(
+            f"\n{cluster['rig']}  [slurm, {reach}]  {cluster.get('running', 0)} running, {cluster.get('pending', 0)} pending"
+            + (f"; last {cluster.get('finished_window', SACCT_WINDOW).replace('now-', '')}: {done}" if done else "")
+        )
         if not cluster["jobs"]:
             print("  no jobs in the queue")
-        groups = cluster.get("groups") or group_jobs(list(cluster["jobs"]))
+        groups = cluster.get("groups") or group_jobs(list(cluster["jobs"]), list(cluster.get("finished", [])))
         for group in groups:
-            if len(group["jobs"]) > 1:
+            if len(group["jobs"]) > 1 or group.get("finished_total"):
                 tail = []
+                total = group.get("total") or len(group["jobs"])
                 if group["running"]:
                     tail.append(f"{group['running']} running (left {group['min_time_left']}…{group['max_time_left']})")
                 if group["pending"]:
                     tail.append(f"{group['pending']} pending (earliest start {group['earliest_start'] or '?'}; {', '.join(group['reasons']) or '?'})")
                 if group["other"]:
                     tail.append(f"{group['other']} other")
-                print(f"  ── {group['key']}  {group.get('partition') or ''}  {' · '.join(tail)}")
+                for kind in FINISHED_KINDS:
+                    n = (group.get("finished") or {}).get(kind, 0)
+                    if n:
+                        tail.append(f"{n} {kind} ({100 * n / total:.2f}%)")
+                print(f"  ── {group['key']}  {group.get('partition') or ''}  {total} total: {' · '.join(tail)}")
                 if group.get("common"):
                     print(f"     common: {group['common']}")
         by_group: dict[str, list[dict]] = {}

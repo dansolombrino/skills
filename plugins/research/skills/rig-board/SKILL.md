@@ -61,7 +61,9 @@ Set `RIGSYNC_REGISTRY` or pass `--registry` to use another registry.
    owning user, process and memory (and "idle, holding memory" when it holds VRAM at ~0% util);
    stray experiment-looking tmux sessions that are not lanes; unreachable rigs and rigs whose
    `nvidia-smi` failed (GPU state unknown, never "free"); and for each Slurm target its running
-   and pending jobs, folded into sweep groups with the varying configuration per job. Open the
+   and pending jobs, folded into sweep groups with the varying configuration per job and the
+   group's completed / failed / cancelled / timeout counts (from `sacct`, last three days) as a
+   share of its total. Open the
    report with a message-written timestamp as `experiments-tracking` requires. If a cluster is
    unreachable because SSH authentication failed, say that the certificate needs renewing
    (`sweep-dispatch` → `references/cineca-slurm.md`). `history` answers "what happened while
@@ -93,8 +95,9 @@ GPU (free with model, VRAM and utilization gauges; running / claimed / silent / 
 unreachable lanes with holder, wave, run, progress, ETA, held-since, orchestrator age and
 copy buttons for `tmux attach` and the project path; foreign cards with the owning user,
 process, memory and age; a collapsed list of stray sessions), a Slurm card that folds sweep
-jobs into groups (counts, end-time window, earliest pending start, shared configuration, per
-job the varying part of the name), a filter box, state chips, free-first sort, light/dark
+jobs into groups (running / pending / completed / failed counts with their share of everything
+submitted in the accounting window, a stacked bar, end-time window, earliest pending start,
+shared configuration, per job the varying part of the name), a filter box, state chips, free-first sort, light/dark
 theme, optional browser notifications on lane changes, and a "history" panel of the last 24 h.
 The tab title and favicon carry the free count. Polling pauses while the pointer is over a
 card or text is selected, and a lost server shows the last good read as stale. `/api/board`

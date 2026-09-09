@@ -78,6 +78,8 @@ main{display:grid;gap:14px;padding:16px 20px;grid-template-columns:repeat(auto-f
 .barrow{display:flex;align-items:center;gap:6px;margin-top:6px}.barrow .bar{flex:1;margin-top:0}.pct{font-variant-numeric:tabular-nums;color:var(--muted);font-size:11px;min-width:52px;text-align:right}
 .bar{height:6px;background:var(--line);border-radius:3px;margin-top:6px;overflow:hidden;position:relative}
 .bar i{display:block;height:100%;background:var(--busy);transition:width .4s}
+.bar.stacked{display:flex}.bar.stacked i{display:block;height:100%}.bar.stacked i.seg-completed{background:var(--free)}.bar.stacked i.seg-failed{background:var(--bad)}.bar.stacked i.seg-running{background:var(--busy)}.bar.stacked i.seg-pending{background:var(--pend)}
+.f-completed{color:var(--free)}.f-failed,.f-timeout{color:var(--bad)}.f-cancelled{color:var(--warn)}
 .bar.mem i{background:var(--foreign)}.bar.free i{background:var(--free)}.bar.util i{background:var(--pend)}
 .gauges{display:flex;gap:10px;margin-top:5px;font-size:11px;color:var(--muted)}
 .gauges div{flex:1}
@@ -233,9 +235,14 @@ function slurmCard(c,nowMs){const card=document.createElement("section");card.cl
   const jobs=c.jobs||[];if(jobs.length>3)card.classList.add("wide");card.innerHTML=`<h2><span class="name">${esc(c.rig)} <span class="pill">slurm · read-only</span></span><span class="pill ${cls}">${reach}</span></h2><div class="sub"><span>${c.running||0} running</span><span>${c.pending||0} pending</span>${jobs.length-(c.running||0)-(c.pending||0)>0?`<span>${jobs.length-(c.running||0)-(c.pending||0)} other</span>`:""}</div>`;
   if(c.reachable===false&&c.reason)card.insertAdjacentHTML("beforeend",`<div class="lane unreachable"><div class="meta" style="margin:0;color:var(--bad)">${esc(c.reason)}${/certificate|authentication/i.test(c.reason)?" — renew the cluster certificate; the queue below is the last known state.":""}</div></div>`);
   if(!jobs.length)card.insertAdjacentHTML("beforeend",`<div class="lane free"><div class="top"><span>queue empty</span><span class="state free">idle</span></div></div>`);
+  const F=c.finished_window?String(c.finished_window).replace("now-","").replace(/(\d)([a-z])/,"$1 $2"):"3 days";const fin=["completed","failed","cancelled","timeout"].map(k=>[k,c[k]||0]).filter(([,n])=>n);
+  if(fin.length)card.querySelector(".sub").insertAdjacentHTML("beforeend",fin.map(([k,n])=>`<span class="f-${k}">${n} ${k}</span>`).join("")+`<span>in the last ${esc(F)}</span>`);
   const byGroup=new Map();for(const j of jobs){const k=j.group??j.name;if(!byGroup.has(k))byGroup.set(k,[]);byGroup.get(k).push(j)}
   const groups=(c.groups&&c.groups.length)?c.groups:[...byGroup.keys()].map(k=>({key:k,jobs:byGroup.get(k).map(j=>j.job_id),running:byGroup.get(k).filter(j=>j.state==="RUNNING").length,pending:byGroup.get(k).filter(j=>j.state==="PENDING").length,other:0}));
-  for(const g of groups){const members=byGroup.get(g.key)||[];if(members.length===1){card.insertAdjacentHTML("beforeend",jobRow(members[0],nowMs,false));continue}
+  const doneOnly=[];
+  for(const g of groups){const members=byGroup.get(g.key)||[];const fd=g.finished||{};const ft=g.finished_total||0;const total=g.total||members.length;
+    if(!members.length){doneOnly.push(g);continue}
+    if(members.length===1&&!ft){card.insertAdjacentHTML("beforeend",jobRow(members[0],nowMs,false));continue}
     const st=g.running?"running":g.pending?"pending":"interrupted";const k=c.rig+"/"+g.key;const commonK=k+"/common";
     const running=members.filter(j=>j.state==="RUNNING"),pending=members.filter(j=>j.state==="PENDING");
     const ends=running.map(j=>hms(j.time_left)).filter(x=>x!=null);const endMin=ends.length?Math.min(...ends):null,endMax=ends.length?Math.max(...ends):null;
@@ -243,12 +250,15 @@ function slurmCard(c,nowMs){const card=document.createElement("section");card.cl
     const runPct=members.length?Math.round(100*g.running/members.length):0;
     card.insertAdjacentHTML("beforeend",`<div class="lane ${st}"><div class="top"><span class="gpu mono" style="font-weight:600">${esc(g.key)}</span><span class="state ${st}">${members.length} jobs</span></div>
       <div class="kv"><span>state</span><span><b style="color:var(--busy)">${g.running} running</b> · <b style="color:var(--pend)">${g.pending} pending</b>${g.other?` · ${g.other} other`:""}${nodes.size?` <small class="stamp">on ${nodes.size} node${nodes.size>1?"s":""}</small>`:""}</span>
+      ${ft?`<span>finished</span><span>${["completed","failed","cancelled","timeout"].filter(k=>fd[k]).map(k=>`<b class="f-${k}">${fd[k]} ${k}</b> <small class="stamp">(${pct2(fd[k],total)})</small>`).join(" · ")} <small class="stamp">of ${total} submitted in the last ${esc(F)}</small></span>`:""}
       ${ends.length?`<span>running end</span><span>${endMin===endMax?`in <b>${fmtAge(endMin)}</b>`:`between <b>${fmtAge(endMin)}</b> and <b>${fmtAge(endMax)}</b> from now`} <small class="stamp">(${esc(clock(new Date(nowMs+endMin*1000).toISOString()))}${endMin===endMax?"":" – "+esc(clock(new Date(nowMs+endMax*1000).toISOString()))})</small></span>`:""}
       ${pending.length?`<span>pending</span><span>earliest start ${starts.length?until(starts[0],nowMs):"<i>unknown</i>"}${g.reasons&&g.reasons.length?` <small class="stamp">· ${esc(g.reasons.join(", "))}</small>`:""}</span>`:""}
-      </div>${bar(g.running,members.length,"",g.running+" of "+members.length+" jobs running")}
+      </div>${ft?stacked([["completed",fd.completed||0],["failed",(fd.failed||0)+(fd.cancelled||0)+(fd.timeout||0)],["running",g.running],["pending",g.pending]],total,`${fd.completed||0} completed · ${(fd.failed||0)+(fd.cancelled||0)+(fd.timeout||0)} not completed · ${g.running} running · ${g.pending} pending`):bar(g.running,members.length,"",g.running+" of "+members.length+" jobs running")}
       ${g.common?`<details data-key="${esc(commonK)}" ${open.has(commonK)?"open":""}><summary>shared configuration</summary><div class="mono" style="word-break:break-all;margin-top:3px">${esc(g.common.split(",").join(", "))}</div></details>`:""}
       <details data-key="${esc(k)}" ${open.has(k)?"open":""}><summary>${members.length} jobs${g.partition?" · "+esc(g.partition):""}</summary><div>${members.map(j=>jobRow(j,nowMs,true)).join("")}</div></details></div>`)}
+  if(doneOnly.length){const k=c.rig+"/done";card.insertAdjacentHTML("beforeend",`<details data-key="${esc(k)}" ${open.has(k)?"open":""}><summary>${doneOnly.length} sweep${doneOnly.length>1?"s":""} finished in the last ${esc(F)} (nothing queued)</summary><div class="kv">${doneOnly.map(g=>`<span class="mono">${esc(g.key)}</span><span>${["completed","failed","cancelled","timeout"].filter(x=>g.finished[x]).map(x=>`<b class="f-${x}">${g.finished[x]} ${x}</b> <small class="stamp">(${pct2(g.finished[x],g.total)})</small>`).join(" · ")}${g.last_end?` <small class="stamp">· last ended ${ago(g.last_end,nowMs)}</small>`:""}</span>`).join("")}</div></details>`)}
   return card}
+function stacked(parts,total,title){const segs=parts.filter(([,n])=>n>0).map(([k,n])=>`<i class="seg-${k}" style="width:${total>0?100*n/total:0}%"></i>`).join("");return `<div class="barrow" title="${esc(title||"")}"><div class="bar stacked">${segs}</div><small class="pct">${pct2(parts[0][1],total)}</small></div>`}
 function hms(s){if(!s)return null;const p=String(s).split("-");let days=0,t=p[0];if(p.length===2){days=+p[0];t=p[1]}const parts=t.split(":").map(Number);if(parts.some(isNaN))return null;let sec=0;for(const x of parts)sec=sec*60+x;if(parts.length===1)sec*=60;return days*86400+sec}
 
 function draw(){if(!last)return;const nowMs=Date.now();drawHeader(last,nowMs);

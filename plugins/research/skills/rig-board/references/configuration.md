@@ -20,7 +20,9 @@ token  = "<output of board.py token>"                # optional; required for an
   `hostname` matches the current machine is probed locally, without self-SSH.
 - A Slurm target goes under `slurm`, never under `rigs`. The cluster has jobs, not lanes: the
   board shows `squeue --me` (running and pending jobs with reason, partition, node, elapsed and
-  time left) under `rigs/<name>.json` with `kind = "slurm"`, and nothing on it can be claimed.
+  time left) plus `sacct` for the last three days (finished jobs as completed / failed /
+  cancelled / timeout, so a sweep's total and its finished share are known) under
+  `rigs/<name>.json` with `kind = "slurm"`, and nothing on it can be claimed.
   A job leaves the card when it leaves the queue. Job names that follow the lane session
   convention are split into project, experiment and wave. When the login node refuses the
   connection the card says why (typically an expired cluster certificate) and keeps the last
