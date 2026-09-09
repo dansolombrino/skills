@@ -83,10 +83,10 @@ main{display:grid;gap:14px;padding:16px 20px;grid-template-columns:repeat(auto-f
 .bar i{display:block;height:100%;background:var(--busy);transition:width .4s}
 .bar.stacked{display:flex}.bar.stacked i{display:block;height:100%}.bar.stacked i.seg-completed{background:var(--free)}.bar.stacked i.seg-failed{background:var(--bad)}.bar.stacked i.seg-running{background:var(--busy)}.bar.stacked i.seg-pending{background:var(--pend)}
 .f-completed{color:var(--free)}.f-failed,.f-timeout{color:var(--bad)}.f-cancelled{color:var(--warn)}
-.bar.mem i{background:var(--foreign)}.bar.free i{background:var(--free)}.bar.util i{background:var(--pend)}
+.bar.free i{background:var(--free)}.bar.lvl.lo i{background:var(--free)}.bar.lvl.mid i{background:var(--warn)}.bar.lvl.hi i{background:var(--bad)}
 .gauges{display:flex;flex-direction:column;gap:1px;margin-top:5px;font-size:11px;color:var(--muted);min-width:0}
-.gauges div{display:flex;align-items:baseline;gap:6px;min-width:0}.gauges .gl{width:26px;flex:0 0 auto}.gauges .gx{margin-left:auto;white-space:nowrap}
-.tbar{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;letter-spacing:-.5px;white-space:nowrap}.tbar .blk.empty{color:var(--line2)!important}.tbar.mem .blk{color:var(--foreign)}.tbar.util .blk{color:var(--pend)}.tbar .pct{min-width:0;color:var(--ink);letter-spacing:0}
+.gauges div{display:flex;align-items:center;gap:6px;min-width:0}.gauges .gl{width:26px;flex:0 0 auto}.gauges .gx{margin-left:auto;white-space:nowrap}.gauges .barrow{flex:1;margin-top:0;min-width:0}.gauges .bar{height:5px}
+
 .copy{padding:1px 6px;font-size:11px;border-radius:4px;background:transparent}
 .copy.ok{color:var(--free);border-color:var(--free)}
 abbr,[title]{text-decoration:none;cursor:help}
@@ -200,9 +200,10 @@ function drawHeader(d,nowMs){const s=d.summary||{};$("stamp").innerHTML=`board r
 
 // ── cards ──
 const blocks=(a,b,n)=>{const f=b>0?Math.max(0,Math.min(1,a/b)):0;const full=Math.round(f*n);return "█".repeat(full)+"░".repeat(n-full)};
-const tbar=(a,b,cls,title)=>{const f=b>0?Math.max(0,Math.min(1,a/b)):0;const n=12,full=Math.round(f*n);return `<span class="tbar ${cls||""}" title="${esc(title||"")}"><span class="blk">${"█".repeat(full)}</span><span class="blk empty">${"░".repeat(n-full)}</span> <span class="pct">${pct2(a,b)}</span></span>`};
+const level=(a,b)=>{const p=b>0?100*a/b:0;return p>=85?"hi":p>=60?"mid":"lo"};
+const lbar=(a,b,title)=>bar(a,b,"lvl "+level(a,b),title);
 function gpuGauges(g){if(!g)return "";const tot=g.memory_total_mib,used=g.memory_used_mib;
-  return `<div class="gauges"><div><span class="gl">mem</span>${tbar(used,tot||0,"mem",mib(used)+" of "+mib(tot))}<small class="gx">${esc(mib(used))}</small></div><div><span class="gl">util</span>${tbar(g.utilization||0,100,"util","GPU utilization (nvidia-smi reports whole percent)")}${g.temperature_c!=null?`<small class="gx">${g.temperature_c}°C${g.power_w!=null?" · "+g.power_w+" W":""}</small>`:""}</div></div>`}
+  return `<div class="gauges"><div><span class="gl">mem</span>${lbar(used,tot||0,mib(used)+" of "+mib(tot))}<small class="gx">${esc(mib(used))}</small></div><div><span class="gl">util</span>${lbar(g.utilization||0,100,"GPU utilization (nvidia-smi reports whole percent)")}${g.temperature_c!=null?`<small class="gx">${g.temperature_c}°C${g.power_w!=null?" · "+g.power_w+" W":""}</small>`:""}</div></div>`}
 function gpuName(g){if(!g||!g.name)return "";const short=g.name.replace(/^NVIDIA\s+/,"").replace(/\bGeForce\s+/,"").replace(/\s+Server Edition$/,"").replace(/\s+Blackwell\b/,"");return `<abbr title="${esc(g.name)}">${esc(short)}</abbr>`+(g.memory_total_mib?` · ${esc(mib(g.memory_total_mib))}`:"")}
 function procList(g){const ps=(g&&g.processes)||[];if(!ps.length)return "";return `<div class="kv">${ps.map(p=>`<span>${esc(p.user||"?")}</span><span class="mono" title="${esc(p.name||"")}">${esc(base(p.name))} · pid ${p.pid} · ${esc(mib(p.memory_mib))}${p.elapsed_s!=null?" · running "+fmtAge(p.elapsed_s):""}</span>`).join("")}</div>`}
 const EMO={free:"🟢",running:"🟠",claimed:"🟡",silent:"🔇",interrupted:"🔴",unreachable:"⚫",unknown:"❓",foreign:"🟣",pending:"🔵",idle:"🟢",unverified:"❓",
