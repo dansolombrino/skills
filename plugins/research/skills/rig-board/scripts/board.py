@@ -555,10 +555,27 @@ def unreachable_probe(rig: Rig, previous: dict | None) -> dict:
     }
 
 
-SQUEUE_FIELDS = ["job_id", "name", "state", "reason", "partition", "nodes", "elapsed", "time_left", "start", "submitted"]
-SQUEUE_FORMAT = "%i|%j|%T|%r|%P|%N|%M|%L|%S|%V"
+SQUEUE_FIELDS = ["job_id", "name", "state", "reason", "partition", "nodes", "elapsed", "time_left", "start", "submitted", "workdir", "command"]
+SQUEUE_REQUIRED = 10  # older probes carried no workdir/command
+SQUEUE_FORMAT = "%i|%j|%T|%r|%P|%N|%M|%L|%S|%V|%Z|%o"
+EXPERIMENT_PATH_RE = re.compile(r"(?:^|/)scripts/((?:\d{3}_[^/]+/)*\d{3}_[^/]+)(?:/|$)")
+
+
+def infer_project(job: dict) -> str | None:
+    """Project for a job that does not follow the lane naming: the basename of its working directory."""
+    if job.get("project"):
+        return job["project"]
+    workdir = (job.get("workdir") or "").rstrip("/")
+    return workdir.rsplit("/", 1)[-1] or None if workdir else None
+
+
+def infer_experiment(job: dict) -> str | None:
+    if job.get("experiment"):
+        return job["experiment"]
+    match = EXPERIMENT_PATH_RE.search(job.get("command") or "")
+    return match.group(1) if match else None
 SACCT_WINDOW = "now-3days"
-SACCT_FORMAT = "JobID,JobName%256,State,End"
+SACCT_FORMAT = "JobID,JobName%256,State,End,WorkDir%256"
 SQUEUE_SCRIPT = (
     f"squeue --me --noheader --format='{SQUEUE_FORMAT}'; echo __SACCT__; "
     f"sacct -X -P --noheader -S {SACCT_WINDOW} --format={SACCT_FORMAT} 2>/dev/null; echo __SQUEUE_OK__"
@@ -591,18 +608,19 @@ def parse_sacct(text: str) -> list[dict]:
     """Finished jobs from `sacct -X -P`; running/pending ones are the queue's business."""
     finished: list[dict] = []
     for line in text.splitlines():
-        cells = line.split("|")
-        if len(cells) != 4 or not cells[0].strip():
+        cells = [cell.strip() for cell in line.split("|")]
+        if len(cells) < 4 or not cells[0]:
             continue
-        job_id, name, state, end = (cell.strip() for cell in cells)
+        job_id, name, state, end = cells[:4]
         kind = FINISHED_STATES.get(state.split()[0] if state else "")
         if kind is None:
             continue
-        job = {"job_id": job_id, "name": name, "state": state.split()[0], "kind": kind, "end": end or None}
+        job = {"job_id": job_id, "name": name, "state": state.split()[0], "kind": kind, "end": end or None, "workdir": cells[4] if len(cells) > 4 else None}
         parsed = parse_session_name(name) or {}
         job["project"] = parsed.get("project")
         job["experiment"] = parsed.get("experiment")
         job["wave_id"] = parsed.get("wave_id")
+        job["project_inferred"] = infer_project(job)
         finished.append(job)
     finished.sort(key=lambda j: (j["end"] or "", j["job_id"]), reverse=True)
     return finished
@@ -615,16 +633,19 @@ def parse_slurm_probe(target: SlurmTarget, output: str) -> dict:
         if line.strip() == "__SQUEUE_OK__" or "|" not in line:
             continue
         cells = line.split("|")
-        if len(cells) != len(SQUEUE_FIELDS):
+        if len(cells) < SQUEUE_REQUIRED:
             continue
+        cells = cells[: len(SQUEUE_FIELDS)] + [""] * (len(SQUEUE_FIELDS) - len(cells))
         job = dict(zip(SQUEUE_FIELDS, (cell.strip() for cell in cells)))
         parsed = parse_session_name(job["name"]) or {}
         job["project"] = parsed.get("project")
         job["experiment"] = parsed.get("experiment")
         job["wave_id"] = parsed.get("wave_id")
-        for key in ("reason", "nodes", "start"):
+        for key in ("reason", "nodes", "start", "workdir", "command"):
             if job[key] in ("None", "N/A", "(null)", ""):
                 job[key] = None
+        job["project_inferred"] = infer_project(job)
+        job["experiment_inferred"] = infer_experiment(job)
         jobs.append(job)
     order = {"RUNNING": 0, "COMPLETING": 1, "CONFIGURING": 2, "PENDING": 3}
     jobs.sort(key=lambda j: (order.get(j["state"], 9), j["job_id"]))
@@ -656,17 +677,31 @@ def job_group_key(job: dict) -> tuple[str, str]:
     if job.get("wave_id") and job.get("project"):
         return f"{job['project']} / {job['experiment']} · wave {job['wave_id']}", ""
     name = job.get("name") or ""
+    project = infer_project(job)
     if "__" in name:
         prefix, _, rest = name.partition("__")
-        return prefix, rest
-    return TRAILING_INDEX_RE.sub("", name) or name, name
+        return (f"{project} · wave {prefix}" if project else prefix), rest
+    base = TRAILING_INDEX_RE.sub("", name) or name
+    return (f"{project} · {base}" if project else base), name
 
 
 def new_group(key: str, partition: str | None) -> dict:
     return {
         "key": key, "jobs": [], "_varying": [], "running": 0, "pending": 0, "other": 0, "nodes": [], "partition": partition,
         "finished": {kind: 0 for kind in FINISHED_KINDS}, "finished_total": 0, "total": 0, "last_end": None,
+        "project": None, "experiment": None, "wave_id": None,
     }
+
+
+def describe_group(group: dict, job: dict) -> None:
+    """Fill the group's project / experiment / wave from the first job that knows them."""
+    if group["project"] is None:
+        group["project"] = infer_project(job)
+    if group["experiment"] is None:
+        group["experiment"] = infer_experiment(job)
+    if group["wave_id"] is None:
+        name = job.get("name") or ""
+        group["wave_id"] = job.get("wave_id") or (name.partition("__")[0] if "__" in name and WAVE_RE.fullmatch(name.partition("__")[0]) else None)
 
 
 def group_jobs(jobs: list[dict], finished: list[dict] | None = None) -> list[dict]:
@@ -678,6 +713,7 @@ def group_jobs(jobs: list[dict], finished: list[dict] | None = None) -> list[dic
         key, _ = job_group_key(job)
         job["group"] = key
         group = groups.setdefault(key, new_group(key, None))
+        describe_group(group, job)
         group["finished"][job["kind"]] += 1
         group["finished_total"] += 1
         if job.get("end") and (group["last_end"] is None or job["end"] > group["last_end"]):
@@ -686,6 +722,7 @@ def group_jobs(jobs: list[dict], finished: list[dict] | None = None) -> list[dic
         key, varying = job_group_key(job)
         job["group"] = key
         group = groups.setdefault(key, new_group(key, job.get("partition")))
+        describe_group(group, job)
         if group["partition"] is None:
             group["partition"] = job.get("partition")
         group["jobs"].append(job["job_id"])
@@ -1237,6 +1274,8 @@ def status(config: BoardConfig, args: argparse.Namespace) -> int:
                     if n:
                         tail.append(f"{n} {kind} ({100 * n / total:.2f}%)")
                 print(f"  ── {group['key']}  {group.get('partition') or ''}  {total} total: {' · '.join(tail)}")
+                if group.get("experiment") and group["experiment"] not in group["key"]:
+                    print(f"     experiment: {group['experiment']}")
                 if group.get("common"):
                     print(f"     common: {group['common']}")
         by_group: dict[str, list[dict]] = {}

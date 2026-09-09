@@ -86,8 +86,11 @@ naming convention, a hand-made session) is reported as a *stray session*: shown,
 Slurm queue diffs are folded when more than five jobs change the same way in one probe
 (`leonardo: 140 jobs appeared (PENDING) [id…id]`), so an array submission is one history line.
 Jobs are grouped for display: lane-convention names by project / experiment / wave, `<wave>__k=v,…`
-sweep names by the `<wave>` prefix (the tokens shared by every job become the group's `common`,
-each job keeps only its `variant`), anything else by the name with a trailing index stripped.
+sweep names by project and `<wave>` prefix (the tokens shared by every job become the group's
+`common`, each job keeps only its `variant`), anything else by project and the name with a
+trailing index stripped. For names that carry no project, the project is the basename of the
+job's Slurm working directory (`squeue %Z`, `sacct WorkDir`, normally the project root on the
+cluster) and the experiment is the `scripts/NNN_…/NNN_…` chain in the job's command path.
 
 ## History
 

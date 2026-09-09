@@ -494,15 +494,17 @@ class BoardTests(unittest.TestCase):
 
     def test_queue_groups_sweep_jobs_and_folds_bulk_diffs(self) -> None:
         names = [f"20260909-121443__model=vit,seed=1,pct={pct},combo={c}" for pct in (10, 20) for c in range(4)]
-        lines = [f"{200 + i}|{n}|{'RUNNING' if i < 3 else 'PENDING'}|{'None' if i < 3 else 'Priority'}|boost|{'lrdn0' + str(i) if i < 3 else ''}|0:10:00|0:20:00|2026-09-09T12:00:00|2026-09-09T11:00:00" for i, n in enumerate(names)]
+        wd = "/leonardo_work/IscrC_QATT/qat-transfer"
+        cmd = wd + "/scripts/000_finetune/000_vision/001_class_subsets/{n}.sbatch"
+        lines = [f"{200 + i}|{n}|{'RUNNING' if i < 3 else 'PENDING'}|{'None' if i < 3 else 'Priority'}|boost|{'lrdn0' + str(i) if i < 3 else ''}|0:10:00|0:20:00|2026-09-09T12:00:00|2026-09-09T11:00:00|{wd}|{cmd.format(n=n)}" for i, n in enumerate(names)]
         lines.append("300|eval_7|PENDING|Resources|boost||0:00|1:00:00|N/A|2026-09-09T11:30:00")
         lines.append("301|eval_8|PENDING|Resources|boost||0:00|1:00:00|N/A|2026-09-09T11:30:00")
         lines.append("302|qat_003_sweep_20260908-101500_leonardo_gpu1|RUNNING|None|boost|lrdn9|0:40:00|1:20:00|2026-09-08T10:20:00|2026-09-08T10:15:00")
         sacct = [
-            "150|20260909-121443__model=vit,seed=1,pct=5,combo=0|COMPLETED|2026-09-09T11:50:00",
-            "151|20260909-121443__model=vit,seed=1,pct=5,combo=1|COMPLETED|2026-09-09T11:52:00",
-            "152|20260909-121443__model=vit,seed=1,pct=5,combo=2|FAILED|2026-09-09T11:40:00",
-            "153|20260909-121443__model=vit,seed=1,pct=5,combo=3|CANCELLED by 1000|2026-09-09T11:41:00",
+            f"150|20260909-121443__model=vit,seed=1,pct=5,combo=0|COMPLETED|2026-09-09T11:50:00|{wd}",
+            f"151|20260909-121443__model=vit,seed=1,pct=5,combo=1|COMPLETED|2026-09-09T11:52:00|{wd}",
+            f"152|20260909-121443__model=vit,seed=1,pct=5,combo=2|FAILED|2026-09-09T11:40:00|{wd}",
+            f"153|20260909-121443__model=vit,seed=1,pct=5,combo=3|CANCELLED by 1000|2026-09-09T11:41:00|{wd}",
             "200|20260909-121443__model=vit,seed=1,pct=10,combo=0|RUNNING|Unknown",
             "90|old_wave_20260901-000000_leonardo_gpu0|TIMEOUT|2026-09-08T23:00:00",
             "91|eval_3|OUT_OF_MEMORY|2026-09-08T22:00:00",
@@ -515,7 +517,9 @@ class BoardTests(unittest.TestCase):
         cluster = board.read_json(self.config.rig_path("leonardo"))
         assert cluster is not None
         groups = {g["key"]: g for g in cluster["groups"]}
-        sweep = groups["20260909-121443"]
+        sweep = groups["qat-transfer · wave 20260909-121443"]
+        self.assertEqual((sweep["project"], sweep["experiment"], sweep["wave_id"]), ("qat-transfer", "000_finetune/000_vision/001_class_subsets", "20260909-121443"))
+        self.assertEqual(by_project := {j["job_id"]: j["project_inferred"] for j in cluster["jobs"]}["200"], "qat-transfer")
         self.assertEqual((sweep["running"], sweep["pending"], len(sweep["jobs"])), (3, 5, 8))
         self.assertEqual(sweep["finished"], {"completed": 2, "failed": 1, "cancelled": 1, "timeout": 0})
         self.assertEqual((sweep["finished_total"], sweep["total"], sweep["last_end"]), (4, 12, "2026-09-09T11:52:00"))
@@ -534,7 +538,8 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(groups["eval"]["jobs"], ["300", "301"])
         self.assertEqual(groups["qat / 003_sweep · wave 20260908-101500"]["running"], 1)
         code, out, _ = self.run_cli("status")
-        self.assertIn("── 20260909-121443  boost  12 total: 3 running (left 0:20:00…0:20:00) · 5 pending", out)
+        self.assertIn("── qat-transfer · wave 20260909-121443  boost  12 total: 3 running (left 0:20:00…0:20:00) · 5 pending", out)
+        self.assertIn("experiment: 000_finetune/000_vision/001_class_subsets", out)
         self.assertIn("2 completed (16.67%) · 1 failed (8.33%) · 1 cancelled (8.33%)", out)
         self.assertIn("last 3days: 2 completed, 2 failed, 1 cancelled, 1 timeout", out)
         self.assertIn("common: model=vit,seed=1", out)
