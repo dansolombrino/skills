@@ -65,7 +65,10 @@ For each configured rig, one bounded probe (SSH with `BatchMode=yes`, ten-second
 timeout, run in parallel across rigs): `tmux ls`; `nvidia-smi --query-gpu` (index, uuid, name,
 total and used memory, utilization, temperature, power) and `--query-compute-apps` (per-process
 pid, memory, executable) joined with `ps` for the owning user and process age; `/proc/loadavg`
-and `nproc`; `uptime -s`. A rig whose `nvidia-smi` fails is stored with `gpu_probe_ok = false`
+and `nproc`; for every lane-looking tmux session (wave id and `gpu<ids>` suffix) its pane's
+working directory, the last visible line of the pane (`tmux capture-pane`), and every
+`.status.json` under `<working directory>/evaluations/` heartbeaten in the last 30 minutes (at
+most 200); `uptime -s`. A rig whose `nvidia-smi` fails is stored with `gpu_probe_ok = false`
 and an empty GPU list: its cards are unknown, never free. Rigs still answering the pre-5.8
 three-column GPU form parse unchanged.
 
@@ -93,6 +96,18 @@ job's Slurm working directory (`squeue %Z`, `sacct WorkDir`, normally the projec
 cluster) and the experiment is the `scripts/NNN_…/NNN_…` chain in the job's command path. Each job also
 carries its Slurm account (the cluster project id that is charged) and QOS; the group and the
 card list the accounts in use.
+
+## Live run signal on a lane
+
+`reconcile` matches the lane (wave id + GPU set) against the status files found under the
+project its tmux pane sits in, prefers a `running` one and otherwise reports the latest finished
+one (the lane is between runs), and stores under `observed.run`: the run path relative to
+`evaluations/`, state, progress text and numbers, elapsed, heartbeat and its age, a
+`heartbeat_stale` flag (running and no heartbeat for over 180 s: possible hang), and an `eta`
+that is a linear extrapolation of the run's own progress (`eta_basis` says so). The pane's last
+line lands in `observed.last_output`, raw. These are copies of the run's own signals and never
+change what the orchestrator wrote (`active_run`, `progress`, `eta` remain its ten-minute
+report). The bulky status list itself is not persisted in `rigs/<rig>.json`.
 
 ## Cluster budgets
 

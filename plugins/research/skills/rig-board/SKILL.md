@@ -55,7 +55,8 @@ Set `RIGSYNC_REGISTRY` or pass `--registry` to use another registry.
 ## Answering "are the GPUs free?" / "wait for the GPUs"
 
 1. Run `status --reconcile` (or `free <rig> <gpu> --reconcile` for one lane). Report what the
-   board says with its probe age: the fleet line (free / held / foreign / interrupted counts and
+   board says with its probe age (live run progress, heartbeat and the run's linear ETA come
+   from the run's own status file on the rig; the wave ETA is the orchestrator's): the fleet line (free / held / foreign / interrupted counts and
    the soonest ETA), then per rig the holder project, experiment, wave, active run, progress,
    ETA and basis; for a free card its model, VRAM and current use; for a foreign card the
    owning user, process and memory (and "idle, holding memory" when it holds VRAM at ~0% util);
@@ -94,8 +95,9 @@ Set `RIGSYNC_REGISTRY` or pass `--registry` to use another registry.
 strip (free / held / foreign / issues / silent / Slurm counts, each a click-to-filter), the
 soonest lane ETA, probe age and next-probe countdown, then one card per rig with one row per
 GPU (free with model, VRAM and utilization gauges; running / claimed / silent / interrupted /
-unreachable lanes with holder, wave, run, progress, ETA, held-since, orchestrator age and
-copy buttons for `tmux attach` and the project path; foreign cards with the owning user,
+unreachable lanes with holder, wave, run, the run's live progress, heartbeat and linear run
+ETA read from its `.status.json` on the rig plus the last line of the tmux pane, the
+orchestrator's wave ETA, held-since, orchestrator age and copy buttons for `tmux attach` and the project path; foreign cards with the owning user,
 process, memory and age; a collapsed list of stray sessions), a Slurm card that folds sweep
 jobs into groups (running / pending / completed / failed counts with their share of everything
 submitted in the accounting window, a stacked bar, end-time window, earliest pending start,

@@ -378,6 +378,56 @@ class BoardTests(unittest.TestCase):
         assert lane is not None
         self.assertEqual(lane["observed"]["state"], "running")
 
+    def test_live_run_is_read_from_the_status_file_of_the_lane_session(self) -> None:
+        root = "/data/projects/grokking"
+        other = "/data/projects/other"
+        hb = board.iso(board.now() - timedelta(seconds=20))
+        status = {"schema_version": 2, "state": "running", "started": "2026-09-09T13:05:08+02:00", "ended": None, "elapsed_s": 600.0, "heartbeat": hb, "progress": "step 1800/2250", "progress_completed": 1800, "progress_total": 2250, "progress_unit": "step", "wave_id": "20260908-101500", "gpu": "0"}
+        wrong_gpu = {**status, "gpu": "1"}
+        done = {**status, "state": "done", "ended": "2026-09-09T13:00:00+02:00", "progress_completed": 2250}
+        lines = [
+            f"{SESSION}|{root}",
+            "__TAIL__",
+            f"{SESSION}|260 E[bits]=3.085 loss=0.41",
+            "__STATUS__",
+            f"{root}/evaluations/000_grokking/model=mlp/lr=0.001/seed=1/.status.json\t{json.dumps(status)}",
+            f"{root}/evaluations/000_grokking/model=mlp/lr=0.001/seed=2/.status.json\t{json.dumps(wrong_gpu)}",
+            f"{root}/evaluations/000_grokking/model=mlp/lr=0.001/seed=0/.status.json\t{json.dumps(done)}",
+            f"{other}/evaluations/000_grokking/model=mlp/lr=0.1/seed=1/.status.json\t{json.dumps(status)}",
+        ]
+        probe = probe_output([SESSION], [(0, 8000, 90)], "2026-09-01 08:00:00").replace("__BOOT__", "__PANES__\n" + "\n".join(lines) + "\n__BOOT__")
+        parsed = board.parse_probe(self.config.rigs["rig-4090"], probe)
+        self.assertEqual(parsed["panes"], {SESSION: root})
+        self.assertEqual(parsed["tails"], {SESSION: "260 E[bits]=3.085 loss=0.41"})
+        self.assertEqual(len(parsed["statuses"]), 4)
+        self.claim()
+        self.reconcile_with({"rig-4090": probe, "behemoth": probe_output([], [(0, 0, 0)], "2026-09-01 08:00:00")})
+        lane = self.lane()
+        assert lane is not None
+        run = lane["observed"]["run"]
+        self.assertEqual(run["path"], "000_grokking/model=mlp/lr=0.001/seed=1")
+        self.assertEqual((run["state"], run["progress"], run["completed"], run["total"], run["unit"]), ("running", "step 1800/2250", 1800, 2250, "step"))
+        self.assertFalse(run["heartbeat_stale"])
+        self.assertAlmostEqual((board.parse_iso(run["eta"]) - board.parse_iso(hb)).total_seconds(), 150.0, delta=1.0)
+        self.assertEqual(run["eta_basis"], board.RUN_ETA_BASIS)
+        self.assertEqual(lane["observed"]["last_output"], "260 E[bits]=3.085 loss=0.41")
+        rig = board.read_json(self.config.rig_path("rig-4090"))
+        assert rig is not None
+        self.assertNotIn("statuses", rig)
+        code, out, _ = self.run_cli("status")
+        self.assertIn("live: 000_grokking/model=mlp/lr=0.001/seed=1  running  step 1800/2250 (80.00%)  elapsed 10m  heartbeat 20s ago", out)
+        self.assertIn("last output: 260 E[bits]=3.085 loss=0.41", out)
+        # stale heartbeat, then between runs
+        stale = {**status, "heartbeat": board.iso(board.now() - timedelta(seconds=600))}
+        probe_stale = probe.replace(json.dumps(status), json.dumps(stale))
+        self.reconcile_with({"rig-4090": probe_stale, "behemoth": probe_output([], [(0, 0, 0)], "2026-09-01 08:00:00")})
+        self.assertTrue(self.lane()["observed"]["run"]["heartbeat_stale"])
+        probe_done = probe.replace(json.dumps(status), json.dumps(done))
+        self.reconcile_with({"rig-4090": probe_done, "behemoth": probe_output([], [(0, 0, 0)], "2026-09-01 08:00:00")})
+        run = self.lane()["observed"]["run"]
+        self.assertEqual(run["state"], "done")
+        self.assertIsNone(run["eta"])
+
     def test_reclaim_after_adoption_clears_the_placeholder_basis(self) -> None:
         probe = probe_output([SESSION], [(0, 8000, 90)], "2026-09-01 08:00:00")
         self.reconcile_with({"rig-4090": probe, "behemoth": probe})

@@ -393,8 +393,20 @@ PROBE_SCRIPT = (
     "echo __PS__; "
     "for p in $(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null); do ps -o pid=,user:32=,etimes= -p \"$p\" 2>/dev/null; done; "
     "echo __LOAD__; cat /proc/loadavg 2>/dev/null; nproc 2>/dev/null; "
+    # lane sessions only (they carry a wave id and a gpu suffix): working directory, last visible
+    # line of the pane, and every recently heartbeaten .status.json under that project's evaluations/
+    "echo __PANES__; tmux list-panes -a -F '#{session_name}|#{pane_current_path}' 2>/dev/null | grep -E '_[0-9]{8}-[0-9]{6}_[^|]*_gpu[0-9]'; "
+    "echo __TAIL__; tmux ls -F '#{session_name}' 2>/dev/null | grep -E '_[0-9]{8}-[0-9]{6}_.*_gpu[0-9]' | while IFS= read -r s; do "
+    "printf '%s|' \"$s\"; tmux capture-pane -p -t \"$s\" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -1 | cut -c1-400; echo; done; "
+    "echo __STATUS__; tmux list-panes -a -F '#{session_name}|#{pane_current_path}' 2>/dev/null | grep -E '_[0-9]{8}-[0-9]{6}_[^|]*_gpu[0-9]' | cut -d'|' -f2- | sort -u | while IFS= read -r d; do "
+    f"find \"$d/evaluations\" -name .status.json -mmin -{'{STATUS_RECENT_MIN}'} 2>/dev/null | head -{'{STATUS_MAX_FILES}'} | while IFS= read -r f; do printf '%s\t' \"$f\"; tr -d '\n' < \"$f\"; echo; done; done; "
     "echo __BOOT__; uptime -s 2>/dev/null"
 )
+STATUS_RECENT_MIN = 30
+STATUS_MAX_FILES = 200
+PROBE_SCRIPT = PROBE_SCRIPT.replace("{STATUS_RECENT_MIN}", str(STATUS_RECENT_MIN)).replace("{STATUS_MAX_FILES}", str(STATUS_MAX_FILES))
+HEARTBEAT_STALE_S = 180
+RUN_ETA_BASIS = "linear from the run's own progress and elapsed time"
 
 
 def is_local(rig: Rig) -> bool:
@@ -439,7 +451,7 @@ def _section(output: str, marker: str, next_markers: tuple[str, ...]) -> str:
     return rest[:cut]
 
 
-PROBE_MARKERS = ("__GPUS__", "__APPS__", "__PS__", "__LOAD__", "__BOOT__")
+PROBE_MARKERS = ("__GPUS__", "__APPS__", "__PS__", "__LOAD__", "__PANES__", "__TAIL__", "__STATUS__", "__BOOT__")
 
 
 def parse_gpu_line(line: str) -> tuple[dict, str | None] | None:
@@ -509,9 +521,30 @@ def parse_probe(rig: Rig, output: str) -> dict:
                 "elapsed_s": owner.get("elapsed_s"),
             }
         )
+    panes: dict[str, str] = {}
+    for line in _section(output, "__PANES__", PROBE_MARKERS[5:]).splitlines():
+        name, sep, cwd = line.partition("|")
+        if sep and cwd.strip():
+            panes[name.strip()] = cwd.strip()
+    tails: dict[str, str] = {}
+    for line in _section(output, "__TAIL__", PROBE_MARKERS[6:]).splitlines():
+        name, sep, text = line.partition("|")
+        if sep and text.strip():
+            tails[name.strip()] = text.strip()
+    statuses: list[dict] = []
+    for line in _section(output, "__STATUS__", PROBE_MARKERS[7:]).splitlines():
+        path, sep, payload = line.partition("\t")
+        if not sep:
+            continue
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            statuses.append({"path": path.strip(), "data": data})
     load: list[float] | None = None
     cpus: int | None = None
-    load_lines = _section(output, "__LOAD__", ("__BOOT__",)).split()
+    load_lines = _section(output, "__LOAD__", PROBE_MARKERS[4:]).split()
     if len(load_lines) >= 3:
         try:
             load = [float(load_lines[0]), float(load_lines[1]), float(load_lines[2])]
@@ -537,6 +570,61 @@ def parse_probe(rig: Rig, output: str) -> dict:
         "gpu_probe_ok": gpu_probe_ok,
         "load": load,
         "cpus": cpus,
+        "panes": panes,
+        "tails": tails,
+        "statuses": statuses,
+    }
+
+
+def live_run(lane: dict, probe: dict) -> dict | None:
+    """The run this lane is executing right now, read from the run's own `.status.json` on the rig.
+
+    Candidates are the recently heartbeaten status files under the project the lane's tmux pane
+    sits in, matching the lane's wave id and GPU set. A `running` one wins; otherwise the latest
+    finished one is reported (the lane is between runs). Only the run's own numbers are copied;
+    the ETA is a linear extrapolation of them and is labelled as such."""
+    root = (probe.get("panes") or {}).get(lane.get("tmux_session") or "")
+    wanted_gpu = str(lane.get("gpu"))
+    candidates = []
+    for entry in probe.get("statuses") or []:
+        data = entry["data"]
+        if data.get("wave_id") != lane.get("wave_id") or str(data.get("gpu")) != wanted_gpu:
+            continue
+        if root and not entry["path"].startswith(root.rstrip("/") + "/"):
+            continue
+        candidates.append(entry)
+    if not candidates:
+        return None
+    running = [c for c in candidates if c["data"].get("state") == "running"]
+    pool = running or candidates
+    best = max(pool, key=lambda c: c["data"].get("heartbeat") or c["data"].get("ended") or "")
+    data = best["data"]
+    path = best["path"]
+    marker = "/evaluations/"
+    rel = path[path.index(marker) + len(marker):] if marker in path else path
+    rel = rel.removesuffix("/.status.json")
+    heartbeat = parse_iso(data.get("heartbeat"))
+    age = int((now() - heartbeat).total_seconds()) if heartbeat else None
+    completed, total, elapsed = data.get("progress_completed"), data.get("progress_total"), data.get("elapsed_s")
+    eta = None
+    if data.get("state") == "running" and isinstance(completed, (int, float)) and isinstance(total, (int, float)) and isinstance(elapsed, (int, float)) and completed > 0 and total > completed:
+        anchor = heartbeat or now()
+        eta = iso(anchor + timedelta(seconds=elapsed * (total - completed) / completed))
+    return {
+        "path": rel,
+        "state": data.get("state"),
+        "progress": data.get("progress"),
+        "completed": completed,
+        "total": total,
+        "unit": data.get("progress_unit"),
+        "elapsed_s": elapsed,
+        "started": data.get("started"),
+        "ended": data.get("ended"),
+        "heartbeat": data.get("heartbeat"),
+        "heartbeat_age_s": age,
+        "heartbeat_stale": bool(data.get("state") == "running" and age is not None and age > HEARTBEAT_STALE_S),
+        "eta": eta,
+        "eta_basis": RUN_ETA_BASIS if eta else None,
     }
 
 
@@ -955,12 +1043,17 @@ def reconcile_rig(config: BoardConfig, rig: Rig, probe: dict) -> list[str]:
         if session in alive_sessions:
             updated = parse_iso(lane.get("updated_at"))
             silent = (now() - updated).total_seconds() if updated else None
+            adopted = bool(lane.get("observed", {}).get("adopted"))
             lane["observed"] = {
                 "at": stamp,
                 "session_alive": True,
                 "state": "running",
                 "orchestrator_silent_s": int(silent) if silent is not None else None,
+                "run": live_run(lane, probe),
+                "last_output": (probe.get("tails") or {}).get(session),
             }
+            if adopted:
+                lane["observed"]["adopted"] = True
             write_json(path, lane)
             continue
         claimed = parse_iso(lane.get("claimed_at"))
@@ -994,8 +1087,9 @@ def reconcile_rig(config: BoardConfig, rig: Rig, probe: dict) -> list[str]:
             "eta": None,
             "eta_basis": "unavailable: adopted from a live session, no orchestrator report",
             "updated_at": stamp,
-            "observed": {"at": stamp, "session_alive": True, "state": "running", "adopted": True},
+            "observed": {"at": stamp, "session_alive": True, "state": "running", "adopted": True, "run": None, "last_output": (probe.get("tails") or {}).get(name)},
         }
+        lane["observed"]["run"] = live_run(lane, probe)
         write_json(config.lane_path(rig.name, parsed["gpu"]), lane)
         held[parsed["gpu"]] = lane
         append_history(config, "adopt", rig=rig.name, gpu=parsed["gpu"], session=name)
@@ -1008,7 +1102,7 @@ def reconcile_rig(config: BoardConfig, rig: Rig, probe: dict) -> list[str]:
         g["index"] for g in probe["gpus"] if g["index"] not in covered and g["memory_used_mib"] >= FOREIGN_MEMORY_MIB
     ]
     probe["foreign"] = foreign
-    write_json(config.rig_path(rig.name), probe)
+    write_json(config.rig_path(rig.name), {k: v for k, v in probe.items() if k not in ("statuses", "tails", "panes")})
     return changes
 
 
@@ -1345,6 +1439,17 @@ def status(config: BoardConfig, args: argparse.Namespace) -> int:
                 f"  since {age(lane.get('claimed_at'))}  run {lane.get('active_run') or '?'}"
                 f"  {lane.get('progress') or ''}  eta {eta}  updated {age(lane.get('updated_at'))} ago"
             )
+            run = (lane.get("observed") or {}).get("run")
+            if run:
+                pct = f" ({100 * run['completed'] / run['total']:.2f}%)" if isinstance(run.get("completed"), (int, float)) and run.get("total") else ""
+                hb = f"heartbeat {humanize(run['heartbeat_age_s'])} ago" + (" STALE" if run.get("heartbeat_stale") else "") if run.get("heartbeat_age_s") is not None else "no heartbeat"
+                print(
+                    f"        live: {run['path']}  {run.get('state')}  {run.get('progress') or '?'}{pct}"
+                    f"  elapsed {humanize(run.get('elapsed_s'))}  {hb}  run eta {run.get('eta') or 'unavailable'}"
+                )
+            tail = (lane.get("observed") or {}).get("last_output")
+            if tail:
+                print(f"        last output: {tail[:160]}")
         for index in rig["foreign"]:
             print(f"  gpu{index}  foreign      {describe_foreign(gpus.get(index))}")
         for index in rig.get("free_gpus", []):
