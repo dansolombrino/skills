@@ -39,13 +39,14 @@ is never a lane: Slurm is its own coordination center and the cluster does not r
 ## Commands
 
 ```bash
-python3 scripts/board.py status [--json] [--reconcile]   # whole fleet
+python3 scripts/board.py status [--json] [--reconcile] [--all]   # whole fleet; --all lists every Slurm job, not three per group
 python3 scripts/board.py free <rig> <gpu> [--reconcile]  # exit 0 free, 1 held/foreign, 2 unverifiable
-python3 scripts/board.py reconcile [--rig <rig>]         # probe rigs, correct the board
-python3 scripts/board.py claim --rig <rig> --gpu <ids> --project <name> --experiment <NNN_exp> --wave <wave_id> --project-root <abs path> --runs-total <n>
-python3 scripts/board.py refresh --rig <rig> --gpu <ids> --wave <wave_id> --active-run <run_id_flat> --progress "<display>" --eta <ISO|''> --eta-basis "<basis>" --runs-done <n>
+python3 scripts/board.py reconcile [--rig <rig|cluster>]...  # probe rigs, correct the board (repeatable)
+python3 scripts/board.py claim --rig <rig> --gpu <ids> --project <name> --experiment <NNN_exp> --wave <wave_id> --project-root <abs path> --runs-total <n> [--tmux-session <name>]
+python3 scripts/board.py refresh --rig <rig> --gpu <ids> --wave <wave_id> --active-run <run_id_flat> --progress "<display>" --eta <ISO|''> --eta-basis "<basis>" --runs-done <n> [--runs-total <n>]
 python3 scripts/board.py release --rig <rig> --gpu <ids> --reason "<why>"
-python3 scripts/board.py serve [--port 8765] [--reconcile-every 120]
+python3 scripts/board.py history [--hours 24] [--limit 500] [--refresh] [--json]   # what happened on the board
+python3 scripts/board.py serve [--port 8765] [--bind 0.0.0.0] [--reconcile-every 120]
 python3 scripts/board.py token                            # fresh access token for [board] token
 ```
 
@@ -54,11 +55,17 @@ Set `RIGSYNC_REGISTRY` or pass `--registry` to use another registry.
 ## Answering "are the GPUs free?" / "wait for the GPUs"
 
 1. Run `status --reconcile` (or `free <rig> <gpu> --reconcile` for one lane). Report what the
-   board says with its probe age: holder project, experiment, wave, active run, progress, ETA
-   and basis, plus foreign cards and unreachable rigs, and for each Slurm target its running
-   and pending jobs. Open the report with a message-written timestamp as `experiments-tracking`
-   requires. If a cluster is unreachable because SSH authentication failed, say that the
-   certificate needs renewing (`sweep-dispatch` → `references/cineca-slurm.md`).
+   board says with its probe age: the fleet line (free / held / foreign / interrupted counts and
+   the soonest ETA), then per rig the holder project, experiment, wave, active run, progress,
+   ETA and basis; for a free card its model, VRAM and current use; for a foreign card the
+   owning user, process and memory (and "idle, holding memory" when it holds VRAM at ~0% util);
+   stray experiment-looking tmux sessions that are not lanes; unreachable rigs and rigs whose
+   `nvidia-smi` failed (GPU state unknown, never "free"); and for each Slurm target its running
+   and pending jobs, folded into sweep groups with the varying configuration per job. Open the
+   report with a message-written timestamp as `experiments-tracking` requires. If a cluster is
+   unreachable because SSH authentication failed, say that the certificate needs renewing
+   (`sweep-dispatch` → `references/cineca-slurm.md`). `history` answers "what happened while
+   nobody was watching" (claims, releases, adoptions, interruptions, queue changes).
 2. To wait, use the host's recurring wait/monitor primitive and re-run the check each tick;
    never busy-loop with shell `sleep`. Report when the lane frees up, then continue the
    original request. If the ETA is unavailable, say so and why (adopted lane, silent
@@ -79,11 +86,23 @@ Set `RIGSYNC_REGISTRY` or pass `--registry` to use another registry.
 
 ## Viewer
 
-`serve` is a stdlib HTTP server: `/` is a read-only auto-refreshing page (one card per rig,
-one row per GPU: free, running, interrupted, foreign, unreachable, with holder, progress, ETA,
-held-since, orchestrator silence and the `tmux attach` command), `/api/board` is the JSON
-behind it. It reconciles on its own timer so the page stays honest when no chat is alive. It
-takes no write actions. Install it as a user service on the hub per the configuration
+`serve` is a stdlib HTTP server. `/` is the read-only page (`assets/viewer.html`): a fleet
+strip (free / held / foreign / issues / silent / Slurm counts, each a click-to-filter), the
+soonest lane ETA, probe age and next-probe countdown, then one card per rig with one row per
+GPU (free with model, VRAM and utilization gauges; running / claimed / silent / interrupted /
+unreachable lanes with holder, wave, run, progress, ETA, held-since, orchestrator age and
+copy buttons for `tmux attach` and the project path; foreign cards with the owning user,
+process, memory and age; a collapsed list of stray sessions), a Slurm card that folds sweep
+jobs into groups (counts, end-time window, earliest pending start, shared configuration, per
+job the varying part of the name), a filter box, state chips, free-first sort, light/dark
+theme, optional browser notifications on lane changes, and a "history" panel of the last 24 h.
+The tab title and favicon carry the free count. Polling pauses while the pointer is over a
+card or text is selected, and a lost server shows the last good read as stale. `/api/board`
+(schema `api_version` 2, additive over v1: `summary`, `serve`, per-rig `free_gpus`,
+`stray_sessions`, `gpu_probe_ok`, `load`, per-GPU `name`, `memory_total_mib`, `temperature_c`,
+`power_w`, `processes`; per-cluster `groups`) and `/api/history?hours=&limit=&refresh=` are the
+JSON behind it. It reconciles on its own timer so the page stays honest when no chat is alive.
+It takes no write actions. Install it as a user service on the hub per the configuration
 reference; the URL is `http://<hub address>:<port>`. With `[board] token` set, the page and
 the API require that token (query once, then a cookie); require it before exposing the port
 beyond the LAN.

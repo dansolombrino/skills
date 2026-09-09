@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>rig-board</title>
+<link id="favicon" rel="icon" href="data:,">
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--ink:#1c1f24;--muted:#6b7280;--faint:#9ca3af;--line:#e5e7eb;--line2:#d1d5db;
+  --free:#15803d;--freebg:#ecfdf5;--busy:#b45309;--busybg:#fffbeb;--bad:#b91c1c;--badbg:#fef2f2;
+  --warn:#a16207;--warnbg:#fefce8;--foreign:#6d28d9;--foreignbg:#f5f3ff;--pend:#0369a1;--pendbg:#eff6ff;
+  --unk:#4b5563;--unkbg:#f3f4f6;--accent:#2563eb;--shadow:0 1px 2px rgba(0,0,0,.05)}
+:root[data-theme="dark"]{--bg:#0f1115;--card:#171a21;--ink:#e6e8ee;--muted:#9aa3b2;--faint:#6b7280;--line:#2a2f3a;--line2:#3a4150;
+  --free:#4ade80;--freebg:#0f2a1c;--busy:#fbbf24;--busybg:#2d2208;--bad:#f87171;--badbg:#2e1212;
+  --warn:#facc15;--warnbg:#2b2508;--foreign:#c4b5fd;--foreignbg:#1f1836;--pend:#7dd3fc;--pendbg:#0c2233;
+  --unk:#9ca3af;--unkbg:#1f2430;--accent:#60a5fa;--shadow:none}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1115;--card:#171a21;--ink:#e6e8ee;--muted:#9aa3b2;--faint:#6b7280;--line:#2a2f3a;--line2:#3a4150;
+  --free:#4ade80;--freebg:#0f2a1c;--busy:#fbbf24;--busybg:#2d2208;--bad:#f87171;--badbg:#2e1212;
+  --warn:#facc15;--warnbg:#2b2508;--foreign:#c4b5fd;--foreignbg:#1f1836;--pend:#7dd3fc;--pendbg:#0c2233;
+  --unk:#9ca3af;--unkbg:#1f2430;--accent:#60a5fa;--shadow:none}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+a{color:var(--accent)}
+button{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line2);border-radius:6px;padding:3px 9px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+input[type=search]{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line2);border-radius:6px;padding:4px 8px;min-width:160px}
+header{padding:12px 20px 8px;border-bottom:1px solid var(--line);background:var(--card);position:sticky;top:0;z-index:5;box-shadow:var(--shadow)}
+.row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px}
+h1{font-size:18px;margin:0;display:flex;align-items:center;gap:8px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--faint);display:inline-block}
+.dot.live{background:var(--free);box-shadow:0 0 0 0 var(--free);animation:pulse 2.5s infinite}
+.dot.stale{background:var(--warn)}.dot.down{background:var(--bad)}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(21,128,61,.5)}70%{box-shadow:0 0 0 7px rgba(21,128,61,0)}100%{box-shadow:0 0 0 0 rgba(21,128,61,0)}}
+.stamp{color:var(--muted);font-size:12px}
+.tiles{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.tile{border:1px solid var(--line);border-radius:8px;padding:4px 10px;min-width:64px;background:var(--bg);cursor:pointer}
+.tile b{display:block;font-size:18px;line-height:1.1}
+.tile small{color:var(--muted);font-size:11px}
+.tile.free b{color:var(--free)}.tile.held b{color:var(--busy)}.tile.foreign b{color:var(--foreign)}.tile.bad b{color:var(--bad)}.tile.warn b{color:var(--warn)}.tile.pend b{color:var(--pend)}
+.tile.on{outline:2px solid var(--accent)}
+.next{margin-top:6px;font-size:13px}
+.controls{margin-top:8px;font-size:12px}
+.chip{padding:2px 9px;border-radius:999px;font-size:12px}
+.banner{padding:8px 20px;font-size:13px;border-bottom:1px solid var(--line)}
+.banner.bad{background:var(--badbg);color:var(--bad)}.banner.warn{background:var(--warnbg);color:var(--warn)}
+main{display:grid;gap:14px;padding:16px 20px;grid-template-columns:repeat(auto-fill,minmax(min(100%,400px),1fr));align-items:start}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;box-shadow:var(--shadow)}
+.card.dim{opacity:.55}
+.card h2{font-size:15px;margin:0 0 4px;display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
+.card h2 .name{display:flex;gap:6px;align-items:baseline}
+.pill{font-size:11px;padding:1px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.pill.bad{color:var(--bad);border-color:var(--bad)}.pill.warn{color:var(--warn);border-color:var(--warn)}
+.sub{color:var(--muted);font-size:12px;margin-bottom:6px;display:flex;flex-wrap:wrap;gap:4px 12px}
+.lane{border-radius:8px;padding:8px 10px;margin:8px 0;border:1px solid var(--line);border-left-width:4px}
+.lane.free{background:var(--freebg);border-color:var(--free)}
+.lane.running,.lane.claimed{background:var(--busybg);border-color:var(--busy)}
+.lane.silent{background:var(--warnbg);border-color:var(--warn)}
+.lane.interrupted{background:var(--badbg);border-color:var(--bad)}
+.lane.unreachable,.lane.unknown{background:var(--unkbg);border-color:var(--unk)}
+.lane.foreign{background:var(--foreignbg);border-color:var(--foreign)}
+.lane.pending{background:var(--pendbg);border-color:var(--pend)}
+.lane .top{display:flex;justify-content:space-between;gap:8px;align-items:baseline;font-weight:600}
+.lane .top .gpu{overflow-wrap:anywhere;min-width:0}.lane .top .gpu b{white-space:nowrap}
+.state{font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:1px 7px;border-radius:4px;white-space:nowrap}
+.state.free{color:var(--free);background:color-mix(in srgb,var(--free) 12%,transparent)}
+.state.running,.state.claimed{color:var(--busy);background:color-mix(in srgb,var(--busy) 12%,transparent)}
+.state.silent{color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
+.state.interrupted{color:var(--bad);background:color-mix(in srgb,var(--bad) 12%,transparent)}
+.state.unreachable,.state.unknown{color:var(--unk);background:color-mix(in srgb,var(--unk) 12%,transparent)}
+.state.foreign{color:var(--foreign);background:color-mix(in srgb,var(--foreign) 12%,transparent)}
+.state.pending{color:var(--pend);background:color-mix(in srgb,var(--pend) 12%,transparent)}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:1px 10px;margin-top:4px;font-size:13px}
+.kv span:nth-child(odd){color:var(--muted);font-size:12px;white-space:nowrap}
+.kv .mono{word-break:break-all;font-size:12.5px}
+.meta{color:var(--muted);font-size:12px;margin-top:5px;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:center}
+.bar{height:6px;background:var(--line);border-radius:3px;margin-top:6px;overflow:hidden;position:relative}
+.bar i{display:block;height:100%;background:var(--busy);transition:width .4s}
+.bar.mem i{background:var(--foreign)}.bar.free i{background:var(--free)}.bar.util i{background:var(--pend)}
+.gauges{display:flex;gap:10px;margin-top:5px;font-size:11px;color:var(--muted)}
+.gauges div{flex:1}
+.gauges .bar{margin-top:2px;height:4px}
+.copy{padding:1px 6px;font-size:11px;border-radius:4px;background:transparent}
+.copy.ok{color:var(--free);border-color:var(--free)}
+abbr,[title]{text-decoration:none;cursor:help}
+details{margin-top:6px}summary{cursor:pointer;color:var(--muted);font-size:12px;user-select:none}
+details ul{margin:4px 0 0;padding-left:18px;font-size:12px}
+.hist{padding:0 20px 20px}
+.hist table{width:100%;border-collapse:collapse;font-size:12.5px}
+.hist th{text-align:left;color:var(--muted);font-weight:500;border-bottom:1px solid var(--line);padding:4px 6px}
+.hist td{padding:4px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+.hist td.ev{white-space:nowrap;font-weight:600}
+.ev.claim,.ev.reclaim,.ev.adopt{color:var(--busy)}.ev.release{color:var(--free)}.ev.interrupted{color:var(--bad)}.ev.reconcile{color:var(--muted)}.ev.refresh{color:var(--faint)}
+.empty{color:var(--muted);padding:20px;text-align:center}
+.paused{color:var(--warn);font-size:12px}
+footer{color:var(--faint);font-size:11px;padding:0 20px 16px}
+@media(max-width:600px){header{padding:10px 12px 8px}main{padding:12px;gap:10px}.hist{padding:0 12px 12px}.tile{min-width:52px}.kv{grid-template-columns:1fr}.kv span:nth-child(odd){margin-top:3px}}
+</style></head><body>
+<header>
+  <div class="row">
+    <h1><span class="dot" id="dot"></span>rig-board</h1>
+    <span class="stamp" id="stamp">loading…</span>
+    <span class="stamp" id="recon"></span>
+    <span class="paused" id="paused" hidden>paused while you hover or select</span>
+    <span style="flex:1"></span>
+    <button id="histbtn" title="Show what happened on the board recently">history</button>
+    <button id="notif" title="Browser notification when a lane frees up, is claimed, or is interrupted">notify: off</button>
+    <button id="theme" title="Theme">theme</button>
+  </div>
+  <div class="tiles" id="tiles"></div>
+  <div class="next" id="next"></div>
+  <div class="row controls">
+    <input type="search" id="q" placeholder="filter: project, experiment, run, user…" autocomplete="off">
+    <span id="chips"></span>
+    <button id="freefirst" title="Rigs with free GPUs first">free first</button>
+    <span class="stamp" id="rootpath"></span>
+  </div>
+</header>
+<div class="banner" id="banner" hidden></div>
+<main id="main"></main>
+<section class="hist" id="hist" hidden></section>
+<footer id="foot"></footer>
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtAge=s=>{if(s==null||isNaN(s))return "?";s=Math.max(0,Math.floor(s));if(s<90)return s+"s";const m=Math.floor(s/60);if(m<90)return m+"m";const h=Math.floor(m/60);return h<48?h+"h"+String(m%60).padStart(2,"0")+"m":Math.floor(h/24)+"d "+(h%24)+"h"};
+const abs=iso=>{if(!iso)return "";const d=new Date(iso);return isNaN(d)?iso:d.toLocaleString([], {weekday:"short",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})};
+const clock=iso=>{const d=new Date(iso);if(isNaN(d))return iso;const sameDay=d.toDateString()===new Date().toDateString();return sameDay?d.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}):d.toLocaleString([], {weekday:"short",hour:"2-digit",minute:"2-digit"})};
+const ago=(iso,nowMs)=>iso?`<abbr title="${esc(abs(iso))}">${fmtAge((nowMs-Date.parse(iso))/1000)} ago</abbr>`:"?";
+const until=(iso,nowMs)=>{if(!iso)return "<i>unavailable</i>";const t=Date.parse(iso);if(isNaN(t))return esc(iso);const d=(t-nowMs)/1000;
+  return d<0?`<b style="color:var(--bad)">overdue by ${fmtAge(-d)}</b> <small>(was ${esc(clock(iso))})</small>`:`in <b>${fmtAge(d)}</b> <small>(${esc(clock(iso))})</small>`};
+const mib=n=>n==null?"?":n>=1024?(n/1024).toFixed(1)+" GiB":n+" MiB";
+const base=s=>s?String(s).split("/").pop():"?";
+const store={get(k,d){try{const v=localStorage.getItem("rigboard."+k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem("rigboard."+k,JSON.stringify(v))}catch(e){}}};
+
+// ── state ──
+const ui={q:"",states:new Set(store.get("states",[])),freeFirst:store.get("freeFirst",true),notify:store.get("notify",false),hist:store.get("hist",false),theme:store.get("theme",null)};
+let last=null,lastOk=0,prevLanes=null,hover=false,open=new Set(),fetching=false;
+
+// ── theme ──
+function applyTheme(){if(ui.theme)document.documentElement.dataset.theme=ui.theme;else delete document.documentElement.dataset.theme;$("theme").textContent="theme: "+(ui.theme||"auto")}
+$("theme").onclick=()=>{ui.theme=ui.theme===null?"dark":ui.theme==="dark"?"light":null;store.set("theme",ui.theme);applyTheme()};applyTheme();
+
+// ── controls ──
+$("q").oninput=e=>{ui.q=e.target.value.trim().toLowerCase();draw()};
+$("freefirst").onclick=()=>{ui.freeFirst=!ui.freeFirst;store.set("freeFirst",ui.freeFirst);draw()};
+$("histbtn").onclick=()=>{ui.hist=!ui.hist;store.set("hist",ui.hist);drawHistory()};
+$("notif").onclick=async()=>{if(!ui.notify&&"Notification"in window&&Notification.permission!=="granted"){const p=await Notification.requestPermission();if(p!=="granted")return}ui.notify=!ui.notify;store.set("notify",ui.notify);draw()};
+const STATE_CHIPS=[["free","free"],["held","held"],["foreign","foreign"],["issues","issues"],["slurm","slurm"]];
+function toggleState(s){ui.states.has(s)?ui.states.delete(s):ui.states.add(s);store.set("states",[...ui.states]);draw()}
+$("chips").innerHTML=STATE_CHIPS.map(([k,l])=>`<button class="chip" data-s="${k}">${l}</button>`).join(" ");
+$("chips").onclick=e=>{const s=e.target.dataset.s;if(s)toggleState(s)};
+$("tiles").onclick=e=>{const t=e.target.closest(".tile");if(t&&t.dataset.s)toggleState(t.dataset.s)};
+document.addEventListener("mouseover",e=>{hover=!!e.target.closest(".card, .hist")});
+document.addEventListener("mouseout",e=>{if(!e.relatedTarget||!e.relatedTarget.closest||!e.relatedTarget.closest(".card, .hist"))hover=false});
+document.addEventListener("toggle",e=>{const k=e.target.dataset&&e.target.dataset.key;if(!k)return;e.target.open?open.add(k):open.delete(k)},true);
+document.addEventListener("click",async e=>{const b=e.target.closest("button.copy");if(!b)return;const txt=b.dataset.copy;try{await navigator.clipboard.writeText(txt)}catch(err){const ta=document.createElement("textarea");ta.value=txt;document.body.appendChild(ta);ta.select();document.execCommand("copy");ta.remove()}
+  const old=b.textContent;b.textContent="copied";b.classList.add("ok");setTimeout(()=>{b.textContent=old;b.classList.remove("ok")},1200)});
+
+// ── derived ──
+function laneState(l){const st=(l.observed&&l.observed.state)||"claimed";if(st==="running"&&l.observed&&l.observed.orchestrator_silent_s!=null&&l.observed.orchestrator_silent_s>1800)return "silent";return st}
+function laneKey(rig,l){return rig+"/gpu"+l.gpu}
+function rigMatches(rig,q){if(!q)return true;const hay=[rig.rig,...(rig.lanes||[]).flatMap(l=>[l.project,l.experiment,l.wave_id,l.active_run,l.progress,l.tmux_session]),...(rig.gpus||[]).flatMap(g=>(g.processes||[]).flatMap(p=>[p.user,p.name])),...(rig.jobs||[]).flatMap(j=>[j.name,j.project,j.experiment,j.job_id,j.partition,j.nodes])].join(" ").toLowerCase();return hay.includes(q)}
+function rigCats(rig){const c=new Set();if(rig.kind==="slurm"){c.add("slurm");return c}
+  if((rig.free_gpus||[]).length)c.add("free");if((rig.lanes||[]).length)c.add("held");if((rig.foreign||[]).length)c.add("foreign");
+  if(rig.reachable===false||rig.gpu_probe_ok===false||(rig.lanes||[]).some(l=>["interrupted","silent","unreachable"].includes(laneState(l))))c.add("issues");return c}
+function visible(rig){if(!rigMatches(rig,ui.q))return false;if(!ui.states.size)return true;const c=rigCats(rig);for(const s of ui.states)if(c.has(s))return true;return false}
+
+// ── header ──
+function drawHeader(d,nowMs){const s=d.summary||{};$("stamp").innerHTML=`board read ${esc(clock(d.generated_at))}`;
+  const tiles=[["free","free",s.free,"free GPUs"],["held","held",s.held,"held GPUs"],["foreign","foreign",s.foreign,"foreign GPUs"],["issues","bad",(s.interrupted||0)+(s.unreachable_rigs||0),"interrupted / unreachable"],["issues","warn",s.silent||0,"silent orchestrators"],["slurm","pend",(s.slurm_running||0)+"+"+(s.slurm_pending||0),"slurm running+pending"]];
+  $("tiles").innerHTML=tiles.map(([k,cls,v,l])=>`<div class="tile ${cls} ${ui.states.has(k)?"on":""}" data-s="${k}" title="click to filter"><b>${esc(v??"?")}</b><small>${l}</small></div>`).join("");
+  for(const b of $("chips").querySelectorAll("button"))b.classList.toggle("on",ui.states.has(b.dataset.s));
+  $("freefirst").classList.toggle("on",ui.freeFirst);$("notif").textContent="notify: "+(ui.notify?"on":"off");$("notif").classList.toggle("on",ui.notify);$("histbtn").classList.toggle("on",ui.hist);
+  const nf=s.next_free;$("next").innerHTML=nf?`Next lane expected to free: <b>${esc(nf.rig)} gpu${esc(nf.gpu)}</b> (${esc(nf.project)} / ${esc(nf.experiment)}) ${until(nf.eta,nowMs)}${nf.eta_basis?` <small class="stamp">· ${esc(nf.eta_basis)}</small>`:""}`:(s.held?`<span class="stamp">No lane has reported an ETA yet.</span>`:`<span class="stamp">Nothing is held on the board.</span>`);
+  const sv=d.serve||{};let rec="";if(sv.reconciling)rec="probing rigs now…";else if(sv.last_reconcile_at&&sv.reconcile_every_s){const next=Date.parse(sv.last_reconcile_at)+sv.reconcile_every_s*1000-nowMs;rec=`rigs probed ${fmtAge((nowMs-Date.parse(sv.last_reconcile_at))/1000)} ago · next in ${fmtAge(next/1000)}`}else if(sv.reconcile_every_s===null)rec="viewer does not probe (reconcile disabled)";
+  if(sv.last_reconcile_error)rec+=` · <span style="color:var(--bad)">last reconcile failed: ${esc(sv.last_reconcile_error)}</span>`;$("recon").innerHTML=rec;
+  $("rootpath").textContent=d.board_root||"";
+  document.title=`${s.free??"?"} free · ${s.held??"?"} held${(s.interrupted||0)+(s.unreachable_rigs||0)?" · !":""} — rig-board`;
+  const col=(s.interrupted||s.unreachable_rigs)?"#b91c1c":s.free?"#15803d":"#b45309";$("favicon").href="data:image/svg+xml,"+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="4" fill="${col}"/><text x="8" y="12" font-size="10" text-anchor="middle" fill="#fff" font-family="sans-serif" font-weight="700">${s.free??"?"}</text></svg>`)}
+
+// ── cards ──
+function gpuGauges(g){if(!g)return "";const tot=g.memory_total_mib,used=g.memory_used_mib;const pct=tot?Math.round(100*used/tot):null;
+  return `<div class="gauges"><div title="${esc(mib(used))} of ${esc(mib(tot))}">mem ${pct!=null?pct+"%":esc(mib(used))}<div class="bar mem"><i style="width:${pct??0}%"></i></div></div><div title="GPU utilization">util ${esc(g.utilization??"?")}%<div class="bar util"><i style="width:${g.utilization||0}%"></i></div></div>${g.temperature_c!=null?`<div style="flex:0 0 auto">${g.temperature_c}°C${g.power_w!=null?" · "+g.power_w+" W":""}</div>`:""}</div>`}
+function gpuName(g){if(!g||!g.name)return "";const short=g.name.replace(/^NVIDIA\s+/,"").replace(/\bGeForce\s+/,"").replace(/\s+Server Edition$/,"").replace(/\s+Blackwell\b/,"");return `<abbr title="${esc(g.name)}">${esc(short)}</abbr>`+(g.memory_total_mib?` · ${esc(mib(g.memory_total_mib))}`:"")}
+function procList(g){const ps=(g&&g.processes)||[];if(!ps.length)return "";return `<div class="kv">${ps.map(p=>`<span>${esc(p.user||"?")}</span><span class="mono" title="${esc(p.name||"")}">${esc(base(p.name))} · pid ${p.pid} · ${esc(mib(p.memory_mib))}${p.elapsed_s!=null?" · running "+fmtAge(p.elapsed_s):""}</span>`).join("")}</div>`}
+function laneHtml(rig,l,gpus,nowMs){const st=laneState(l);const gIdx=String(l.gpu).split(",").map(Number);const g=gIdx.length===1?gpus.get(gIdx[0]):null;
+  const tot=l.runs_total,done=l.runs_done;const pct=tot&&done!=null?Math.round(100*done/tot):null;const adopted=l.observed&&l.observed.adopted;
+  const label={running:"running",claimed:"claimed",silent:"silent orchestrator",interrupted:"interrupted",unreachable:"unreachable"}[st]||st;
+  const note=st==="interrupted"?`<div style="color:var(--bad);font-size:12px;margin-top:4px">Rig rebooted ${l.observed.boot_at?ago(l.observed.boot_at,nowMs):""} after the claim; the wave needs recovery (or release the lane).</div>`
+    :st==="silent"?`<div style="color:var(--warn);font-size:12px;margin-top:4px">Session alive but no orchestrator update for ${fmtAge(l.observed.orchestrator_silent_s)}; progress and ETA below may be stale.</div>`
+    :st==="unreachable"?`<div style="color:var(--unk);font-size:12px;margin-top:4px">Rig unreachable; shown as last known.</div>`:"";
+  return `<div class="lane ${st}"><div class="top"><span class="gpu"><b>gpu${esc(l.gpu)}</b>${gIdx.length>1?` <small class="stamp">(${gIdx.length} cards)</small>`:""} · ${esc(l.project)} <span class="stamp">/ ${esc(l.experiment)}</span></span><span class="state ${st}">${label}</span></div>
+  <div class="kv"><span>wave</span><span class="mono">${esc(l.wave_id)}${adopted?' <span class="pill" title="adopted from a live tmux session; no orchestrator has reported yet">adopted</span>':""}</span>
+  <span>run</span><span class="mono">${esc(l.active_run||"?")}${l.progress?` <span style="color:var(--busy)">${esc(l.progress)}</span>`:""}</span>
+  <span>ETA</span><span>${until(l.eta,nowMs)}${l.eta_basis?` <small class="stamp">· ${esc(l.eta_basis)}</small>`:""}</span>
+  ${tot?`<span>runs</span><span>${done??"?"} / ${tot} done${pct!=null?` <small class="stamp">(${pct}%)</small>`:""}</span>`:""}</div>
+  ${pct!=null?`<div class="bar"><i style="width:${pct}%"></i></div>`:""}${note}
+  ${g?gpuGauges(g):""}
+  <div class="meta"><span>held ${ago(l.claimed_at,nowMs)}</span><span>orchestrator update ${ago(l.updated_at,nowMs)}</span>${g&&g.name?`<span>${gpuName(g)}</span>`:""}
+  <button class="copy" data-copy="tmux attach -t ${esc(l.tmux_session)}" title="tmux attach -t ${esc(l.tmux_session)}">copy tmux attach</button>${l.hub_project_root?`<button class="copy" data-copy="${esc(l.hub_project_root)}" title="${esc(l.hub_project_root)}">copy project path</button>`:""}</div></div>`}
+function rigCard(rig,nowMs){const card=document.createElement("section");card.className="card";card.dataset.key=rig.rig;
+  const gpus=new Map((rig.gpus||[]).map(g=>[g.index,g]));
+  let reach,reachCls="";if(rig.reachable===false){reach=`unreachable · last seen ${ago(rig.last_reachable_at,nowMs)}`;reachCls="bad"}else if(rig.reachable==null){reach="never probed";reachCls="warn"}else{reach=`probed ${ago(rig.at,nowMs)}`;if(nowMs-Date.parse(rig.at)>10*60*1000)reachCls="warn"}
+  const sub=[];if(rig.boot_at)sub.push(`up ${fmtAge((nowMs-Date.parse(rig.boot_at))/1000)} <abbr title="${esc(abs(rig.boot_at))}">↺</abbr>`);if(rig.load)sub.push(`load ${rig.load[0].toFixed(2)}${rig.cpus?" / "+rig.cpus+" cpus":""}`);if(rig.gpus&&rig.gpus.length)sub.push(`${rig.gpus.length} GPU${rig.gpus.length>1?"s":""}${rig.gpus[0].name?" · "+gpuName(rig.gpus[0]):""}`);
+  card.innerHTML=`<h2><span class="name">${esc(rig.rig)}${rig.shared?' <span class="pill" title="other people use this machine too; their cards show as foreign">shared</span>':""}</span><span class="pill ${reachCls}">${reach}</span></h2>${sub.length?`<div class="sub">${sub.map(x=>"<span>"+x+"</span>").join("")}</div>`:""}`;
+  if(rig.reachable&&rig.gpu_probe_ok===false)card.insertAdjacentHTML("beforeend",`<div class="lane unknown"><div class="top"><span>GPUs</span><span class="state unknown">unknown</span></div><div class="meta">nvidia-smi failed on the rig; the driver may be wedged or the card fell off the bus. Nothing here is verified free.</div></div>`);
+  const rows=[];for(const l of rig.lanes||[])rows.push({idx:Math.min(...String(l.gpu).split(",").map(Number)),html:laneHtml(rig,l,gpus,nowMs)});
+  for(const i of rig.foreign||[]){const g=gpus.get(i);const idle=g&&g.utilization<5&&g.memory_used_mib>=1024;
+    rows.push({idx:i,html:`<div class="lane foreign"><div class="top"><span class="gpu"><b>gpu${i}</b>${g&&g.name?` <small class="stamp">${gpuName(g)}</small>`:""}</span><span class="state foreign">foreign</span></div>
+    <div style="font-size:12.5px;margin-top:3px">Busy without a lane on the board${idle?' · <b style="color:var(--foreign)">idle, holding memory</b>':""}</div>${procList(g)}${g?gpuGauges(g):""}${g&&!(g.processes||[]).length?`<div class="meta">no visible process (another container or user namespace?)</div>`:""}</div>`})}
+  for(const i of rig.free_gpus||[]){const g=gpus.get(i);rows.push({idx:i,html:`<div class="lane free"><div class="top"><span class="gpu"><b>gpu${i}</b>${g&&g.name?` <small class="stamp">${gpuName(g)}</small>`:""}</span><span class="state free">free</span></div>${g?gpuGauges(g):""}</div>`})}
+  rows.sort((a,b)=>a.idx-b.idx);for(const r of rows)card.insertAdjacentHTML("beforeend",r.html);
+  if(!rows.length&&!(rig.reachable&&rig.gpu_probe_ok===false))card.insertAdjacentHTML("beforeend",`<div class="lane ${rig.reachable?"free":"unknown"}"><div class="top"><span>${rig.reachable?"no GPUs reported":"no lanes on the board"}</span><span class="state ${rig.reachable?"free":"unknown"}">${rig.reachable?"free":"unverified"}</span></div></div>`);
+  if((rig.stray_sessions||[]).length){const k=rig.rig+"/stray";card.insertAdjacentHTML("beforeend",`<details data-key="${esc(k)}" ${open.has(k)?"open":""}><summary>${rig.stray_sessions.length} tmux session${rig.stray_sessions.length>1?"s":""} that look like experiments but are not lanes</summary><ul>${rig.stray_sessions.map(s=>`<li><code>${esc(s)}</code> <button class="copy" data-copy="tmux attach -t ${esc(s)}">copy attach</button></li>`).join("")}</ul></details>`)}
+  return card}
+function jobRow(j,nowMs,inGroup){const run=j.state==="RUNNING";const st=run?"running":j.state==="PENDING"?"pending":"interrupted";
+  const who=inGroup?`<span class="mono">${esc(j.variant||j.name)}</span>`:j.wave_id?`${esc(j.project)} <span class="stamp">/ ${esc(j.experiment)}</span>`:`<span class="mono">${esc(j.name)}</span>`;
+  const el=hms(j.elapsed),left=hms(j.time_left);const pct=run&&el!=null&&left!=null&&el+left>0?Math.round(100*el/(el+left)):null;
+  return `<div class="lane ${st}" style="${inGroup?"margin:6px 0;padding:6px 8px":""}"><div class="top"><span class="gpu">${esc(j.job_id)} · ${who}</span><span class="state ${st}">${esc(j.state)}</span></div>
+    <div class="kv">${!inGroup&&j.wave_id?`<span>wave</span><span class="mono">${esc(j.wave_id)}</span>`:""}${run?`<span>time</span><span>${esc(j.elapsed)} elapsed · <b>${esc(j.time_left)}</b> left${left!=null?` <small class="stamp">(ends ${esc(clock(new Date(nowMs+left*1000).toISOString()))})</small>`:""}</span><span>node</span><span class="mono">${esc(j.nodes||"?")}</span>`:`<span>reason</span><span>${esc(j.reason||"?")}</span><span>start</span><span>${j.start?until(j.start,nowMs):"<i>unknown</i>"}</span><span>submitted</span><span>${ago(j.submitted,nowMs)}</span>`}</div>
+    ${pct!=null?`<div class="bar"><i style="width:${pct}%"></i></div>`:""}
+    <div class="meta">${inGroup?"":`<span>${esc(j.partition)}</span><span class="mono">${esc(j.name)}</span>`}<button class="copy" data-copy="squeue -j ${esc(j.job_id)} -o '%i %T %M %L %R'">copy squeue</button></div></div>`}
+function slurmCard(c,nowMs){const card=document.createElement("section");card.className="card";card.dataset.key=c.rig;
+  let reach,cls="";if(c.reachable===false){reach=`unreachable · last seen ${ago(c.last_reachable_at,nowMs)}`;cls="bad"}else if(c.reachable==null){reach="never probed";cls="warn"}else reach=`probed ${ago(c.at,nowMs)}`;
+  const jobs=c.jobs||[];card.innerHTML=`<h2><span class="name">${esc(c.rig)} <span class="pill">slurm · read-only</span></span><span class="pill ${cls}">${reach}</span></h2><div class="sub"><span>${c.running||0} running</span><span>${c.pending||0} pending</span>${jobs.length-(c.running||0)-(c.pending||0)>0?`<span>${jobs.length-(c.running||0)-(c.pending||0)} other</span>`:""}</div>`;
+  if(c.reachable===false&&c.reason)card.insertAdjacentHTML("beforeend",`<div class="lane unreachable"><div class="meta" style="margin:0;color:var(--bad)">${esc(c.reason)}${/certificate|authentication/i.test(c.reason)?" — renew the cluster certificate; the queue below is the last known state.":""}</div></div>`);
+  if(!jobs.length)card.insertAdjacentHTML("beforeend",`<div class="lane free"><div class="top"><span>queue empty</span><span class="state free">idle</span></div></div>`);
+  const byGroup=new Map();for(const j of jobs){const k=j.group??j.name;if(!byGroup.has(k))byGroup.set(k,[]);byGroup.get(k).push(j)}
+  const groups=(c.groups&&c.groups.length)?c.groups:[...byGroup.keys()].map(k=>({key:k,jobs:byGroup.get(k).map(j=>j.job_id),running:byGroup.get(k).filter(j=>j.state==="RUNNING").length,pending:byGroup.get(k).filter(j=>j.state==="PENDING").length,other:0}));
+  for(const g of groups){const members=byGroup.get(g.key)||[];if(members.length===1){card.insertAdjacentHTML("beforeend",jobRow(members[0],nowMs,false));continue}
+    const st=g.running?"running":g.pending?"pending":"interrupted";const k=c.rig+"/"+g.key;const commonK=k+"/common";
+    const running=members.filter(j=>j.state==="RUNNING"),pending=members.filter(j=>j.state==="PENDING");
+    const ends=running.map(j=>hms(j.time_left)).filter(x=>x!=null);const endMin=ends.length?Math.min(...ends):null,endMax=ends.length?Math.max(...ends):null;
+    const nodes=new Set(running.map(j=>j.nodes).filter(Boolean));const starts=pending.map(j=>j.start).filter(Boolean).sort();
+    const runPct=members.length?Math.round(100*g.running/members.length):0;
+    card.insertAdjacentHTML("beforeend",`<div class="lane ${st}"><div class="top"><span class="gpu mono" style="font-weight:600">${esc(g.key)}</span><span class="state ${st}">${members.length} jobs</span></div>
+      <div class="kv"><span>state</span><span><b style="color:var(--busy)">${g.running} running</b> · <b style="color:var(--pend)">${g.pending} pending</b>${g.other?` · ${g.other} other`:""}${nodes.size?` <small class="stamp">on ${nodes.size} node${nodes.size>1?"s":""}</small>`:""}</span>
+      ${ends.length?`<span>running end</span><span>${endMin===endMax?`in <b>${fmtAge(endMin)}</b>`:`between <b>${fmtAge(endMin)}</b> and <b>${fmtAge(endMax)}</b> from now`} <small class="stamp">(${esc(clock(new Date(nowMs+endMin*1000).toISOString()))}${endMin===endMax?"":" – "+esc(clock(new Date(nowMs+endMax*1000).toISOString()))})</small></span>`:""}
+      ${pending.length?`<span>pending</span><span>earliest start ${starts.length?until(starts[0],nowMs):"<i>unknown</i>"}${g.reasons&&g.reasons.length?` <small class="stamp">· ${esc(g.reasons.join(", "))}</small>`:""}</span>`:""}
+      </div><div class="bar" title="${g.running} of ${members.length} running"><i style="width:${runPct}%"></i></div>
+      ${g.common?`<details data-key="${esc(commonK)}" ${open.has(commonK)?"open":""}><summary>shared configuration</summary><div class="mono" style="word-break:break-all;margin-top:3px">${esc(g.common.split(",").join(", "))}</div></details>`:""}
+      <details data-key="${esc(k)}" ${open.has(k)?"open":""}><summary>${members.length} jobs${g.partition?" · "+esc(g.partition):""}</summary><div>${members.map(j=>jobRow(j,nowMs,true)).join("")}</div></details></div>`)}
+  return card}
+function hms(s){if(!s)return null;const p=String(s).split("-");let days=0,t=p[0];if(p.length===2){days=+p[0];t=p[1]}const parts=t.split(":").map(Number);if(parts.some(isNaN))return null;let sec=0;for(const x of parts)sec=sec*60+x;if(parts.length===1)sec*=60;return days*86400+sec}
+
+function draw(){if(!last)return;const nowMs=Date.now();drawHeader(last,nowMs);
+  const rigs=[...(last.rigs||[])];if(ui.freeFirst)rigs.sort((a,b)=>{const fa=(a.free_gpus||[]).length>0,fb=(b.free_gpus||[]).length>0;return fa===fb?0:fa?-1:1});
+  const main=$("main");main.innerHTML="";let shown=0;
+  for(const r of rigs)if(visible(r)){main.appendChild(rigCard(r,nowMs));shown++}
+  for(const c of last.slurm||[])if(visible(c)){main.appendChild(slurmCard(c,nowMs));shown++}
+  if(!shown)main.innerHTML=`<div class="empty">nothing matches the current filter</div>`;
+  $("foot").textContent=`board read ${abs(last.generated_at)} · api v${last.api_version||1} · page refreshes every 5 s`}
+
+// ── history ──
+let histData=null,histAt=0;
+async function loadHistory(){try{const r=await fetch("/api/history?hours=24"+tokenQ(),{cache:"no-store"});if(!r.ok)throw new Error(r.status);histData=await r.json();histAt=Date.now()}catch(e){histData={events:[],error:String(e)}}}
+function evText(e){const where=e.rig?`${e.rig}${e.gpu!=null?" gpu"+e.gpu:""}`:"";const s=e.session?`<code>${esc(e.session)}</code>`:"";
+  switch(e.event){case "claim":return `claimed ${s}`;case "reclaim":return `re-claimed (recovery) ${s}`;case "adopt":return `adopted live session ${s}`;case "release":return `released: ${esc(e.reason||"")} ${s}`;case "interrupted":return `interrupted: rig rebooted ${e.boot_at?abs(e.boot_at):""} ${s}`;case "refresh":return `refresh · ${esc(e.active_run||"")}`;case "reconcile":return (e.changes||[]).map(esc).join("<br>");default:return esc(JSON.stringify(e))}}
+async function drawHistory(){const sec=$("hist");sec.hidden=!ui.hist;$("histbtn").classList.toggle("on",ui.hist);if(!ui.hist)return;if(!histData||Date.now()-histAt>30000)await loadHistory();const nowMs=Date.now();
+  const ev=(histData.events||[]);sec.innerHTML=`<h2 style="font-size:15px;margin:4px 0 8px">Last 24 h on the board <small class="stamp">(${ev.length} event${ev.length===1?"":"s"}; ten-minute refresh ticks hidden${histData.error?"; failed to load: "+esc(histData.error):""})</small></h2>`+(ev.length?`<div style="overflow-x:auto"><table><tr><th>when</th><th>event</th><th>where</th><th>detail</th></tr>${ev.map(e=>`<tr><td title="${esc(abs(e.at))}" style="white-space:nowrap">${ago(e.at,nowMs)}</td><td class="ev ${esc(e.event)}">${esc(e.event)}</td><td style="white-space:nowrap">${esc(e.rig||"")}${e.gpu!=null?" gpu"+esc(e.gpu):""}</td><td>${evText(e)}</td></tr>`).join("")}</table></div>`:`<div class="empty">no claims, releases, adoptions or interruptions in the last 24 h</div>`)}
+
+// ── notifications ──
+function diffAndNotify(d){const cur=new Map();for(const r of d.rigs||[])for(const l of r.lanes||[])cur.set(laneKey(r.rig,l),{st:laneState(l),who:`${l.project} / ${l.experiment}`});
+  if(prevLanes&&ui.notify&&"Notification"in window&&Notification.permission==="granted"){const msgs=[];
+    for(const [k,v] of cur){const p=prevLanes.get(k);if(!p)msgs.push(`${k} claimed by ${v.who}`);else if(p.st!==v.st&&["interrupted","silent"].includes(v.st))msgs.push(`${k} ${v.st} (${v.who})`)}
+    for(const [k,p] of prevLanes)if(!cur.has(k))msgs.push(`${k} freed (was ${p.who})`);
+    for(const r of d.rigs||[])if(r.reachable===false){const was=prevLanes.get("__rig__"+r.rig);if(was!=="down")msgs.push(`${r.rig} unreachable`)}
+    if(msgs.length)try{new Notification("rig-board",{body:msgs.join("\n")})}catch(e){}}
+  for(const r of d.rigs||[])cur.set("__rig__"+r.rig,r.reachable===false?"down":"up");prevLanes=cur}
+
+// ── polling ──
+function tokenQ(){const q=new URLSearchParams(location.search).get("token");return q?"&token="+encodeURIComponent(q):""}
+function setBanner(kind,html){const b=$("banner");if(!html){b.hidden=true;return}b.hidden=false;b.className="banner "+kind;b.innerHTML=html}
+async function tick(){if(fetching)return;const paused=hover||(window.getSelection&&String(window.getSelection()).length>0);$("paused").hidden=!paused;if(paused&&last)return;fetching=true;
+  try{const r=await fetch("/api/board?_="+Date.now()+tokenQ(),{cache:"no-store"});
+    if(r.status===401){setBanner("bad","Access token required. Open the page once as <code>/?token=&lt;token&gt;</code> (from <code>[board] token</code> in the registry); it is then remembered by a cookie.");$("dot").className="dot down";return}
+    if(!r.ok)throw new Error(r.status+" "+r.statusText);const d=await r.json();last=d;lastOk=Date.now();diffAndNotify(d);setBanner("",null);$("dot").className="dot live";draw();if(ui.hist&&Date.now()-histAt>30000)drawHistory()}
+  catch(e){$("dot").className="dot down";setBanner("bad",`Board unavailable: ${esc(e.message)}${last?` · showing the last good read from ${esc(abs(last.generated_at))}`:""}`);if(last)draw()}
+  finally{fetching=false}}
+setInterval(()=>{if(last&&Date.now()-lastOk>20000&&!$("banner").classList.contains("bad")){$("dot").className="dot stale"}},5000);
+tick();setInterval(tick,5000);drawHistory();
+</script></body></html>

@@ -59,8 +59,13 @@ Claim fields belong to the orchestrator; `observed` belongs to `reconcile`.
 
 ## Reconcile rules
 
-For each configured rig, one bounded probe (`tmux ls`, `nvidia-smi`, `uptime -s`; SSH with
-`BatchMode=yes`, ten-second connect timeout, run in parallel across rigs):
+For each configured rig, one bounded probe (SSH with `BatchMode=yes`, ten-second connect
+timeout, run in parallel across rigs): `tmux ls`; `nvidia-smi --query-gpu` (index, uuid, name,
+total and used memory, utilization, temperature, power) and `--query-compute-apps` (per-process
+pid, memory, executable) joined with `ps` for the owning user and process age; `/proc/loadavg`
+and `nproc`; `uptime -s`. A rig whose `nvidia-smi` fails is stored with `gpu_probe_ok = false`
+and an empty GPU list: its cards are unknown, never free. Rigs still answering the pre-5.8
+three-column GPU form parse unchanged.
 
 | board says | rig says | result |
 |---|---|---|
@@ -73,7 +78,21 @@ For each configured rig, one bounded probe (`tmux ls`, `nvidia-smi`, `uptime -s`
 
 Session names are parsed from the right (gpu, rig, wave are fixed formats); the remainder splits
 at the first `_NNN_` boundary into project and experiment, so a project name must not itself
-contain `_<three digits>_`.
+contain `_<three digits>_`. A live session that carries a wave id but does not parse (an old
+naming convention, a hand-made session) is reported as a *stray session*: shown, never adopted.
+
+Slurm queue diffs are folded when more than five jobs change the same way in one probe
+(`leonardo: 140 jobs appeared (PENDING) [id…id]`), so an array submission is one history line.
+Jobs are grouped for display: lane-convention names by project / experiment / wave, `<wave>__k=v,…`
+sweep names by the `<wave>` prefix (the tokens shared by every job become the group's `common`,
+each job keeps only its `variant`), anything else by the name with a trailing index stripped.
+
+## History
+
+`history.jsonl` keeps every event. `board.py history` and `/api/history` read it newest first,
+within a window (`--hours`, default 24), dropping reconcile ticks that changed nothing, the lines
+that duplicate an `adopt` / `release` / `interrupted` event, and the ten-minute orchestrator
+`refresh` ticks unless asked for (`--refresh`, `?refresh=1`).
 
 ## Viewer as a user service on the hub
 
@@ -102,7 +121,12 @@ clear over plain HTTP, so treat it as a shared secret for your own devices, and 
 replacing the registry value.
 
 Point the unit at a **stable** copy of `board.py` (for example the currently installed skill
-path) and re-point it after a skill release that changes the script.
+path) and re-point it after a skill release that changes the script. The page is
+`assets/viewer.html` next to `scripts/`, read on every request, so keep the two together;
+without it the server still answers `/api/board` and says the page is missing.
+
+The viewer keeps its own preferences (filter chips, free-first sort, theme, notifications,
+history panel) in the browser's local storage; nothing is written on the hub.
 
 ## Environment overrides
 

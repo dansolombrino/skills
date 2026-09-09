@@ -35,10 +35,36 @@ SQUEUE_ONE_LEFT = (
 
 
 def probe_output(sessions: list[str], gpus: list[tuple[int, int, int]], boot: str) -> str:
+    """Legacy three-column probe (pre-5.8 rigs answer this shape); the parser must still accept it."""
     lines = list(sessions) + ["__GPUS__"]
     lines += [f"{i}, {mem}, {util}" for i, mem, util in gpus]
     lines += ["__BOOT__", boot]
     return "\n".join(lines) + "\n"
+
+
+RICH_PROBE = (
+    "grokking_000_grokking_20260908-101500_rig-4090_gpu0\n"
+    "bxaxis_20260810-222115_rig-4090_ev0\n"
+    "rig-4090-computer-management\n"
+    "__GPUS__\n"
+    "0, GPU-aaaa, NVIDIA GeForce RTX 4090, 24564, 13868, 0, 46, 19.16\n"
+    "1, GPU-bbbb, NVIDIA GeForce RTX 4090, 24564, 0, 0, 30, [N/A]\n"
+    "__APPS__\n"
+    "GPU-aaaa, 956236, 13858, /opt/llama.cpp/build/bin/llama-server\n"
+    "__PS__\n"
+    " 956236 dansolombrino  245713\n"
+    "__LOAD__\n"
+    "0.52 0.58 0.59 1/661 2258164\n"
+    "16\n"
+    "__BOOT__\n"
+    "2026-08-11 13:25:49\n"
+)
+
+RICH_PROBE_NO_LANE = RICH_PROBE.split("\n", 1)[1]  # same rig, but nobody on the board holds gpu0
+
+RICH_PROBE_NO_NVIDIA = (
+    "__GPUS__\n__NVIDIA_SMI_FAILED__\n__APPS__\n__PS__\n__LOAD__\n0.10 0.10 0.10 1/100 5\n8\n__BOOT__\n2026-08-11 13:25:49\n"
+)
 
 
 class BoardTests(unittest.TestCase):
@@ -388,6 +414,119 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("unverified", out)
 
+    def test_rich_probe_reports_gpu_facts_processes_owners_load_and_strays(self) -> None:
+        probe = board.parse_probe(self.config.rigs["rig-4090"], RICH_PROBE)
+        self.assertTrue(probe["gpu_probe_ok"])
+        self.assertEqual(probe["load"], [0.52, 0.58, 0.59])
+        self.assertEqual(probe["cpus"], 16)
+        g0, g1 = probe["gpus"]
+        self.assertEqual((g0["name"], g0["memory_total_mib"], g0["memory_used_mib"], g0["utilization"], g0["temperature_c"], g0["power_w"]), ("NVIDIA GeForce RTX 4090", 24564, 13868, 0, 46, 19))
+        self.assertIsNone(g1["power_w"])
+        self.assertEqual(g0["processes"], [{"pid": 956236, "user": "dansolombrino", "memory_mib": 13858, "name": "/opt/llama.cpp/build/bin/llama-server", "elapsed_s": 245713}])
+        self.assertEqual(g1["processes"], [])
+        # legacy three-column rigs still parse
+        legacy = board.parse_probe(self.config.rigs["rig-4090"], probe_output([], [(0, 2048, 50)], "2026-09-01 08:00:00"))
+        self.assertEqual(legacy["gpus"], [{"index": 0, "memory_used_mib": 2048, "utilization": 50}])
+        self.assertTrue(legacy["gpu_probe_ok"])
+        broken = board.parse_probe(self.config.rigs["rig-4090"], RICH_PROBE_NO_NVIDIA)
+        self.assertFalse(broken["gpu_probe_ok"])
+        self.assertEqual(broken["gpus"], [])
+        self.assertEqual(broken["cpus"], 8)
+        # through reconcile: gpu0 is held by the lane, gpu1 free, the stray session is surfaced, not adopted
+        self.claim()
+        code, out = self.reconcile_with({"rig-4090": RICH_PROBE, "behemoth": RICH_PROBE_NO_NVIDIA}, {"leonardo": (SQUEUE_EMPTY, "")})
+        self.assertEqual(code, 0)
+        data = json.loads(self.run_cli("status", "--json")[1])
+        rig = data["rigs"][0]
+        self.assertEqual(rig["free_gpus"], [1])
+        self.assertEqual(rig["foreign"], [])
+        self.assertEqual(rig["stray_sessions"], ["bxaxis_20260810-222115_rig-4090_ev0"])
+        self.assertEqual(data["api_version"], board.API_VERSION)
+        summary = data["summary"]
+        self.assertEqual((summary["gpus"], summary["free"], summary["held"], summary["foreign"], summary["unknown_rigs"]), (2, 1, 1, 0, 1))
+        self.assertIsNone(summary["next_free"])
+        self.run_cli("refresh", "--rig", "rig-4090", "--gpu", "0", "--eta", "2026-09-08T12:05:00+02:00", "--eta-basis", "exact-run history")
+        summary = json.loads(self.run_cli("status", "--json")[1])["summary"]
+        self.assertEqual(summary["next_free"]["rig"], "rig-4090")
+        self.assertEqual(summary["next_free"]["eta"], "2026-09-08T12:05:00+02:00")
+        behemoth = data["rigs"][1]
+        self.assertFalse(behemoth["gpu_probe_ok"])
+        self.assertEqual(behemoth["free_gpus"], [])
+        code, out, _ = self.run_cli("status")
+        self.assertIn("nvidia-smi failed on the rig", out)
+        self.assertIn("stray tmux session (not a lane): bxaxis_20260810-222115_rig-4090_ev0", out)
+        self.assertIn("gpu1  free         NVIDIA GeForce RTX 4090 · 0/24564 MiB", out)
+        self.assertIn("fleet: 1 free · 1 held", out)
+
+    def test_foreign_card_names_its_owner_process(self) -> None:
+        code, out = self.reconcile_with({"rig-4090": RICH_PROBE_NO_LANE, "behemoth": RICH_PROBE_NO_NVIDIA}, {"leonardo": (SQUEUE_EMPTY, "")})
+        data = json.loads(self.run_cli("status", "--json")[1])
+        self.assertEqual(data["rigs"][0]["foreign"], [0])
+        code, out, _ = self.run_cli("status")
+        self.assertIn("gpu0  foreign      busy without a lane on the board · NVIDIA GeForce RTX 4090 · 13868/24564 MiB · 0% util · 46°C · idle, holding memory · dansolombrino pid 956236 llama-server 13858 MiB for 2d20h", out)
+        self.assertEqual(self.run_cli("free", "rig-4090", "0")[0], 1)
+        self.assertEqual(self.run_cli("free", "rig-4090", "1")[0], 0)
+
+    def test_history_endpoint_and_cli_skip_quiet_reconciles_and_refresh_ticks(self) -> None:
+        self.claim()
+        self.run_cli("refresh", "--rig", "rig-4090", "--gpu", "0", "--progress", "epoch 1")
+        probe = probe_output([SESSION], [(0, 8000, 90)], "2026-09-01 08:00:00")
+        self.reconcile_with({"rig-4090": probe, "behemoth": probe}, {"leonardo": (SQUEUE_EMPTY, "")})  # nothing changes
+        self.run_cli("release", "--rig", "rig-4090", "--gpu", "0", "--reason", "done")
+        events = board.read_history(self.config)
+        self.assertEqual([e["event"] for e in events], ["release", "claim"])
+        with_refresh = board.read_history(self.config, include_refresh=True)
+        self.assertEqual([e["event"] for e in with_refresh], ["release", "refresh", "claim"])
+        self.assertEqual(board.read_history(self.config, hours=0), [])
+        code, out, _ = self.run_cli("history")
+        self.assertEqual(code, 0)
+        self.assertIn("release      rig-4090 gpu0      done", out)
+        self.assertNotIn("refresh", out)
+        Fake = self.fake_request(self.config)
+        api = Fake("/api/history?hours=48&limit=1&refresh=1")
+        api.do_GET()
+        self.assertEqual(api.code, 200)
+        payload = json.loads(api.wfile.getvalue())
+        self.assertEqual([e["event"] for e in payload["events"]], ["release"])
+        bad = Fake("/api/history?hours=soon")
+        bad.do_GET()
+        self.assertEqual(bad.code, 400)
+
+    def test_queue_groups_sweep_jobs_and_folds_bulk_diffs(self) -> None:
+        names = [f"20260909-121443__model=vit,seed=1,pct={pct},combo={c}" for pct in (10, 20) for c in range(4)]
+        lines = [f"{200 + i}|{n}|{'RUNNING' if i < 3 else 'PENDING'}|{'None' if i < 3 else 'Priority'}|boost|{'lrdn0' + str(i) if i < 3 else ''}|0:10:00|0:20:00|2026-09-09T12:00:00|2026-09-09T11:00:00" for i, n in enumerate(names)]
+        lines.append("300|eval_7|PENDING|Resources|boost||0:00|1:00:00|N/A|2026-09-09T11:30:00")
+        lines.append("301|eval_8|PENDING|Resources|boost||0:00|1:00:00|N/A|2026-09-09T11:30:00")
+        lines.append("302|qat_003_sweep_20260908-101500_leonardo_gpu1|RUNNING|None|boost|lrdn9|0:40:00|1:20:00|2026-09-08T10:20:00|2026-09-08T10:15:00")
+        output = "\n".join(lines) + "\n__SQUEUE_OK__\n"
+        probe = probe_output([], [(0, 0, 0)], "2026-09-01 08:00:00")
+        code, out = self.reconcile_with({"rig-4090": probe, "behemoth": probe}, {"leonardo": (output, "")})
+        self.assertIn("leonardo: 7 jobs appeared (PENDING) [203…301]", out)
+        self.assertIn("leonardo: job 200 appeared (RUNNING)", out)
+        cluster = board.read_json(self.config.rig_path("leonardo"))
+        assert cluster is not None
+        groups = {g["key"]: g for g in cluster["groups"]}
+        sweep = groups["20260909-121443"]
+        self.assertEqual((sweep["running"], sweep["pending"], len(sweep["jobs"])), (3, 5, 8))
+        self.assertEqual(sweep["common"], "model=vit,seed=1")
+        self.assertEqual(sweep["min_time_left"], "0:20:00")
+        self.assertEqual(sweep["reasons"], ["Priority"])
+        by_id = {j["job_id"]: j for j in cluster["jobs"]}
+        self.assertEqual(by_id["200"]["variant"], "pct=10,combo=0")
+        self.assertEqual(by_id["207"]["variant"], "pct=20,combo=3")
+        self.assertEqual(groups["eval"]["jobs"], ["300", "301"])
+        self.assertEqual(groups["qat / 003_sweep · wave 20260908-101500"]["running"], 1)
+        code, out, _ = self.run_cli("status")
+        self.assertIn("── 20260909-121443  boost  3 running (left 0:20:00…0:20:00) · 5 pending", out)
+        self.assertIn("common: model=vit,seed=1", out)
+        self.assertIn("… 5 more in this group (status --all lists every job)", out)
+        code, out, _ = self.run_cli("status", "--all")
+        self.assertNotIn("more in this group", out)
+        self.assertIn("207        PENDING      pct=20,combo=3", out)
+        self.assertEqual(board.slurm_seconds("1-02:03:04"), 93784)
+        self.assertEqual(board.slurm_seconds("23:12"), 1392)
+        self.assertEqual(board.slurm_seconds("5"), 300)
+
     def test_probe_runs_locally_on_the_hub_and_over_ssh_elsewhere(self) -> None:
         with mock.patch.object(board.socket, "gethostname", return_value="rig-4090"):
             self.assertEqual(board.probe_command(self.config.rigs["rig-4090"])[:2], ["bash", "-lc"])
@@ -473,7 +612,7 @@ class BoardTests(unittest.TestCase):
 
     def test_viewer_serves_page_and_json(self) -> None:
         self.claim()
-        handler = board.make_handler(self.config)
+        handler = board.make_handler(self.config, {"reconcile_every": 120})
 
         class Fake(handler):  # type: ignore[misc,valid-type]
             def __init__(self, path: str) -> None:
@@ -494,11 +633,23 @@ class BoardTests(unittest.TestCase):
         page = Fake("/")
         page.do_GET()
         self.assertEqual(page.code, 200)
-        self.assertIn(b"/api/board", page.wfile.getvalue())
+        body = page.wfile.getvalue()
+        self.assertIn(b"/api/board", body)
+        self.assertIn(b"/api/history", body)
+        self.assertTrue(board.VIEWER_PATH.is_file(), board.VIEWER_PATH)
+        self.assertEqual(body, board.VIEWER_PATH.read_bytes())
+        with mock.patch.object(board, "VIEWER_PATH", board.VIEWER_PATH.with_name("missing.html")):
+            fallback = Fake("/")
+            fallback.do_GET()
+            self.assertEqual(fallback.code, 200)
+            self.assertIn(b"viewer.html is missing", fallback.wfile.getvalue())
         api = Fake("/api/board?x=1")
         api.do_GET()
         self.assertEqual(api.code, 200)
-        self.assertEqual(json.loads(api.wfile.getvalue())["rigs"][0]["lanes"][0]["project"], "grokking")
+        payload = json.loads(api.wfile.getvalue())
+        self.assertEqual(payload["rigs"][0]["lanes"][0]["project"], "grokking")
+        self.assertEqual(payload["serve"]["reconcile_every_s"], 120)
+        self.assertIn("summary", payload)
         missing = Fake("/nope")
         missing.do_GET()
         self.assertEqual(missing.code, 404)

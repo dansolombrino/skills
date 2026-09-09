@@ -52,6 +52,11 @@ SESSION_RE = re.compile(
 EXPERIMENT_SPLIT_RE = re.compile(r"_(?=\d{3}_)")
 GPU_RE = re.compile(r"^\d+(?:,\d+)*$")
 WAVE_RE = re.compile(r"^\d{8}-\d{6}$")
+WAVE_IN_NAME_RE = re.compile(r"\d{8}-\d{6}")
+API_VERSION = 2
+HISTORY_DEFAULT_HOURS = 24
+HISTORY_MAX_EVENTS = 500
+RECONCILE_DUPLICATE_RE = re.compile(r"adopted live session|session gone → released|→ lane interrupted")
 
 
 class BoardError(Exception):
@@ -377,9 +382,16 @@ def require_rig(config: BoardConfig, name: str) -> Rig:
 
 # ───────────────────────────── probing rigs ─────────────────────────────
 
+GPU_QUERY = "index,uuid,name,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw"
+APP_QUERY = "gpu_uuid,pid,used_memory,process_name"
 PROBE_SCRIPT = (
     "tmux ls -F '#{session_name}' 2>/dev/null; echo __GPUS__; "
-    "nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader,nounits 2>/dev/null; "
+    f"nvidia-smi --query-gpu={GPU_QUERY} --format=csv,noheader,nounits 2>/dev/null || echo __NVIDIA_SMI_FAILED__; "
+    "echo __APPS__; "
+    f"nvidia-smi --query-compute-apps={APP_QUERY} --format=csv,noheader,nounits 2>/dev/null; "
+    "echo __PS__; "
+    "for p in $(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null); do ps -o pid=,user:32=,etimes= -p \"$p\" 2>/dev/null; done; "
+    "echo __LOAD__; cat /proc/loadavg 2>/dev/null; nproc 2>/dev/null; "
     "echo __BOOT__; uptime -s 2>/dev/null"
 )
 
@@ -406,22 +418,107 @@ def run_probe(rig: Rig) -> str | None:
     return result.stdout
 
 
+def _num(cell: str) -> int | None:
+    try:
+        return int(float(cell))
+    except ValueError:
+        return None
+
+
+def _section(output: str, marker: str, next_markers: tuple[str, ...]) -> str:
+    """Text between `marker` and the first of `next_markers` (all optional, order-independent)."""
+    _, found, rest = output.partition(marker)
+    if not found:
+        return ""
+    cut = len(rest)
+    for other in next_markers:
+        pos = rest.find(other)
+        if pos != -1:
+            cut = min(cut, pos)
+    return rest[:cut]
+
+
+PROBE_MARKERS = ("__GPUS__", "__APPS__", "__PS__", "__LOAD__", "__BOOT__")
+
+
+def parse_gpu_line(line: str) -> tuple[dict, str | None] | None:
+    """One nvidia-smi --query-gpu row: the legacy 3-column form or the full GPU_QUERY form."""
+    cells = [cell.strip() for cell in line.split(",")]
+    if len(cells) < 3 or not cells[0].isdigit():
+        return None
+    if len(cells) < 8:
+        used, util = _num(cells[1]), _num(cells[2])
+        if used is None or util is None:
+            return None
+        return {"index": int(cells[0]), "memory_used_mib": used, "utilization": util}, None
+    # name may itself contain commas: take the fixed tail from the right
+    tail = cells[-5:]
+    name = ", ".join(cells[2:-5])
+    total, used, util = _num(tail[0]), _num(tail[1]), _num(tail[2])
+    if used is None or util is None:
+        return None
+    gpu = {
+        "index": int(cells[0]),
+        "name": name or None,
+        "memory_total_mib": total,
+        "memory_used_mib": used,
+        "utilization": util,
+        "temperature_c": _num(tail[3]),
+        "power_w": _num(tail[4]),
+        "processes": [],
+    }
+    return gpu, cells[1]
+
+
 def parse_probe(rig: Rig, output: str) -> dict:
-    sessions_part, _, rest = output.partition("__GPUS__")
-    gpus_part, _, boot_part = rest.partition("__BOOT__")
+    sessions_part = output.partition("__GPUS__")[0]
     sessions = [line.strip() for line in sessions_part.splitlines() if line.strip()]
+    gpus_part = _section(output, "__GPUS__", PROBE_MARKERS[1:])
+    gpu_probe_ok = "__NVIDIA_SMI_FAILED__" not in gpus_part
     gpus: list[dict] = []
+    by_uuid: dict[str, dict] = {}
     for line in gpus_part.splitlines():
-        cells = [cell.strip() for cell in line.split(",")]
-        if len(cells) < 3 or not cells[0].isdigit():
+        parsed = parse_gpu_line(line)
+        if parsed is None:
             continue
+        gpu, uuid = parsed
+        gpus.append(gpu)
+        if uuid:
+            by_uuid[uuid] = gpu
+    owners: dict[int, dict] = {}
+    for line in _section(output, "__PS__", ("__LOAD__", "__BOOT__")).splitlines():
+        cells = line.split(None, 2)
+        if len(cells) == 3 and cells[0].isdigit():
+            owners[int(cells[0])] = {"user": cells[1], "elapsed_s": _num(cells[2])}
+    for line in _section(output, "__APPS__", ("__PS__", "__LOAD__", "__BOOT__")).splitlines():
+        cells = [cell.strip() for cell in line.split(",", 3)]
+        if len(cells) != 4 or not cells[1].isdigit():
+            continue
+        gpu = by_uuid.get(cells[0])
+        if gpu is None:
+            continue
+        pid = int(cells[1])
+        owner = owners.get(pid, {})
+        gpu["processes"].append(
+            {
+                "pid": pid,
+                "user": owner.get("user"),
+                "memory_mib": _num(cells[2]),
+                "name": cells[3] or None,
+                "elapsed_s": owner.get("elapsed_s"),
+            }
+        )
+    load: list[float] | None = None
+    cpus: int | None = None
+    load_lines = _section(output, "__LOAD__", ("__BOOT__",)).split()
+    if len(load_lines) >= 3:
         try:
-            gpus.append(
-                {"index": int(cells[0]), "memory_used_mib": int(float(cells[1])), "utilization": int(float(cells[2]))}
-            )
+            load = [float(load_lines[0]), float(load_lines[1]), float(load_lines[2])]
         except ValueError:
-            continue
-    boot = boot_part.strip() or None
+            load = None
+        if load_lines[-1].isdigit() and len(load_lines) >= 6:
+            cpus = int(load_lines[-1])
+    boot = _section(output, "__BOOT__", ()).strip() or None
     boot_at = None
     if boot:
         try:
@@ -436,6 +533,9 @@ def parse_probe(rig: Rig, output: str) -> dict:
         "boot_at": boot_at,
         "sessions": sessions,
         "gpus": gpus,
+        "gpu_probe_ok": gpu_probe_ok,
+        "load": load,
+        "cpus": cpus,
     }
 
 
@@ -448,6 +548,9 @@ def unreachable_probe(rig: Rig, previous: dict | None) -> dict:
         "boot_at": (previous or {}).get("boot_at"),
         "sessions": (previous or {}).get("sessions", []),
         "gpus": (previous or {}).get("gpus", []),
+        "gpu_probe_ok": (previous or {}).get("gpu_probe_ok"),
+        "load": (previous or {}).get("load"),
+        "cpus": (previous or {}).get("cpus"),
         "last_reachable_at": (previous or {}).get("at") if (previous or {}).get("reachable") else (previous or {}).get("last_reachable_at"),
     }
 
@@ -502,9 +605,122 @@ def parse_slurm_probe(target: SlurmTarget, output: str) -> dict:
         "at": iso(now()),
         "reachable": True,
         "jobs": jobs,
+        "groups": group_jobs(jobs),
         "running": sum(1 for j in jobs if j["state"] == "RUNNING"),
         "pending": sum(1 for j in jobs if j["state"] == "PENDING"),
     }
+
+
+TRAILING_INDEX_RE = re.compile(r"[_-]?\d+$")
+
+
+def job_group_key(job: dict) -> tuple[str, str]:
+    """(group key, the part of the name that may vary inside the group).
+
+    Lane-convention names group by project/experiment/wave. `<wave>__k=v,k=v` sweep names
+    (one Slurm job per configuration) group by the `<wave>` prefix. Anything else groups by the
+    name with a trailing index stripped, so `eval_1`, `eval_2` land together."""
+    if job.get("wave_id") and job.get("project"):
+        return f"{job['project']} / {job['experiment']} · wave {job['wave_id']}", ""
+    name = job.get("name") or ""
+    if "__" in name:
+        prefix, _, rest = name.partition("__")
+        return prefix, rest
+    return TRAILING_INDEX_RE.sub("", name) or name, name
+
+
+def group_jobs(jobs: list[dict]) -> list[dict]:
+    """Fold a queue into groups; annotates every job with `group` and `variant` in place."""
+    groups: dict[str, dict] = {}
+    for job in jobs:
+        key, varying = job_group_key(job)
+        job["group"] = key
+        group = groups.setdefault(
+            key, {"key": key, "jobs": [], "_varying": [], "running": 0, "pending": 0, "other": 0, "nodes": [], "partition": job.get("partition")}
+        )
+        group["jobs"].append(job["job_id"])
+        group["_varying"].append(varying)
+        state = job.get("state")
+        if state == "RUNNING":
+            group["running"] += 1
+            if job.get("nodes"):
+                group["nodes"].append(job["nodes"])
+        elif state == "PENDING":
+            group["pending"] += 1
+        else:
+            group["other"] += 1
+    out: list[dict] = []
+    for key, group in groups.items():
+        token_lists = [v.split(",") if v else [] for v in group.pop("_varying")]
+        common = set(token_lists[0]) if token_lists and token_lists[0] else set()
+        for tokens in token_lists[1:]:
+            common &= set(tokens)
+        if len(token_lists) == 1:
+            common = set()
+        group["common"] = ",".join(t for t in token_lists[0] if t in common) if token_lists else ""
+        members = [j for j in jobs if j.get("group") == key]
+        for job, tokens in zip(members, token_lists):
+            job["variant"] = ",".join(t for t in tokens if t not in common)
+        running = [j for j in members if j.get("state") == "RUNNING"]
+        pending = [j for j in members if j.get("state") == "PENDING"]
+        group["min_time_left"] = min((j["time_left"] for j in running if j.get("time_left")), key=slurm_seconds, default=None)
+        group["max_time_left"] = max((j["time_left"] for j in running if j.get("time_left")), key=slurm_seconds, default=None)
+        group["earliest_start"] = min((j["start"] for j in pending if j.get("start")), default=None)
+        group["reasons"] = sorted({j["reason"] for j in pending if j.get("reason")})
+        out.append(group)
+    out.sort(key=lambda g: (-g["running"], -g["pending"], g["key"]))
+    return out
+
+
+def slurm_seconds(value: str | None) -> int:
+    """`[D-]HH:MM:SS`, `MM:SS` or `M` as seconds; unparsable sorts last."""
+    if not value:
+        return 10**9
+    days = 0
+    text = value
+    if "-" in text:
+        day_part, _, text = text.partition("-")
+        days = int(day_part) if day_part.isdigit() else 0
+    parts = text.split(":")
+    try:
+        numbers = [int(part) for part in parts]
+    except ValueError:
+        return 10**9
+    seconds = 0
+    for number in numbers:
+        seconds = seconds * 60 + number
+    if len(numbers) == 1:
+        seconds *= 60
+    return days * 86400 + seconds
+
+
+def summarize_queue_changes(target: str, before: dict[str, str], after: dict[str, str], fold_at: int = 5) -> list[str]:
+    """Human lines for a queue diff; bulk submissions fold into one line per kind instead of one per job."""
+    appeared: dict[str, list[str]] = {}
+    for job_id in sorted(after.keys() - before.keys()):
+        appeared.setdefault(after[job_id], []).append(job_id)
+    left: dict[str, list[str]] = {}
+    for job_id in sorted(before.keys() - after.keys()):
+        left.setdefault(before[job_id], []).append(job_id)
+    moved: dict[tuple[str, str], list[str]] = {}
+    for job_id in sorted(before.keys() & after.keys()):
+        if before[job_id] != after[job_id]:
+            moved.setdefault((before[job_id], after[job_id]), []).append(job_id)
+    lines: list[str] = []
+
+    def fold(ids: list[str], single: str, many: str) -> None:
+        if len(ids) > fold_at:
+            lines.append(many.format(n=len(ids), first=ids[0], last=ids[-1]))
+        else:
+            lines.extend(single.format(job_id=job_id) for job_id in ids)
+
+    for state, ids in appeared.items():
+        fold(ids, f"{target}: job {{job_id}} appeared ({state})", f"{target}: {{n}} jobs appeared ({state}) [{{first}}…{{last}}]")
+    for state, ids in left.items():
+        fold(ids, f"{target}: job {{job_id}} left the queue (was {state})", f"{target}: {{n}} jobs left the queue (were {state}) [{{first}}…{{last}}]")
+    for (was, is_now), ids in moved.items():
+        fold(ids, f"{target}: job {{job_id}} {was} → {is_now}", f"{target}: {{n}} jobs {was} → {is_now} [{{first}}…{{last}}]")
+    return lines
 
 
 def unreachable_slurm_probe(target: SlurmTarget, previous: dict | None, reason: str) -> dict:
@@ -516,6 +732,7 @@ def unreachable_slurm_probe(target: SlurmTarget, previous: dict | None, reason: 
         "reachable": False,
         "reason": reason,
         "jobs": previous.get("jobs", []),
+        "groups": previous.get("groups", group_jobs(list(previous.get("jobs", [])))),
         "running": previous.get("running", 0),
         "pending": previous.get("pending", 0),
         "last_reachable_at": previous.get("at") if previous.get("reachable") else previous.get("last_reachable_at"),
@@ -648,13 +865,7 @@ def reconcile(config: BoardConfig, rigs: list[str] | None = None, quiet: bool = 
                 probe = parse_slurm_probe(target, output)
                 before = {j["job_id"]: j["state"] for j in (previous or {}).get("jobs", [])}
                 after = {j["job_id"]: j["state"] for j in probe["jobs"]}
-                for job_id in sorted(after.keys() - before.keys()):
-                    changes.append(f"{target.name}: job {job_id} appeared ({after[job_id]})")
-                for job_id in sorted(before.keys() - after.keys()):
-                    changes.append(f"{target.name}: job {job_id} left the queue (was {before[job_id]})")
-                for job_id in sorted(before.keys() & after.keys()):
-                    if before[job_id] != after[job_id]:
-                        changes.append(f"{target.name}: job {job_id} {before[job_id]} → {after[job_id]}")
+                changes.extend(summarize_queue_changes(target.name, before, after))
             write_json(config.rig_path(target.name), probe)
         append_history(config, "reconcile", rigs=[t.name for t in targets] + [t.name for t in slurm_targets], changes=changes)
     if not quiet:
@@ -685,6 +896,19 @@ def snapshot(config: BoardConfig) -> dict:
         probe.setdefault("foreign", [])
         probe["lanes"] = [lane for lane in lanes if lane.get("rig") == name]
         probe.setdefault("kind", "rig")
+        probe.setdefault("gpu_probe_ok", None if probe.get("reachable") is None else bool(probe.get("gpus")))
+        covered: set[int] = set()
+        for lane in probe["lanes"]:
+            covered |= gpu_indices(str(lane.get("gpu", "0")))
+        probe["free_gpus"] = [
+            g["index"] for g in probe.get("gpus", []) if g["index"] not in covered and g["index"] not in probe["foreign"]
+        ]
+        # experiment-looking tmux sessions (they carry a wave id) that do not follow the lane convention
+        probe["stray_sessions"] = [
+            s
+            for s in probe.get("sessions", [])
+            if WAVE_IN_NAME_RE.search(s) and (parse_session_name(s) or {}).get("rig") != name
+        ]
         rigs.append(probe)
     slurm = []
     for name in config.slurm:
@@ -695,11 +919,132 @@ def snapshot(config: BoardConfig) -> dict:
             "reachable": None,
             "reason": None,
             "jobs": [],
+            "groups": [],
             "running": 0,
             "pending": 0,
         }
         slurm.append(probe)
-    return {"generated_at": iso(now()), "board_root": str(config.root), "rigs": rigs, "slurm": slurm}
+    return {
+        "api_version": API_VERSION,
+        "generated_at": iso(now()),
+        "board_root": str(config.root),
+        "rigs": rigs,
+        "slurm": slurm,
+        "summary": summarize(rigs, slurm),
+    }
+
+
+def summarize(rigs: list[dict], slurm: list[dict]) -> dict:
+    """Fleet-level counts and the soonest ETA, so one glance answers 'anything free?'."""
+    counts = {"gpus": 0, "free": 0, "held": 0, "foreign": 0, "interrupted": 0, "silent": 0, "unreachable_rigs": 0, "unknown_rigs": 0}
+    next_free: dict | None = None
+    for rig in rigs:
+        if rig.get("reachable") is False:
+            counts["unreachable_rigs"] += 1
+        elif rig.get("reachable") is None or not rig.get("gpu_probe_ok"):
+            counts["unknown_rigs"] += 1
+        counts["gpus"] += len(rig.get("gpus", []))
+        counts["free"] += len(rig.get("free_gpus", []))
+        counts["foreign"] += len(rig.get("foreign", []))
+        for lane in rig.get("lanes", []):
+            counts["held"] += len(gpu_indices(str(lane.get("gpu", "0"))))
+            observed = lane.get("observed") or {}
+            if observed.get("state") == "interrupted":
+                counts["interrupted"] += 1
+            silent = observed.get("orchestrator_silent_s")
+            if silent is not None and silent > ORCHESTRATOR_SILENT_S:
+                counts["silent"] += 1
+            eta = parse_iso(lane.get("eta"))
+            if eta and (next_free is None or eta < next_free["_eta"]):
+                next_free = {
+                    "_eta": eta,
+                    "rig": rig["rig"],
+                    "gpu": lane.get("gpu"),
+                    "project": lane.get("project"),
+                    "experiment": lane.get("experiment"),
+                    "eta": lane.get("eta"),
+                    "eta_basis": lane.get("eta_basis"),
+                }
+    if next_free:
+        next_free.pop("_eta")
+    counts["slurm_running"] = sum(int(c.get("running") or 0) for c in slurm)
+    counts["slurm_pending"] = sum(int(c.get("pending") or 0) for c in slurm)
+    counts["next_free"] = next_free
+    return counts
+
+
+QUEUE_LINE_RE = re.compile(r"^(?P<target>[^:]+): job (?P<id>\S+) (?P<kind>appeared \([A-Z_]+\)|left the queue \(was [A-Z_]+\)|[A-Z_]+ → [A-Z_]+)$")
+
+
+def fold_change_lines(lines: list[str], fold_at: int = 5) -> list[str]:
+    """Fold per-job queue lines written before bulk folding existed, so old history reads the same way."""
+    buckets: dict[tuple[str, str], list[str]] = {}
+    order: list[object] = []
+    for line in lines:
+        match = QUEUE_LINE_RE.match(line)
+        if not match:
+            order.append(line)
+            continue
+        key = (match.group("target"), match.group("kind"))
+        if key not in buckets:
+            buckets[key] = []
+            order.append(key)
+        buckets[key].append(match.group("id"))
+    out: list[str] = []
+    for item in order:
+        if isinstance(item, str):
+            out.append(item)
+            continue
+        target, kind = item
+        ids = buckets[item]
+        if len(ids) <= fold_at:
+            out.extend(f"{target}: job {job_id} {kind}" for job_id in ids)
+        elif kind.startswith("appeared"):
+            out.append(f"{target}: {len(ids)} jobs {kind} [{ids[0]}…{ids[-1]}]")
+        elif kind.startswith("left the queue"):
+            out.append(f"{target}: {len(ids)} jobs left the queue ({kind[len('left the queue (was '):-1]}) [{ids[0]}…{ids[-1]}]")
+        else:
+            out.append(f"{target}: {len(ids)} jobs {kind} [{ids[0]}…{ids[-1]}]")
+    return out
+
+
+def read_history(
+    config: BoardConfig, hours: float = HISTORY_DEFAULT_HOURS, limit: int = HISTORY_MAX_EVENTS, include_refresh: bool = False
+) -> list[dict]:
+    """Newest-first board events within `hours`. Reconcile ticks that changed nothing are dropped,
+    and the ten-minute orchestrator refresh ticks only when asked for."""
+    path = config.history_path
+    if not path.exists():
+        return []
+    cutoff = now() - timedelta(hours=hours)
+    events: list[dict] = []
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return []
+    for line in reversed(lines):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        if record.get("event") == "reconcile":
+            # adopt / release / interrupted have their own events; keep only the lines nothing else records
+            record = {**record, "changes": fold_change_lines([c for c in record.get("changes", []) if not RECONCILE_DUPLICATE_RE.search(c)])}
+            if not record["changes"]:
+                continue
+        if record.get("event") == "refresh" and not include_refresh:
+            continue
+        at = parse_iso(record.get("at"))
+        if at is None or at < cutoff:
+            if at is not None:
+                break
+            continue
+        events.append(record)
+        if len(events) >= limit:
+            break
+    return events
 
 
 def humanize(seconds: float | None) -> str:
@@ -722,6 +1067,53 @@ def age(value: str | None) -> str:
     return humanize((now() - stamp).total_seconds()) if stamp else "?"
 
 
+def describe_gpu(gpu: dict | None) -> str:
+    if not gpu:
+        return "no GPU facts (rig never probed)"
+    parts = []
+    if gpu.get("name"):
+        parts.append(str(gpu["name"]))
+    if gpu.get("memory_total_mib"):
+        parts.append(f"{gpu['memory_used_mib']}/{gpu['memory_total_mib']} MiB")
+    else:
+        parts.append(f"{gpu.get('memory_used_mib', '?')} MiB used")
+    parts.append(f"{gpu.get('utilization', '?')}% util")
+    if gpu.get("temperature_c") is not None:
+        parts.append(f"{gpu['temperature_c']}°C")
+    return " · ".join(parts)
+
+
+def describe_foreign(gpu: dict | None) -> str:
+    base = "busy without a lane on the board"
+    if not gpu:
+        return base
+    procs = gpu.get("processes") or []
+    who = ", ".join(
+        f"{p.get('user') or '?'} pid {p['pid']} {Path(p['name']).name if p.get('name') else '?'}"
+        f" {p.get('memory_mib') or '?'} MiB" + (f" for {humanize(p['elapsed_s'])}" if p.get("elapsed_s") is not None else "")
+        for p in procs
+    )
+    idle = " · idle, holding memory" if gpu.get("utilization", 100) < 5 else ""
+    return f"{base} · {describe_gpu(gpu)}{idle}" + (f" · {who}" if who else "")
+
+
+def history_cli(config: BoardConfig, args: argparse.Namespace) -> int:
+    events = read_history(config, hours=args.hours, limit=args.limit, include_refresh=args.refresh)
+    if args.json:
+        print(json.dumps(events, indent=2, sort_keys=True))
+        return 0
+    if not events:
+        print(f"no board events in the last {args.hours:g}h")
+        return 0
+    for record in events:
+        where = f"{record.get('rig', '')}" + (f" gpu{record['gpu']}" if record.get("gpu") is not None else "")
+        detail = record.get("reason") or record.get("session") or ""
+        if record.get("event") == "reconcile":
+            detail = "; ".join(record.get("changes", []))
+        print(f"{record.get('at')}  {record.get('event'):<12} {where:<18} {detail}")
+    return 0
+
+
 def status(config: BoardConfig, args: argparse.Namespace) -> int:
     if args.reconcile:
         reconcile(config, quiet=True)
@@ -729,11 +1121,23 @@ def status(config: BoardConfig, args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(data, indent=2, sort_keys=True))
         return 0
+    summary = data["summary"]
     print(f"rig-board @ {data['generated_at']}  ({config.root})")
+    line = (
+        f"fleet: {summary['free']} free · {summary['held']} held · {summary['foreign']} foreign"
+        f" · {summary['interrupted']} interrupted · {summary['unreachable_rigs']} unreachable rig(s)"
+    )
+    if summary.get("next_free"):
+        nf = summary["next_free"]
+        line += f" · next ETA {nf['rig']} gpu{nf['gpu']} ({nf['project']}) {nf['eta']}"
+    print(line)
     for rig in data["rigs"]:
         reach = "unreachable" if rig["reachable"] is False else ("never probed" if rig["reachable"] is None else f"probed {age(rig['at'])} ago")
         print(f"\n{rig['rig']}  [{reach}]" + ("  shared" if rig.get("shared") else ""))
-        if not rig["lanes"] and not rig["foreign"]:
+        if rig["reachable"] and rig.get("gpu_probe_ok") is False:
+            print("  nvidia-smi failed on the rig: GPU state unknown")
+        gpus = {g["index"]: g for g in rig.get("gpus", [])}
+        if not rig["lanes"] and not rig["foreign"] and not rig.get("free_gpus"):
             print("  free" if rig["reachable"] else "  no lanes on the board")
         for lane in rig["lanes"]:
             state = lane.get("observed", {}).get("state", "?")
@@ -744,7 +1148,11 @@ def status(config: BoardConfig, args: argparse.Namespace) -> int:
                 f"  {lane.get('progress') or ''}  eta {eta}  updated {age(lane.get('updated_at'))} ago"
             )
         for index in rig["foreign"]:
-            print(f"  gpu{index}  foreign      busy without a lane on the board")
+            print(f"  gpu{index}  foreign      {describe_foreign(gpus.get(index))}")
+        for index in rig.get("free_gpus", []):
+            print(f"  gpu{index}  free         {describe_gpu(gpus.get(index))}")
+        for session in rig.get("stray_sessions", []):
+            print(f"  stray tmux session (not a lane): {session}")
     for cluster in data["slurm"]:
         if cluster["reachable"] is False:
             reach = f"unreachable: {cluster.get('reason') or '?'}; showing last known"
@@ -755,10 +1163,33 @@ def status(config: BoardConfig, args: argparse.Namespace) -> int:
         print(f"\n{cluster['rig']}  [slurm, {reach}]  {cluster.get('running', 0)} running, {cluster.get('pending', 0)} pending")
         if not cluster["jobs"]:
             print("  no jobs in the queue")
+        groups = cluster.get("groups") or group_jobs(list(cluster["jobs"]))
+        for group in groups:
+            if len(group["jobs"]) > 1:
+                tail = []
+                if group["running"]:
+                    tail.append(f"{group['running']} running (left {group['min_time_left']}…{group['max_time_left']})")
+                if group["pending"]:
+                    tail.append(f"{group['pending']} pending (earliest start {group['earliest_start'] or '?'}; {', '.join(group['reasons']) or '?'})")
+                if group["other"]:
+                    tail.append(f"{group['other']} other")
+                print(f"  ── {group['key']}  {group.get('partition') or ''}  {' · '.join(tail)}")
+                if group.get("common"):
+                    print(f"     common: {group['common']}")
+        by_group: dict[str, list[dict]] = {}
         for job in cluster["jobs"]:
-            who = f"{job['project']} / {job['experiment']}  wave {job['wave_id']}" if job.get("wave_id") else job["name"]
-            tail = f"elapsed {job['elapsed']}  left {job['time_left']}" if job["state"] == "RUNNING" else f"reason {job.get('reason') or '?'}  start {job.get('start') or '?'}"
-            print(f"  {job['job_id']:<10} {job['state']:<12} {who}  {job['partition']}  {job.get('nodes') or '-'}  {tail}")
+            by_group.setdefault(job.get("group", job["name"]), []).append(job)
+        shown = 0
+        for group in groups:
+            members = by_group.get(group["key"], [])
+            limit = len(members) if args.all or len(members) <= 3 else 3
+            for job in members[:limit]:
+                who = f"{job['project']} / {job['experiment']}  wave {job['wave_id']}" if job.get("wave_id") else (job.get("variant") or job["name"])
+                tail = f"elapsed {job['elapsed']}  left {job['time_left']}" if job["state"] == "RUNNING" else f"reason {job.get('reason') or '?'}  start {job.get('start') or '?'}"
+                print(f"  {job['job_id']:<10} {job['state']:<12} {who}  {job['partition']}  {job.get('nodes') or '-'}  {tail}")
+                shown += 1
+            if limit < len(members):
+                print(f"  … {len(members) - limit} more in this group (status --all lists every job)")
     return 0
 
 
@@ -790,69 +1221,18 @@ def free(config: BoardConfig, args: argparse.Namespace) -> int:
 
 # ───────────────────────────── viewer ─────────────────────────────
 
-PAGE = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>rig-board</title>
-<style>
-:root{--bg:#f6f7f9;--card:#fff;--ink:#1c1f24;--muted:#6b7280;--line:#e5e7eb;--free:#15803d;--busy:#b45309;--bad:#b91c1c;--foreign:#6d28d9;--freebg:#ecfdf5;--busybg:#fffbeb;--badbg:#fef2f2;--foreignbg:#f5f3ff}
-@media(prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a21;--ink:#e6e8ee;--muted:#9aa3b2;--line:#2a2f3a;--freebg:#0f2a1c;--busybg:#2d2208;--badbg:#2e1212;--foreignbg:#1f1836;--free:#4ade80;--busy:#fbbf24;--bad:#f87171;--foreign:#c4b5fd}}
-body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-header{display:flex;align-items:baseline;gap:16px;padding:16px 24px;border-bottom:1px solid var(--line)}
-h1{font-size:18px;margin:0}small{color:var(--muted)}
-main{display:grid;gap:16px;padding:24px;grid-template-columns:repeat(auto-fill,minmax(420px,1fr))}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
-.card h2{font-size:15px;margin:0 0 6px;display:flex;justify-content:space-between;align-items:baseline}
-.pill{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
-.lane{border-radius:8px;padding:8px 10px;margin:8px 0;border:1px solid var(--line)}
-.lane.free{background:var(--freebg);border-color:transparent}.lane.running{background:var(--busybg);border-color:transparent}
-.lane.interrupted,.lane.unreachable{background:var(--badbg);border-color:transparent}.lane.foreign,.lane.pending{background:var(--foreignbg);border-color:transparent}
-.lane .top{display:flex;justify-content:space-between;font-weight:600}
-.state.free{color:var(--free)}.state.running{color:var(--busy)}.state.interrupted,.state.unreachable{color:var(--bad)}.state.foreign,.state.pending{color:var(--foreign)}
-.meta{color:var(--muted);font-size:12px;margin-top:4px;word-break:break-all}
-.bar{height:5px;background:var(--line);border-radius:3px;margin-top:6px;overflow:hidden}.bar i{display:block;height:100%;background:var(--busy)}
-code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
-.err{color:var(--bad);padding:8px 24px}
-</style></head><body>
-<header><h1>rig-board</h1><small id="stamp">loading…</small><small id="root"></small></header>
-<div class="err" id="err" hidden></div>
-<main id="main"></main>
-<script>
-const fmtAge=s=>{if(s==null)return "?";s=Math.max(0,Math.floor(s));if(s<90)return s+"s";const m=Math.floor(s/60);if(m<90)return m+"m";const h=Math.floor(m/60);return h<48?h+"h"+String(m%60).padStart(2,"0")+"m":Math.floor(h/24)+"d"+(h%24)+"h"};
-const ago=(iso,nowMs)=>iso?fmtAge((nowMs-Date.parse(iso))/1000)+" ago":"?";
-const until=(iso,nowMs)=>{if(!iso)return "unavailable";const d=(Date.parse(iso)-nowMs)/1000;return isNaN(d)?iso:(d<0?"overdue "+fmtAge(-d):"in "+fmtAge(d)+" ("+new Date(iso).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})+")")};
-const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-function render(d){const nowMs=Date.parse(d.generated_at);document.getElementById("stamp").textContent="board read "+new Date(d.generated_at).toLocaleTimeString();document.getElementById("root").textContent=d.board_root;
-const main=document.getElementById("main");main.innerHTML="";
-for(const rig of d.rigs){const card=document.createElement("section");card.className="card";
-const reach=rig.reachable===false?"unreachable · last "+ago(rig.last_reachable_at,nowMs):rig.reachable==null?"never probed":"probed "+ago(rig.at,nowMs);
-card.innerHTML=`<h2><span>${esc(rig.rig)}${rig.shared?' <span class="pill">shared</span>':''}</span><span class="pill">${esc(reach)}${rig.boot_at?' · up since '+new Date(rig.boot_at).toLocaleString():''}</span></h2>`;
-const held=new Map();for(const l of rig.lanes)held.set(l.gpu,l);
-const gpuIdx=rig.gpus.length?rig.gpus.map(g=>g.index):[];const seen=new Set();
-for(const l of rig.lanes){for(const i of l.gpu.split(","))seen.add(+i);const st=(l.observed&&l.observed.state)||"claimed";const cls=st==="running"||st==="claimed"?"running":st;
-const tot=l.runs_total,done=l.runs_done;const pct=tot&&done!=null?Math.round(100*done/tot):null;
-card.insertAdjacentHTML("beforeend",`<div class="lane ${cls}"><div class="top"><span>gpu${esc(l.gpu)} · ${esc(l.project)} / ${esc(l.experiment)}</span><span class="state ${cls}">${esc(st)}</span></div>
-<div>wave ${esc(l.wave_id)} · run ${esc(l.active_run||"?")} ${esc(l.progress||"")}</div>
-<div>ETA ${esc(until(l.eta,nowMs))}${l.eta_basis?' <small>· '+esc(l.eta_basis)+'</small>':''}${tot?' · '+done+'/'+tot+' runs':''}</div>
-${pct!=null?`<div class="bar"><i style="width:${pct}%"></i></div>`:""}
-<div class="meta">held ${ago(l.claimed_at,nowMs)} · orchestrator update ${ago(l.updated_at,nowMs)}${l.observed&&l.observed.orchestrator_silent_s>1800?' <b>(silent)</b>':''} · <code>tmux attach -t ${esc(l.tmux_session)}</code></div></div>`)}
-for(const i of rig.foreign||[]){seen.add(i);const g=rig.gpus.find(x=>x.index===i);card.insertAdjacentHTML("beforeend",`<div class="lane foreign"><div class="top"><span>gpu${i}</span><span class="state foreign">foreign</span></div><div class="meta">busy without a lane on the board${g?" · "+g.memory_used_mib+" MiB · "+g.utilization+"% util":""}</div></div>`)}
-const freeIdx=gpuIdx.filter(i=>!seen.has(i));
-if(freeIdx.length)card.insertAdjacentHTML("beforeend",`<div class="lane free"><div class="top"><span>gpu${freeIdx.join(", gpu")}</span><span class="state free">free</span></div></div>`);
-else if(!rig.lanes.length&&!(rig.foreign||[]).length)card.insertAdjacentHTML("beforeend",`<div class="lane free"><div class="top"><span>no lanes</span><span class="state free">free</span></div></div>`);
-main.appendChild(card)}
-for(const c of d.slurm||[]){const card=document.createElement("section");card.className="card";
-const reach=c.reachable===false?"unreachable · "+(c.reason||"?")+" · last "+ago(c.last_reachable_at,nowMs):c.reachable==null?"never probed":"probed "+ago(c.at,nowMs);
-card.innerHTML=`<h2><span>${esc(c.rig)} <span class="pill">slurm</span></span><span class="pill">${esc(reach)}</span></h2><div class="meta">${c.running||0} running · ${c.pending||0} pending</div>`;
-if(!c.jobs.length)card.insertAdjacentHTML("beforeend",`<div class="lane free"><div class="top"><span>queue empty</span><span class="state free">idle</span></div></div>`);
-for(const j of c.jobs){const run=j.state==="RUNNING";const cls=run?"running":(j.state==="PENDING"?"pending":"interrupted");const who=j.wave_id?`${esc(j.project)} / ${esc(j.experiment)} · wave ${esc(j.wave_id)}`:esc(j.name);
-card.insertAdjacentHTML("beforeend",`<div class="lane ${cls}"><div class="top"><span>${esc(j.job_id)} · ${who}</span><span class="state ${cls}">${esc(j.state)}</span></div>
-<div>${run?`elapsed ${esc(j.elapsed)} · left ${esc(j.time_left)} · ${esc(j.nodes||"?")}`:`reason ${esc(j.reason||"?")} · start ${esc(j.start||"unknown")} · submitted ${esc(j.submitted||"?")}`}</div>
-<div class="meta">${esc(j.partition)} · <code>${esc(j.name)}</code></div></div>`)}
-main.appendChild(card)}}
-async function tick(){try{const q=new URLSearchParams(location.search).get("token");const r=await fetch("/api/board"+(q?"?token="+encodeURIComponent(q):""),{cache:"no-store"});if(!r.ok)throw new Error(r.status+" "+r.statusText);render(await r.json());document.getElementById("err").hidden=true}catch(e){const el=document.getElementById("err");el.hidden=false;el.textContent="board unavailable: "+e.message}}
-tick();setInterval(tick,5000);
-</script></body></html>
+VIEWER_PATH = Path(__file__).resolve().parent.parent / "assets" / "viewer.html"
+FALLBACK_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>rig-board</title></head>
+<body><h1>rig-board</h1><p>viewer.html is missing next to board.py; the JSON is still at <a href="/api/board">/api/board</a>.</p></body></html>
 """
+
+
+def viewer_page() -> bytes:
+    """The viewer is a static file next to the script, read per request so edits show without a restart."""
+    try:
+        return VIEWER_PATH.read_bytes()
+    except OSError:
+        return FALLBACK_PAGE.encode()
 
 
 COOKIE_NAME = "rig_board_token"
@@ -876,7 +1256,9 @@ def presented_token(handler: BaseHTTPRequestHandler, url) -> tuple[str | None, b
     return None, False
 
 
-def make_handler(config: BoardConfig):
+def make_handler(config: BoardConfig, state: dict | None = None):
+    serve_state = state if state is not None else {}
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args: object) -> None:  # quiet
             pass
@@ -896,10 +1278,31 @@ def make_handler(config: BoardConfig):
                 if from_query:
                     set_cookie = f"{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000"
             if path == "/api/board":
-                body = json.dumps(snapshot(config)).encode()
+                data = snapshot(config)
+                data["serve"] = {
+                    "reconcile_every_s": serve_state.get("reconcile_every"),
+                    "last_reconcile_at": serve_state.get("last_reconcile_at"),
+                    "last_reconcile_error": serve_state.get("last_reconcile_error"),
+                    "reconciling": bool(serve_state.get("reconciling")),
+                }
+                body = json.dumps(data).encode()
+                self._send(200, "application/json; charset=utf-8", body, set_cookie)
+            elif path == "/api/history":
+                query = parse_qs(url.query)
+                try:
+                    hours = float(query.get("hours", [HISTORY_DEFAULT_HOURS])[0])
+                    limit = int(query.get("limit", [HISTORY_MAX_EVENTS])[0])
+                except ValueError:
+                    self._send(400, "text/plain; charset=utf-8", b"hours and limit must be numbers\n")
+                    return
+                include_refresh = query.get("refresh", ["0"])[0] in ("1", "true", "yes")
+                hours = min(max(hours, 0.0), 24 * 30)
+                limit = min(max(limit, 1), HISTORY_MAX_EVENTS)
+                events = read_history(config, hours=hours, limit=limit, include_refresh=include_refresh)
+                body = json.dumps({"generated_at": iso(now()), "hours": hours, "events": events}).encode()
                 self._send(200, "application/json; charset=utf-8", body, set_cookie)
             elif path in ("/", "/index.html"):
-                self._send(200, "text/html; charset=utf-8", PAGE.encode(), set_cookie)
+                self._send(200, "text/html; charset=utf-8", viewer_page(), set_cookie)
             else:
                 self._send(404, "text/plain; charset=utf-8", b"not found\n")
 
@@ -918,18 +1321,24 @@ def make_handler(config: BoardConfig):
 
 def serve(config: BoardConfig, args: argparse.Namespace) -> int:
     stop = threading.Event()
+    state: dict = {"reconcile_every": args.reconcile_every if args.reconcile_every > 0 else None}
 
     def loop() -> None:
         while not stop.is_set():
+            state["reconciling"] = True
             try:
                 reconcile(config, quiet=True)
+                state["last_reconcile_error"] = None
             except Exception as exc:  # keep serving even if a probe misbehaves
+                state["last_reconcile_error"] = str(exc)
                 print(f"[serve] reconcile failed: {exc}", file=sys.stderr)
+            state["last_reconcile_at"] = iso(now())
+            state["reconciling"] = False
             stop.wait(args.reconcile_every)
 
     if args.reconcile_every > 0:
         threading.Thread(target=loop, daemon=True).start()
-    server = ThreadingHTTPServer((args.bind or config.bind, args.port or config.port), make_handler(config))
+    server = ThreadingHTTPServer((args.bind or config.bind, args.port or config.port), make_handler(config, state))
     guard = "token required" if config.token else "OPEN: no board.token in the registry"
     print(f"[serve] rig-board on http://{server.server_address[0]}:{server.server_address[1]}  root={config.root}  ({guard})")
     try:
@@ -953,6 +1362,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("status", help="print the board; --reconcile probes the rigs first")
     p.add_argument("--json", action="store_true")
     p.add_argument("--reconcile", action="store_true")
+    p.add_argument("--all", action="store_true", help="list every Slurm job instead of three per group")
 
     p = sub.add_parser("free", help="exit 0 if <rig> gpu<ids> is free, 1 if held/foreign, 2 if unverifiable")
     p.add_argument("rig")
@@ -988,6 +1398,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("reconcile", help="probe the rigs and correct the board")
     p.add_argument("--rig", action="append", dest="rigs", help="limit to this rig or Slurm target (repeatable)")
 
+    p = sub.add_parser("history", help="recent board events (claims, releases, adoptions, interruptions, reconcile changes)")
+    p.add_argument("--hours", type=float, default=HISTORY_DEFAULT_HOURS)
+    p.add_argument("--limit", type=int, default=HISTORY_MAX_EVENTS)
+    p.add_argument("--refresh", action="store_true", help="include the ten-minute orchestrator refresh ticks")
+    p.add_argument("--json", action="store_true")
+
     sub.add_parser("token", help="print a fresh random access token to put under [board] token in the registry")
 
     p = sub.add_parser("serve", help="read-only web viewer with periodic reconcile")
@@ -1016,6 +1432,8 @@ def main(argv: list[str] | None = None) -> int:
             return reconcile(config, rigs=args.rigs)
         if args.command == "serve":
             return serve(config, args)
+        if args.command == "history":
+            return history_cli(config, args)
         if args.command == "token":
             print(secrets.token_urlsafe(32))
             return 0

@@ -1,4 +1,4 @@
 interface:
   display_name: "Rig Board"
   short_description: "Fleet-wide GPU lane occupancy across the rigs"
-  default_prompt: "Use $rig-board to check which rig GPUs are free or held across every project, wait for a lane, or maintain the board during a $sweep-dispatch wave."
+  default_prompt: "Use $rig-board to check which rig GPUs are free, held or foreign across every project, see what is running or queued on the Slurm cluster, wait for a lane, review the board history, run the read-only web viewer, or maintain the board during a $sweep-dispatch wave."
