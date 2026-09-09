@@ -72,12 +72,13 @@ main{display:grid;gap:14px;padding:16px 20px;grid-template-columns:repeat(auto-f
 .kv span:nth-child(odd){color:var(--muted);font-size:12px;white-space:nowrap}
 .kv .mono{word-break:break-all;font-size:12.5px}
 .meta{color:var(--muted);font-size:12px;margin-top:5px;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:center}
+.barrow{display:flex;align-items:center;gap:6px;margin-top:6px}.barrow .bar{flex:1;margin-top:0}.pct{font-variant-numeric:tabular-nums;color:var(--muted);font-size:11px;min-width:52px;text-align:right}
 .bar{height:6px;background:var(--line);border-radius:3px;margin-top:6px;overflow:hidden;position:relative}
 .bar i{display:block;height:100%;background:var(--busy);transition:width .4s}
 .bar.mem i{background:var(--foreign)}.bar.free i{background:var(--free)}.bar.util i{background:var(--pend)}
 .gauges{display:flex;gap:10px;margin-top:5px;font-size:11px;color:var(--muted)}
 .gauges div{flex:1}
-.gauges .bar{margin-top:2px;height:4px}
+.gauges .bar{margin-top:2px;height:4px}.gauges .barrow{margin-top:2px;gap:4px}.gauges .pct{min-width:44px}
 .copy{padding:1px 6px;font-size:11px;border-radius:4px;background:transparent}
 .copy.ok{color:var(--free);border-color:var(--free)}
 abbr,[title]{text-decoration:none;cursor:help}
@@ -128,6 +129,8 @@ const clock=iso=>{const d=new Date(iso);if(isNaN(d))return iso;const sameDay=d.t
 const ago=(iso,nowMs)=>iso?`<abbr title="${esc(abs(iso))}">${fmtAge((nowMs-Date.parse(iso))/1000)} ago</abbr>`:"?";
 const until=(iso,nowMs)=>{if(!iso)return "<i>unavailable</i>";const t=Date.parse(iso);if(isNaN(t))return esc(iso);const d=(t-nowMs)/1000;
   return d<0?`<b style="color:var(--bad)">overdue by ${fmtAge(-d)}</b> <small>(was ${esc(clock(iso))})</small>`:`in <b>${fmtAge(d)}</b> <small>(${esc(clock(iso))})</small>`};
+const pct2=(a,b)=>b>0?(100*a/b).toFixed(2)+"%":"?";
+const bar=(a,b,cls,title)=>{const w=b>0?Math.max(0,Math.min(100,100*a/b)):0;return `<div class="barrow" title="${esc(title||"")}"><div class="bar ${cls||""}"><i style="width:${w}%"></i></div><small class="pct">${pct2(a,b)}</small></div>`};
 const mib=n=>n==null?"?":n>=1024?(n/1024).toFixed(1)+" GiB":n+" MiB";
 const base=s=>s?String(s).split("/").pop():"?";
 const store={get(k,d){try{const v=localStorage.getItem("rigboard."+k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem("rigboard."+k,JSON.stringify(v))}catch(e){}}};
@@ -180,7 +183,7 @@ function drawHeader(d,nowMs){const s=d.summary||{};$("stamp").innerHTML=`board r
 
 // ── cards ──
 function gpuGauges(g){if(!g)return "";const tot=g.memory_total_mib,used=g.memory_used_mib;const pct=tot?Math.round(100*used/tot):null;
-  return `<div class="gauges"><div title="${esc(mib(used))} of ${esc(mib(tot))}">mem ${pct!=null?pct+"%":esc(mib(used))}<div class="bar mem"><i style="width:${pct??0}%"></i></div></div><div title="GPU utilization">util ${esc(g.utilization??"?")}%<div class="bar util"><i style="width:${g.utilization||0}%"></i></div></div>${g.temperature_c!=null?`<div style="flex:0 0 auto">${g.temperature_c}°C${g.power_w!=null?" · "+g.power_w+" W":""}</div>`:""}</div>`}
+  return `<div class="gauges"><div>mem ${esc(mib(used))}${tot?" / "+esc(mib(tot)):""}${bar(used,tot||0,"mem",mib(used)+" of "+mib(tot))}</div><div>util${bar(g.utilization||0,100,"util","GPU utilization (nvidia-smi reports whole percent)")}</div>${g.temperature_c!=null?`<div style="flex:0 0 auto">${g.temperature_c}°C${g.power_w!=null?" · "+g.power_w+" W":""}</div>`:""}</div>`}
 function gpuName(g){if(!g||!g.name)return "";const short=g.name.replace(/^NVIDIA\s+/,"").replace(/\bGeForce\s+/,"").replace(/\s+Server Edition$/,"").replace(/\s+Blackwell\b/,"");return `<abbr title="${esc(g.name)}">${esc(short)}</abbr>`+(g.memory_total_mib?` · ${esc(mib(g.memory_total_mib))}`:"")}
 function procList(g){const ps=(g&&g.processes)||[];if(!ps.length)return "";return `<div class="kv">${ps.map(p=>`<span>${esc(p.user||"?")}</span><span class="mono" title="${esc(p.name||"")}">${esc(base(p.name))} · pid ${p.pid} · ${esc(mib(p.memory_mib))}${p.elapsed_s!=null?" · running "+fmtAge(p.elapsed_s):""}</span>`).join("")}</div>`}
 function laneHtml(rig,l,gpus,nowMs){const st=laneState(l);const gIdx=String(l.gpu).split(",").map(Number);const g=gIdx.length===1?gpus.get(gIdx[0]):null;
@@ -194,7 +197,7 @@ function laneHtml(rig,l,gpus,nowMs){const st=laneState(l);const gIdx=String(l.gp
   <span>run</span><span class="mono">${esc(l.active_run||"?")}${l.progress?` <span style="color:var(--busy)">${esc(l.progress)}</span>`:""}</span>
   <span>ETA</span><span>${until(l.eta,nowMs)}${l.eta_basis?` <small class="stamp">· ${esc(l.eta_basis)}</small>`:""}</span>
   ${tot?`<span>runs</span><span>${done??"?"} / ${tot} done${pct!=null?` <small class="stamp">(${pct}%)</small>`:""}</span>`:""}</div>
-  ${pct!=null?`<div class="bar"><i style="width:${pct}%"></i></div>`:""}${note}
+  ${pct!=null?bar(done,tot,"",done+" of "+tot+" runs done"):""}${note}
   ${g?gpuGauges(g):""}
   <div class="meta"><span>held ${ago(l.claimed_at,nowMs)}</span><span>orchestrator update ${ago(l.updated_at,nowMs)}</span>${g&&g.name?`<span>${gpuName(g)}</span>`:""}
   <button class="copy" data-copy="tmux attach -t ${esc(l.tmux_session)}" title="tmux attach -t ${esc(l.tmux_session)}">copy tmux attach</button>${l.hub_project_root?`<button class="copy" data-copy="${esc(l.hub_project_root)}" title="${esc(l.hub_project_root)}">copy project path</button>`:""}</div></div>`}
@@ -218,7 +221,7 @@ function jobRow(j,nowMs,inGroup){const run=j.state==="RUNNING";const st=run?"run
   const el=hms(j.elapsed),left=hms(j.time_left);const pct=run&&el!=null&&left!=null&&el+left>0?Math.round(100*el/(el+left)):null;
   return `<div class="lane ${st}" style="${inGroup?"margin:6px 0;padding:6px 8px":""}"><div class="top"><span class="gpu">${esc(j.job_id)} · ${who}</span><span class="state ${st}">${esc(j.state)}</span></div>
     <div class="kv">${!inGroup&&j.wave_id?`<span>wave</span><span class="mono">${esc(j.wave_id)}</span>`:""}${run?`<span>time</span><span>${esc(j.elapsed)} elapsed · <b>${esc(j.time_left)}</b> left${left!=null?` <small class="stamp">(ends ${esc(clock(new Date(nowMs+left*1000).toISOString()))})</small>`:""}</span><span>node</span><span class="mono">${esc(j.nodes||"?")}</span>`:`<span>reason</span><span>${esc(j.reason||"?")}</span><span>start</span><span>${j.start?until(j.start,nowMs):"<i>unknown</i>"}</span><span>submitted</span><span>${ago(j.submitted,nowMs)}</span>`}</div>
-    ${pct!=null?`<div class="bar"><i style="width:${pct}%"></i></div>`:""}
+    ${pct!=null?bar(el,el+left,"","elapsed share of the time limit"):""}
     <div class="meta">${inGroup?"":`<span>${esc(j.partition)}</span><span class="mono">${esc(j.name)}</span>`}<button class="copy" data-copy="squeue -j ${esc(j.job_id)} -o '%i %T %M %L %R'">copy squeue</button></div></div>`}
 function slurmCard(c,nowMs){const card=document.createElement("section");card.className="card";card.dataset.key=c.rig;
   let reach,cls="";if(c.reachable===false){reach=`unreachable · last seen ${ago(c.last_reachable_at,nowMs)}`;cls="bad"}else if(c.reachable==null){reach="never probed";cls="warn"}else reach=`probed ${ago(c.at,nowMs)}`;
@@ -237,7 +240,7 @@ function slurmCard(c,nowMs){const card=document.createElement("section");card.cl
       <div class="kv"><span>state</span><span><b style="color:var(--busy)">${g.running} running</b> · <b style="color:var(--pend)">${g.pending} pending</b>${g.other?` · ${g.other} other`:""}${nodes.size?` <small class="stamp">on ${nodes.size} node${nodes.size>1?"s":""}</small>`:""}</span>
       ${ends.length?`<span>running end</span><span>${endMin===endMax?`in <b>${fmtAge(endMin)}</b>`:`between <b>${fmtAge(endMin)}</b> and <b>${fmtAge(endMax)}</b> from now`} <small class="stamp">(${esc(clock(new Date(nowMs+endMin*1000).toISOString()))}${endMin===endMax?"":" – "+esc(clock(new Date(nowMs+endMax*1000).toISOString()))})</small></span>`:""}
       ${pending.length?`<span>pending</span><span>earliest start ${starts.length?until(starts[0],nowMs):"<i>unknown</i>"}${g.reasons&&g.reasons.length?` <small class="stamp">· ${esc(g.reasons.join(", "))}</small>`:""}</span>`:""}
-      </div><div class="bar" title="${g.running} of ${members.length} running"><i style="width:${runPct}%"></i></div>
+      </div>${bar(g.running,members.length,"",g.running+" of "+members.length+" jobs running")}
       ${g.common?`<details data-key="${esc(commonK)}" ${open.has(commonK)?"open":""}><summary>shared configuration</summary><div class="mono" style="word-break:break-all;margin-top:3px">${esc(g.common.split(",").join(", "))}</div></details>`:""}
       <details data-key="${esc(k)}" ${open.has(k)?"open":""}><summary>${members.length} jobs${g.partition?" · "+esc(g.partition):""}</summary><div>${members.map(j=>jobRow(j,nowMs,true)).join("")}</div></details></div>`)}
   return card}
