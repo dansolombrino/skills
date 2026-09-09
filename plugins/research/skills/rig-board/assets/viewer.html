@@ -219,6 +219,8 @@ function liveRows(l,nowMs){const r=l.observed&&l.observed.run;const tail=l.obser
   return out}
 function laneHtml(rig,l,gpus,nowMs){const st=laneState(l);const gIdx=String(l.gpu).split(",").map(Number);const g=gIdx.length===1?gpus.get(gIdx[0]):null;
   const tot=l.runs_total,done=l.runs_done;const pct=tot&&done!=null?Math.round(100*done/tot):null;const adopted=l.observed&&l.observed.adopted;
+  const lr=l.observed&&l.observed.run;const frac=lr?(lr.state==="done"?1:lr.state==="running"&&typeof lr.completed==="number"&&typeof lr.total==="number"&&lr.total>0?Math.min(1,lr.completed/lr.total):0):0;
+  const overall=tot&&done!=null?Math.min(tot,done+frac):null;
   const label={running:"running",claimed:"claimed",silent:"silent orchestrator",interrupted:"interrupted",unreachable:"unreachable"}[st]||st;
   const note=st==="interrupted"?`<div style="color:var(--bad);font-size:12px;margin-top:4px">Rig rebooted ${l.observed.boot_at?ago(l.observed.boot_at,nowMs):""} after the claim; the wave needs recovery (or release the lane).</div>`
     :st==="silent"?`<div style="color:var(--warn);font-size:12px;margin-top:4px">Session alive but no orchestrator update for ${fmtAge(l.observed.orchestrator_silent_s)}; progress and ETA below may be stale.</div>`
@@ -228,8 +230,8 @@ function laneHtml(rig,l,gpus,nowMs){const st=laneState(l);const gIdx=String(l.gp
   <span>run</span><span>${params(l.active_run||(l.observed&&l.observed.run&&l.observed.run.path),{hideDirs:true})||"?"}${l.progress?` <span style="color:var(--busy)" title="as last reported by the orchestrator">${esc(l.progress)}</span>`:""}</span>
   ${liveRows(l,nowMs)}
   <span>wave ETA</span><span>${l.eta?until(l.eta,nowMs)+(l.eta_basis?` <small class="stamp">· ${esc(l.eta_basis)}</small>`:""):adopted?`<i>none yet</i> <small class="stamp">· adopted from the live tmux session; the orchestrator has not reported progress for this lane</small>`:`<i>none yet</i> <small class="stamp">· ${esc(l.eta_basis?l.eta_basis.replace(/^unavailable:\s*/,""):"waiting for the orchestrator's first ten-minute report")}</small>`}</span>
-  ${tot?`<span>runs</span><span>${done??"?"} / ${tot} done${pct!=null?` <small class="stamp">(${pct}%)</small>`:""}</span>`:""}</div>
-  ${pct!=null?bar(done,tot,"",done+" of "+tot+" runs done"):""}${note}
+  ${tot?`<span>runs</span><span>${done??"?"} / ${tot} done${overall!=null?` · overall <b>${pct2(overall,tot)}</b> <small class="stamp">(finished runs plus ${frac>0?pct2(frac,1)+" of the current one":"nothing of the current one yet"})</small>`:""}</span>`:""}</div>
+  ${overall!=null?bar(overall,tot,"","lane progress: finished runs plus the live fraction of the current run"):""}${note}
   ${g?gpuGauges(g):""}
   <div class="meta"><span>held ${ago(l.claimed_at,nowMs)}</span><span>orchestrator update ${ago(l.updated_at,nowMs)}</span>${g&&g.name?`<span>${gpuName(g)}</span>`:""}
   <button class="copy" data-copy="tmux attach -t ${esc(l.tmux_session)}" title="tmux attach -t ${esc(l.tmux_session)}">copy tmux attach</button>${l.hub_project_root?`<button class="copy" data-copy="${esc(l.hub_project_root)}" title="${esc(l.hub_project_root)}">copy project path</button>`:""}</div></div>`}

@@ -1440,6 +1440,14 @@ def status(config: BoardConfig, args: argparse.Namespace) -> int:
                 f"  {lane.get('progress') or ''}  eta {eta}  updated {age(lane.get('updated_at'))} ago"
             )
             run = (lane.get("observed") or {}).get("run")
+            total_runs, done_runs = lane.get("runs_total"), lane.get("runs_done")
+            if total_runs and done_runs is not None:
+                frac = 0.0
+                if run and run.get("state") == "done":
+                    frac = 1.0
+                elif run and run.get("state") == "running" and isinstance(run.get("completed"), (int, float)) and run.get("total"):
+                    frac = min(1.0, run["completed"] / run["total"])
+                print(f"        overall: {100 * min(total_runs, done_runs + frac) / total_runs:.2f}% of the lane ({done_runs}/{total_runs} runs done + {100 * frac:.2f}% of the current run)")
             if run:
                 pct = f" ({100 * run['completed'] / run['total']:.2f}%)" if isinstance(run.get("completed"), (int, float)) and run.get("total") else ""
                 hb = f"heartbeat {humanize(run['heartbeat_age_s'])} ago" + (" STALE" if run.get("heartbeat_stale") else "") if run.get("heartbeat_age_s") is not None else "no heartbeat"

@@ -417,6 +417,7 @@ class BoardTests(unittest.TestCase):
         code, out, _ = self.run_cli("status")
         self.assertIn("live: 000_grokking/model=mlp/lr=0.001/seed=1  running  step 1800/2250 (80.00%)  elapsed 10m  heartbeat 20s ago", out)
         self.assertIn("last output: 260 E[bits]=3.085 loss=0.41", out)
+        self.assertIn("overall: 13.33% of the lane (0/6 runs done + 80.00% of the current run)", out)
         # stale heartbeat, then between runs
         stale = {**status, "heartbeat": board.iso(board.now() - timedelta(seconds=600))}
         probe_stale = probe.replace(json.dumps(status), json.dumps(stale))
