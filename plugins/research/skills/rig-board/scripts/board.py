@@ -555,9 +555,9 @@ def unreachable_probe(rig: Rig, previous: dict | None) -> dict:
     }
 
 
-SQUEUE_FIELDS = ["job_id", "name", "state", "reason", "partition", "nodes", "elapsed", "time_left", "start", "submitted", "workdir", "command"]
-SQUEUE_REQUIRED = 10  # older probes carried no workdir/command
-SQUEUE_FORMAT = "%i|%j|%T|%r|%P|%N|%M|%L|%S|%V|%Z|%o"
+SQUEUE_FIELDS = ["job_id", "name", "state", "reason", "partition", "nodes", "elapsed", "time_left", "start", "submitted", "workdir", "command", "account", "qos"]
+SQUEUE_REQUIRED = 10  # older probes carried no workdir/command/account/qos
+SQUEUE_FORMAT = "%i|%j|%T|%r|%P|%N|%M|%L|%S|%V|%Z|%o|%a|%q"
 EXPERIMENT_PATH_RE = re.compile(r"(?:^|/)scripts/((?:\d{3}_[^/]+/)*\d{3}_[^/]+)(?:/|$)")
 
 
@@ -575,7 +575,7 @@ def infer_experiment(job: dict) -> str | None:
     match = EXPERIMENT_PATH_RE.search(job.get("command") or "")
     return match.group(1) if match else None
 SACCT_WINDOW = "now-3days"
-SACCT_FORMAT = "JobID,JobName%256,State,End,WorkDir%256"
+SACCT_FORMAT = "JobID,JobName%256,State,End,WorkDir%256,Account,QOS"
 SQUEUE_SCRIPT = (
     f"squeue --me --noheader --format='{SQUEUE_FORMAT}'; echo __SACCT__; "
     f"sacct -X -P --noheader -S {SACCT_WINDOW} --format={SACCT_FORMAT} 2>/dev/null; echo __SQUEUE_OK__"
@@ -615,7 +615,12 @@ def parse_sacct(text: str) -> list[dict]:
         kind = FINISHED_STATES.get(state.split()[0] if state else "")
         if kind is None:
             continue
-        job = {"job_id": job_id, "name": name, "state": state.split()[0], "kind": kind, "end": end or None, "workdir": cells[4] if len(cells) > 4 else None}
+        job = {
+            "job_id": job_id, "name": name, "state": state.split()[0], "kind": kind, "end": end or None,
+            "workdir": cells[4] if len(cells) > 4 else None,
+            "account": (cells[5] if len(cells) > 5 else "") or None,
+            "qos": (cells[6] if len(cells) > 6 else "") or None,
+        }
         parsed = parse_session_name(name) or {}
         job["project"] = parsed.get("project")
         job["experiment"] = parsed.get("experiment")
@@ -641,7 +646,7 @@ def parse_slurm_probe(target: SlurmTarget, output: str) -> dict:
         job["project"] = parsed.get("project")
         job["experiment"] = parsed.get("experiment")
         job["wave_id"] = parsed.get("wave_id")
-        for key in ("reason", "nodes", "start", "workdir", "command"):
+        for key in ("reason", "nodes", "start", "workdir", "command", "account", "qos"):
             if job[key] in ("None", "N/A", "(null)", ""):
                 job[key] = None
         job["project_inferred"] = infer_project(job)
@@ -661,6 +666,7 @@ def parse_slurm_probe(target: SlurmTarget, output: str) -> dict:
         "groups": group_jobs(jobs, finished),
         "running": sum(1 for j in jobs if j["state"] == "RUNNING"),
         "pending": sum(1 for j in jobs if j["state"] == "PENDING"),
+        "accounts": sorted({j["account"] for j in [*jobs, *finished] if j.get("account")}),
         **{kind: sum(1 for j in finished if j["kind"] == kind) for kind in FINISHED_KINDS},
     }
 
@@ -689,7 +695,7 @@ def new_group(key: str, partition: str | None) -> dict:
     return {
         "key": key, "jobs": [], "_varying": [], "running": 0, "pending": 0, "other": 0, "nodes": [], "partition": partition,
         "finished": {kind: 0 for kind in FINISHED_KINDS}, "finished_total": 0, "total": 0, "last_end": None,
-        "project": None, "experiment": None, "wave_id": None,
+        "project": None, "experiment": None, "wave_id": None, "accounts": [], "qos": [],
     }
 
 
@@ -699,6 +705,10 @@ def describe_group(group: dict, job: dict) -> None:
         group["project"] = infer_project(job)
     if group["experiment"] is None:
         group["experiment"] = infer_experiment(job)
+    for key, plural in (("account", "accounts"), ("qos", "qos")):
+        value = job.get(key)
+        if value and value not in group[plural]:
+            group[plural].append(value)
     if group["wave_id"] is None:
         name = job.get("name") or ""
         group["wave_id"] = job.get("wave_id") or (name.partition("__")[0] if "__" in name and WAVE_RE.fullmatch(name.partition("__")[0]) else None)
@@ -821,6 +831,7 @@ def unreachable_slurm_probe(target: SlurmTarget, previous: dict | None, reason: 
         "reason": reason,
         "jobs": previous.get("jobs", []),
         "finished": previous.get("finished", []),
+        "accounts": previous.get("accounts", []),
         "finished_window": previous.get("finished_window", SACCT_WINDOW),
         "groups": previous.get("groups", group_jobs(list(previous.get("jobs", [])), list(previous.get("finished", [])))),
         **{kind: previous.get(kind, 0) for kind in FINISHED_KINDS},
@@ -1255,6 +1266,7 @@ def status(config: BoardConfig, args: argparse.Namespace) -> int:
         print(
             f"\n{cluster['rig']}  [slurm, {reach}]  {cluster.get('running', 0)} running, {cluster.get('pending', 0)} pending"
             + (f"; last {cluster.get('finished_window', SACCT_WINDOW).replace('now-', '')}: {done}" if done else "")
+            + (f"  account {', '.join(cluster['accounts'])}" if cluster.get("accounts") else "")
         )
         if not cluster["jobs"]:
             print("  no jobs in the queue")
@@ -1273,7 +1285,9 @@ def status(config: BoardConfig, args: argparse.Namespace) -> int:
                     n = (group.get("finished") or {}).get(kind, 0)
                     if n:
                         tail.append(f"{n} {kind} ({100 * n / total:.2f}%)")
-                print(f"  ── {group['key']}  {group.get('partition') or ''}  {total} total: {' · '.join(tail)}")
+                acct = f"  account {', '.join(group['accounts'])}" if group.get("accounts") else ""
+                qos = f"  qos {', '.join(group['qos'])}" if group.get("qos") and group["qos"] != ["normal"] else ""
+                print(f"  ── {group['key']}  {group.get('partition') or ''}{acct}{qos}  {total} total: {' · '.join(tail)}")
                 if group.get("experiment") and group["experiment"] not in group["key"]:
                     print(f"     experiment: {group['experiment']}")
                 if group.get("common"):

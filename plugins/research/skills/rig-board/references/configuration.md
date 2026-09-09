@@ -90,7 +90,9 @@ sweep names by project and `<wave>` prefix (the tokens shared by every job becom
 `common`, each job keeps only its `variant`), anything else by project and the name with a
 trailing index stripped. For names that carry no project, the project is the basename of the
 job's Slurm working directory (`squeue %Z`, `sacct WorkDir`, normally the project root on the
-cluster) and the experiment is the `scripts/NNN_…/NNN_…` chain in the job's command path.
+cluster) and the experiment is the `scripts/NNN_…/NNN_…` chain in the job's command path. Each job also
+carries its Slurm account (the cluster project id that is charged) and QOS; the group and the
+card list the accounts in use.
 
 ## History
 
