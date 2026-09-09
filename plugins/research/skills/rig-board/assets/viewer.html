@@ -42,7 +42,10 @@ h1{font-size:18px;margin:0;display:flex;align-items:center;gap:8px}
 .chip{padding:2px 9px;border-radius:999px;font-size:12px}
 .banner{padding:8px 20px;font-size:13px;border-bottom:1px solid var(--line)}
 .banner.bad{background:var(--badbg);color:var(--bad)}.banner.warn{background:var(--warnbg);color:var(--warn)}
-main{display:grid;gap:14px;padding:16px 20px;grid-template-columns:repeat(auto-fill,minmax(min(100%,400px),1fr));align-items:start}
+main{display:grid;gap:14px;padding:16px 20px;grid-template-columns:repeat(auto-fill,minmax(min(100%,400px),1fr));grid-auto-flow:dense;align-items:start}
+@media(min-width:860px){.card.wide{grid-column:span 2}.card.wide .lanes{display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;align-items:start}.card.wide .lanes .lane{margin:0}}
+.lanes{margin-top:2px}
+.stack{display:grid;gap:14px;align-content:start}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;box-shadow:var(--shadow)}
 .card.dim{opacity:.55}
 .card h2{font-size:15px;margin:0 0 4px;display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
@@ -183,7 +186,7 @@ function drawHeader(d,nowMs){const s=d.summary||{};$("stamp").innerHTML=`board r
 
 // ── cards ──
 function gpuGauges(g){if(!g)return "";const tot=g.memory_total_mib,used=g.memory_used_mib;const pct=tot?Math.round(100*used/tot):null;
-  return `<div class="gauges"><div>mem ${esc(mib(used))}${tot?" / "+esc(mib(tot)):""}${bar(used,tot||0,"mem",mib(used)+" of "+mib(tot))}</div><div>util${bar(g.utilization||0,100,"util","GPU utilization (nvidia-smi reports whole percent)")}</div>${g.temperature_c!=null?`<div style="flex:0 0 auto">${g.temperature_c}°C${g.power_w!=null?" · "+g.power_w+" W":""}</div>`:""}</div>`}
+  return `<div class="gauges"><div>mem ${esc(mib(used))}${bar(used,tot||0,"mem",mib(used)+" of "+mib(tot))}</div><div>util${bar(g.utilization||0,100,"util","GPU utilization (nvidia-smi reports whole percent)")}</div>${g.temperature_c!=null?`<div style="flex:0 0 auto">${g.temperature_c}°C${g.power_w!=null?" · "+g.power_w+" W":""}</div>`:""}</div>`}
 function gpuName(g){if(!g||!g.name)return "";const short=g.name.replace(/^NVIDIA\s+/,"").replace(/\bGeForce\s+/,"").replace(/\s+Server Edition$/,"").replace(/\s+Blackwell\b/,"");return `<abbr title="${esc(g.name)}">${esc(short)}</abbr>`+(g.memory_total_mib?` · ${esc(mib(g.memory_total_mib))}`:"")}
 function procList(g){const ps=(g&&g.processes)||[];if(!ps.length)return "";return `<div class="kv">${ps.map(p=>`<span>${esc(p.user||"?")}</span><span class="mono" title="${esc(p.name||"")}">${esc(base(p.name))} · pid ${p.pid} · ${esc(mib(p.memory_mib))}${p.elapsed_s!=null?" · running "+fmtAge(p.elapsed_s):""}</span>`).join("")}</div>`}
 function laneHtml(rig,l,gpus,nowMs){const st=laneState(l);const gIdx=String(l.gpu).split(",").map(Number);const g=gIdx.length===1?gpus.get(gIdx[0]):null;
@@ -207,12 +210,14 @@ function rigCard(rig,nowMs){const card=document.createElement("section");card.cl
   const sub=[];if(rig.boot_at)sub.push(`up ${fmtAge((nowMs-Date.parse(rig.boot_at))/1000)} <abbr title="${esc(abs(rig.boot_at))}">↺</abbr>`);if(rig.load)sub.push(`load ${rig.load[0].toFixed(2)}${rig.cpus?" / "+rig.cpus+" cpus":""}`);if(rig.gpus&&rig.gpus.length)sub.push(`${rig.gpus.length} GPU${rig.gpus.length>1?"s":""}${rig.gpus[0].name?" · "+gpuName(rig.gpus[0]):""}`);
   card.innerHTML=`<h2><span class="name">${esc(rig.rig)}${rig.shared?' <span class="pill" title="other people use this machine too; their cards show as foreign">shared</span>':""}</span><span class="pill ${reachCls}">${reach}</span></h2>${sub.length?`<div class="sub">${sub.map(x=>"<span>"+x+"</span>").join("")}</div>`:""}`;
   if(rig.reachable&&rig.gpu_probe_ok===false)card.insertAdjacentHTML("beforeend",`<div class="lane unknown"><div class="top"><span>GPUs</span><span class="state unknown">unknown</span></div><div class="meta">nvidia-smi failed on the rig; the driver may be wedged or the card fell off the bus. Nothing here is verified free.</div></div>`);
+  if((rig.gpus||[]).length>4)card.classList.add("wide");
+  const lanes=document.createElement("div");lanes.className="lanes";card.appendChild(lanes);
   const rows=[];for(const l of rig.lanes||[])rows.push({idx:Math.min(...String(l.gpu).split(",").map(Number)),html:laneHtml(rig,l,gpus,nowMs)});
   for(const i of rig.foreign||[]){const g=gpus.get(i);const idle=g&&g.utilization<5&&g.memory_used_mib>=1024;
     rows.push({idx:i,html:`<div class="lane foreign"><div class="top"><span class="gpu"><b>gpu${i}</b>${g&&g.name?` <small class="stamp">${gpuName(g)}</small>`:""}</span><span class="state foreign">foreign</span></div>
     <div style="font-size:12.5px;margin-top:3px">Busy without a lane on the board${idle?' · <b style="color:var(--foreign)">idle, holding memory</b>':""}</div>${procList(g)}${g?gpuGauges(g):""}${g&&!(g.processes||[]).length?`<div class="meta">no visible process (another container or user namespace?)</div>`:""}</div>`})}
   for(const i of rig.free_gpus||[]){const g=gpus.get(i);rows.push({idx:i,html:`<div class="lane free"><div class="top"><span class="gpu"><b>gpu${i}</b>${g&&g.name?` <small class="stamp">${gpuName(g)}</small>`:""}</span><span class="state free">free</span></div>${g?gpuGauges(g):""}</div>`})}
-  rows.sort((a,b)=>a.idx-b.idx);for(const r of rows)card.insertAdjacentHTML("beforeend",r.html);
+  rows.sort((a,b)=>a.idx-b.idx);for(const r of rows)lanes.insertAdjacentHTML("beforeend",r.html);
   if(!rows.length&&!(rig.reachable&&rig.gpu_probe_ok===false))card.insertAdjacentHTML("beforeend",`<div class="lane ${rig.reachable?"free":"unknown"}"><div class="top"><span>${rig.reachable?"no GPUs reported":"no lanes on the board"}</span><span class="state ${rig.reachable?"free":"unknown"}">${rig.reachable?"free":"unverified"}</span></div></div>`);
   if((rig.stray_sessions||[]).length){const k=rig.rig+"/stray";card.insertAdjacentHTML("beforeend",`<details data-key="${esc(k)}" ${open.has(k)?"open":""}><summary>${rig.stray_sessions.length} tmux session${rig.stray_sessions.length>1?"s":""} that look like experiments but are not lanes</summary><ul>${rig.stray_sessions.map(s=>`<li><code>${esc(s)}</code> <button class="copy" data-copy="tmux attach -t ${esc(s)}">copy attach</button></li>`).join("")}</ul></details>`)}
   return card}
@@ -225,7 +230,7 @@ function jobRow(j,nowMs,inGroup){const run=j.state==="RUNNING";const st=run?"run
     <div class="meta">${inGroup?"":`<span>${esc(j.partition)}</span><span class="mono">${esc(j.name)}</span>`}<button class="copy" data-copy="squeue -j ${esc(j.job_id)} -o '%i %T %M %L %R'">copy squeue</button></div></div>`}
 function slurmCard(c,nowMs){const card=document.createElement("section");card.className="card";card.dataset.key=c.rig;
   let reach,cls="";if(c.reachable===false){reach=`unreachable · last seen ${ago(c.last_reachable_at,nowMs)}`;cls="bad"}else if(c.reachable==null){reach="never probed";cls="warn"}else reach=`probed ${ago(c.at,nowMs)}`;
-  const jobs=c.jobs||[];card.innerHTML=`<h2><span class="name">${esc(c.rig)} <span class="pill">slurm · read-only</span></span><span class="pill ${cls}">${reach}</span></h2><div class="sub"><span>${c.running||0} running</span><span>${c.pending||0} pending</span>${jobs.length-(c.running||0)-(c.pending||0)>0?`<span>${jobs.length-(c.running||0)-(c.pending||0)} other</span>`:""}</div>`;
+  const jobs=c.jobs||[];if(jobs.length>3)card.classList.add("wide");card.innerHTML=`<h2><span class="name">${esc(c.rig)} <span class="pill">slurm · read-only</span></span><span class="pill ${cls}">${reach}</span></h2><div class="sub"><span>${c.running||0} running</span><span>${c.pending||0} pending</span>${jobs.length-(c.running||0)-(c.pending||0)>0?`<span>${jobs.length-(c.running||0)-(c.pending||0)} other</span>`:""}</div>`;
   if(c.reachable===false&&c.reason)card.insertAdjacentHTML("beforeend",`<div class="lane unreachable"><div class="meta" style="margin:0;color:var(--bad)">${esc(c.reason)}${/certificate|authentication/i.test(c.reason)?" — renew the cluster certificate; the queue below is the last known state.":""}</div></div>`);
   if(!jobs.length)card.insertAdjacentHTML("beforeend",`<div class="lane free"><div class="top"><span>queue empty</span><span class="state free">idle</span></div></div>`);
   const byGroup=new Map();for(const j of jobs){const k=j.group??j.name;if(!byGroup.has(k))byGroup.set(k,[]);byGroup.get(k).push(j)}
@@ -247,9 +252,11 @@ function slurmCard(c,nowMs){const card=document.createElement("section");card.cl
 function hms(s){if(!s)return null;const p=String(s).split("-");let days=0,t=p[0];if(p.length===2){days=+p[0];t=p[1]}const parts=t.split(":").map(Number);if(parts.some(isNaN))return null;let sec=0;for(const x of parts)sec=sec*60+x;if(parts.length===1)sec*=60;return days*86400+sec}
 
 function draw(){if(!last)return;const nowMs=Date.now();drawHeader(last,nowMs);
-  const rigs=[...(last.rigs||[])];if(ui.freeFirst)rigs.sort((a,b)=>{const fa=(a.free_gpus||[]).length>0,fb=(b.free_gpus||[]).length>0;return fa===fb?0:fa?-1:1});
+  const rigs=[...(last.rigs||[])];const size=r=>(r.gpus||[]).length;if(ui.freeFirst)rigs.sort((a,b)=>{const fa=(a.free_gpus||[]).length>0,fb=(b.free_gpus||[]).length>0;if(fa!==fb)return fa?-1:1;return size(b)-size(a)});else rigs.sort((a,b)=>size(b)-size(a));
   const main=$("main");main.innerHTML="";let shown=0;
-  for(const r of rigs)if(visible(r)){main.appendChild(rigCard(r,nowMs));shown++}
+  const cards=rigs.filter(visible).map(r=>rigCard(r,nowMs));shown+=cards.length;
+  const anyWide=cards.some(c=>c.classList.contains("wide"));let stack=null;
+  for(const c of cards){if(anyWide&&!c.classList.contains("wide")){if(!stack){stack=document.createElement("div");stack.className="stack";main.appendChild(stack)}stack.appendChild(c)}else main.appendChild(c)}
   for(const c of last.slurm||[])if(visible(c)){main.appendChild(slurmCard(c,nowMs));shown++}
   if(!shown)main.innerHTML=`<div class="empty">nothing matches the current filter</div>`;
   $("foot").textContent=`board read ${abs(last.generated_at)} · api v${last.api_version||1} · page refreshes every 5 s`}
