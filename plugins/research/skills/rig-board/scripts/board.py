@@ -1365,7 +1365,7 @@ def status(config: BoardConfig, args: argparse.Namespace) -> int:
             + (f"  account {', '.join(cluster['accounts'])}" if cluster.get("accounts") else "")
         )
         for b in cluster.get("budgets", []):
-            if not b.get("in_use") and b.get("status") == "expired":
+            if not b.get("in_use") and b.get("status") not in ("ok", "low", "expiring"):
                 continue
             month = f"  month {b['month_consumed_h']:.0f}/{b['month_total_h']:.0f} h ({b['month_pct']:.2f}%)" if b.get("month_total_h") else ""
             flag = "" if b["status"] == "ok" else f"  [{b['status'].replace('_', ' ')}]"
