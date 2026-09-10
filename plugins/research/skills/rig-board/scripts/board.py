@@ -42,6 +42,8 @@ from urllib.parse import parse_qs, urlparse
 SCHEMA_VERSION = 1
 DEFAULT_REGISTRY = "~/.config/rigsync/machines.toml"
 DEFAULT_PORT = 8765
+DEFAULT_RECONCILE_EVERY_S = 120
+MIN_RECONCILE_EVERY_S = 10  # each tick SSHes into every rig and the Slurm login node
 FOREIGN_MEMORY_MIB = 1024
 ORCHESTRATOR_SILENT_S = 30 * 60
 SSH_TIMEOUT_S = 25
@@ -107,6 +109,7 @@ class BoardConfig:
     slurm: dict[str, SlurmTarget] = field(default_factory=dict)
     port: int = DEFAULT_PORT
     bind: str = "0.0.0.0"
+    reconcile_every: int = DEFAULT_RECONCILE_EVERY_S
     registry_path: Path = Path(DEFAULT_REGISTRY)
     token: str | None = None
 
@@ -183,7 +186,23 @@ def load_config(registry_path: Path) -> BoardConfig:
     token = board.get("token")
     if token is not None and (not isinstance(token, str) or len(token) < 16):
         raise BoardError(f"{registry_path}: board.token must be a string of at least 16 characters")
-    return BoardConfig(root=root, rigs=rigs, slurm=slurm, port=port, bind=bind, registry_path=registry_path, token=token)
+    reconcile_every = board.get("reconcile_every", DEFAULT_RECONCILE_EVERY_S)
+    if isinstance(reconcile_every, bool) or not isinstance(reconcile_every, int):
+        raise BoardError(f"{registry_path}: board.reconcile_every must be an integer number of seconds (0 disables)")
+    check_reconcile_every(reconcile_every, f"{registry_path}: board.reconcile_every")
+    return BoardConfig(
+        root=root, rigs=rigs, slurm=slurm, port=port, bind=bind, reconcile_every=reconcile_every, registry_path=registry_path, token=token
+    )
+
+
+def check_reconcile_every(seconds: int, what: str) -> None:
+    """0 disables probing; anything else must leave the rigs and the login node alone between ticks."""
+    if seconds != 0 and seconds < MIN_RECONCILE_EVERY_S:
+        raise BoardError(
+            f"{what} = {seconds}: below {MIN_RECONCILE_EVERY_S} s. Every tick opens an SSH session to each rig "
+            f"(nvidia-smi, tmux, status files) and to each Slurm login node (squeue, sacct); the page itself can "
+            f"refresh every second, the probes cannot. Use 0 to disable probing."
+        )
 
 
 # ───────────────────────────── storage ─────────────────────────────
@@ -1655,7 +1674,9 @@ def make_handler(config: BoardConfig, state: dict | None = None):
 
 def serve(config: BoardConfig, args: argparse.Namespace) -> int:
     stop = threading.Event()
-    state: dict = {"reconcile_every": args.reconcile_every if args.reconcile_every > 0 else None}
+    every = config.reconcile_every if args.reconcile_every is None else args.reconcile_every
+    check_reconcile_every(every, "--reconcile-every")
+    state: dict = {"reconcile_every": every if every > 0 else None}
 
     def loop() -> None:
         while not stop.is_set():
@@ -1668,13 +1689,14 @@ def serve(config: BoardConfig, args: argparse.Namespace) -> int:
                 print(f"[serve] reconcile failed: {exc}", file=sys.stderr)
             state["last_reconcile_at"] = iso(now())
             state["reconciling"] = False
-            stop.wait(args.reconcile_every)
+            stop.wait(every)
 
-    if args.reconcile_every > 0:
+    if every > 0:
         threading.Thread(target=loop, daemon=True).start()
     server = ThreadingHTTPServer((args.bind or config.bind, args.port or config.port), make_handler(config, state))
     guard = "token required" if config.token else "OPEN: no board.token in the registry"
-    print(f"[serve] rig-board on http://{server.server_address[0]}:{server.server_address[1]}  root={config.root}  ({guard})")
+    probing = f"probing rigs every {every} s" if every > 0 else "not probing (reconcile disabled)"
+    print(f"[serve] rig-board on http://{server.server_address[0]}:{server.server_address[1]}  root={config.root}  ({guard}; {probing})")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -1743,7 +1765,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("serve", help="read-only web viewer with periodic reconcile")
     p.add_argument("--port", type=int)
     p.add_argument("--bind")
-    p.add_argument("--reconcile-every", type=int, default=120, help="seconds; 0 disables")
+    p.add_argument(
+        "--reconcile-every", type=int, help=f"seconds between rig probes (default: [board] reconcile_every, else {DEFAULT_RECONCILE_EVERY_S}; 0 disables; minimum {MIN_RECONCILE_EVERY_S})"
+    )
     return parser
 
 

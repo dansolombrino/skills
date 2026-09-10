@@ -46,7 +46,7 @@ python3 scripts/board.py claim --rig <rig> --gpu <ids> --project <name> --experi
 python3 scripts/board.py refresh --rig <rig> --gpu <ids> --wave <wave_id> --active-run <run_id_flat> --progress "<display>" --eta <ISO|''> --eta-basis "<basis>" --runs-done <n> [--runs-total <n>]
 python3 scripts/board.py release --rig <rig> --gpu <ids> --reason "<why>"
 python3 scripts/board.py history [--hours 24] [--limit 500] [--refresh] [--json]   # what happened on the board
-python3 scripts/board.py serve [--port 8765] [--bind 0.0.0.0] [--reconcile-every 120]
+python3 scripts/board.py serve [--port 8765] [--bind 0.0.0.0] [--reconcile-every 120]   # probe period: registry [board] reconcile_every, 0 disables, min 10
 python3 scripts/board.py token                            # fresh access token for [board] token
 ```
 
@@ -104,7 +104,10 @@ submitted in the accounting window, a stacked bar, end-time window, earliest pen
 shared configuration, per job the varying part of the name) with the account budgets above the
 queue and footnotes for the nightly lag and the accounting unit, a filter box, state chips, free-first sort, light/dark
 theme, optional browser notifications on lane changes, and a "history" panel of the last 24 h.
-The tab title and favicon carry the free count. Polling pauses while the pointer is over a
+The tab title and favicon carry the free count. The page refresh period is a toolbar selector
+(1 s to 5 min, default 5 s, remembered per browser, `?every=` for one visit); it re-reads the
+board files only, so any setting is cheap, while the rig probe period is the server's
+`reconcile_every` (see the configuration reference). Polling pauses while the pointer is over a
 card or text is selected, and a lost server shows the last good read as stale. `/api/board`
 (schema `api_version` 2, additive over v1: `summary`, `serve`, per-rig `free_gpus`,
 `stray_sessions`, `gpu_probe_ok`, `load`, per-GPU `name`, `memory_total_mib`, `temperature_c`,

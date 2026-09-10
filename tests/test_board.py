@@ -137,6 +137,23 @@ class BoardTests(unittest.TestCase):
         with self.assertRaisesRegex(board.BoardError, "unknown machine 'ghost'"):
             board.load_config(self.registry)
 
+    def test_registry_reconcile_every_defaults_and_refuses_hammering(self) -> None:
+        self.assertEqual(self.config.reconcile_every, board.DEFAULT_RECONCILE_EVERY_S)
+        base = self.registry.read_text()
+        self.registry.write_text(base.replace("[board]\n", "[board]\nreconcile_every = 30\n", 1))
+        self.assertEqual(board.load_config(self.registry).reconcile_every, 30)
+        self.registry.write_text(base.replace("[board]\n", "[board]\nreconcile_every = 0\n", 1))
+        self.assertEqual(board.load_config(self.registry).reconcile_every, 0)
+        self.registry.write_text(base.replace("[board]\n", "[board]\nreconcile_every = 1\n", 1))
+        with self.assertRaisesRegex(board.BoardError, "below 10 s"):
+            board.load_config(self.registry)
+        self.registry.write_text(base.replace("[board]\n", '[board]\nreconcile_every = "fast"\n', 1))
+        with self.assertRaisesRegex(board.BoardError, "integer number of seconds"):
+            board.load_config(self.registry)
+        with self.assertRaisesRegex(board.BoardError, "--reconcile-every = 1"):
+            board.check_reconcile_every(1, "--reconcile-every")
+        self.assertIn('id="every"', board.VIEWER_PATH.read_text())
+
     def test_registry_excludes_unlisted_machines(self) -> None:
         self.assertEqual(sorted(self.config.rigs), ["behemoth", "rig-4090"])
         self.assertTrue(self.config.rigs["behemoth"].shared)

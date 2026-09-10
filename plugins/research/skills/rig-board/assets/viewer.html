@@ -112,6 +112,7 @@ footer{color:var(--faint);font-size:11px;padding:0 20px 16px}
     <span class="stamp" id="recon"></span>
     <span class="paused" id="paused" hidden>paused while you hover or select</span>
     <span style="flex:1"></span>
+    <select id="every" title="How often this page re-reads the board (the rigs themselves are probed on the server's own reconcile timer; see the header)"></select>
     <button id="histbtn" title="Show what happened on the board recently">history</button>
     <button id="notif" title="Browser notification when a lane frees up, is claimed, or is interrupted">notify: off</button>
     <button id="theme" title="Theme">theme</button>
@@ -152,7 +153,9 @@ const base=s=>s?String(s).split("/").pop():"?";
 const store={get(k,d){try{const v=localStorage.getItem("rigboard."+k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem("rigboard."+k,JSON.stringify(v))}catch(e){}}};
 
 // ── state ──
-const ui={q:"",states:new Set(store.get("states",[])),freeFirst:store.get("freeFirst",true),notify:store.get("notify",false),hist:store.get("hist",false),theme:store.get("theme",null)};
+const EVERY_CHOICES=[1,2,5,10,30,60,300];
+function pickEvery(v){v=Number(v);return EVERY_CHOICES.includes(v)?v:5}
+const ui={q:"",states:new Set(store.get("states",[])),freeFirst:store.get("freeFirst",true),notify:store.get("notify",false),hist:store.get("hist",false),theme:store.get("theme",null),every:pickEvery(new URLSearchParams(location.search).get("every")||store.get("every",5))};
 let last=null,lastOk=0,prevLanes=null,hover=false,open=new Set(),fetching=false;
 
 // ── theme ──
@@ -163,6 +166,8 @@ $("theme").onclick=()=>{ui.theme=ui.theme===null?"dark":ui.theme==="dark"?"light
 $("q").oninput=e=>{ui.q=e.target.value.trim().toLowerCase();draw()};
 $("freefirst").onclick=()=>{ui.freeFirst=!ui.freeFirst;store.set("freeFirst",ui.freeFirst);draw()};
 $("histbtn").onclick=()=>{ui.hist=!ui.hist;store.set("hist",ui.hist);drawHistory()};
+$("every").innerHTML=EVERY_CHOICES.map(v=>`<option value="${v}">refresh: ${v>=60?v/60+" min":v+" s"}</option>`).join("");$("every").value=String(ui.every);
+$("every").onchange=()=>{ui.every=pickEvery($("every").value);store.set("every",ui.every);schedule();tick()};
 $("notif").onclick=async()=>{if(!ui.notify&&"Notification"in window&&Notification.permission!=="granted"){const p=await Notification.requestPermission();if(p!=="granted")return}ui.notify=!ui.notify;store.set("notify",ui.notify);draw()};
 const STATE_CHIPS=[["free","free"],["held","held"],["foreign","foreign"],["issues","issues"],["slurm","slurm"]];
 function toggleState(s){ui.states.has(s)?ui.states.delete(s):ui.states.add(s);store.set("states",[...ui.states]);draw()}
@@ -323,7 +328,7 @@ function draw(){if(!last)return;const nowMs=Date.now();drawHeader(last,nowMs);
   for(const c of cards){if(anyWide&&!c.classList.contains("wide")){if(!stack){stack=document.createElement("div");stack.className="stack";main.appendChild(stack)}stack.appendChild(c)}else main.appendChild(c)}
   for(const c of last.slurm||[])if(visible(c)){main.appendChild(slurmCard(c,nowMs));shown++}
   if(!shown)main.innerHTML=`<div class="empty">nothing matches the current filter</div>`;
-  $("foot").textContent=`board read ${abs(last.generated_at)} · api v${last.api_version||1} · page refreshes every 5 s`}
+  $("foot").textContent=`board read ${abs(last.generated_at)} · api v${last.api_version||1} · page refreshes every ${ui.every>=60?ui.every/60+" min":ui.every+" s"}`}
 
 // ── history ──
 let histData=null,histAt=0;
@@ -351,6 +356,7 @@ async function tick(){if(fetching)return;const paused=hover||(window.getSelectio
     if(!r.ok)throw new Error(r.status+" "+r.statusText);const d=await r.json();last=d;lastOk=Date.now();diffAndNotify(d);setBanner("",null);$("dot").className="dot live";draw();if(ui.hist&&Date.now()-histAt>30000)drawHistory()}
   catch(e){$("dot").className="dot down";setBanner("bad",`Board unavailable: ${esc(e.message)}${last?` · showing the last good read from ${esc(abs(last.generated_at))}`:""}`);if(last)draw()}
   finally{fetching=false}}
-setInterval(()=>{if(last&&Date.now()-lastOk>20000&&!$("banner").classList.contains("bad")){$("dot").className="dot stale"}},5000);
-tick();setInterval(tick,5000);drawHistory();
+setInterval(()=>{if(last&&Date.now()-lastOk>Math.max(20000,4*ui.every*1000)&&!$("banner").classList.contains("bad")){$("dot").className="dot stale"}},1000);
+let timer=null;function schedule(){if(timer)clearInterval(timer);timer=setInterval(tick,ui.every*1000)}
+tick();schedule();drawHistory();
 </script></body></html>

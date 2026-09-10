@@ -14,6 +14,7 @@ slurm  = ["leonardo"]                                # Slurm targets: queue show
 port   = 8765                                        # viewer
 bind   = "0.0.0.0"                                   # all interfaces: LAN and the private overlay
 token  = "<output of board.py token>"                # optional; required for any exposure beyond the LAN
+reconcile_every = 120                                # seconds between rig probes by `serve`; 0 disables, minimum 10
 ```
 
 - `rigs` must name existing `[machines.<rig>]` entries; each needs `ssh`. The entry whose
@@ -160,9 +161,23 @@ path) and re-point it after a skill release that changes the script. The page is
 without it the server still answers `/api/board` and says the page is missing.
 
 The viewer keeps its own preferences (filter chips, free-first sort, theme, notifications,
-history panel) in the browser's local storage; nothing is written on the hub.
+history panel, refresh period) in the browser's local storage; nothing is written on the hub.
+
+### Two timers
+
+- **Page refresh** (`refresh:` selector in the toolbar, 1 s to 5 min, default 5 s; `?every=<s>`
+  in the URL sets it for one visit). Each refresh is one `/api/board` request that reads the
+  JSON already on disk under `root`. It is cheap at any setting, but it only makes ages,
+  countdowns and ETAs tick more smoothly: the facts change only when the server probes.
+- **Rig probe** (`[board] reconcile_every`, or `serve --reconcile-every`; default 120 s,
+  minimum 10 s, 0 disables). Each tick opens an SSH session to every rig (nvidia-smi, tmux,
+  status files) and to every Slurm login node (`squeue`, `sacct`, `saldo`), then waits the
+  configured time before the next one. Values below the minimum are refused: a 1 s tick would
+  keep an SSH session permanently open to each machine, spam their auth logs, and hammer the
+  cluster's shared login node and accounting database, which CINECA treats as abuse.
 
 ## Environment overrides
 
 - `RIGSYNC_REGISTRY` or `--registry`: alternate registry (tests use a temporary one).
-- `serve --port/--bind/--reconcile-every`: override the registry values for one process.
+- `serve --port/--bind/--reconcile-every`: override the registry values (`port`, `bind`,
+  `reconcile_every`) for one process.
