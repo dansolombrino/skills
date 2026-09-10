@@ -112,6 +112,8 @@ under, because `$WORK` and `$FAST` are per account:
 [machines.leonardo]
 ssh = "leonardo"
 # no hostname: the alias lands on whichever login node is free, and their names differ
+gpus = "job"                  # the login node has no GPU: environment-sync defers the smoke to the job
+transfer_ssh = "leonardo-dm"  # data mover: rig-sync pull/push rsync through it, nothing else does
 storage_root = "/leonardo_work/<account>"
 # no quota_fs: `quota -w` prints nothing on Lustre, while `df -P $WORK` reports the project quota
 min_free_gb = 100
@@ -123,6 +125,10 @@ UV_CACHE_DIR = "/leonardo_work/<account>/cache/uv"
 TORCH_HOME = "/leonardo_scratch/fast/<account>/cache/torch"
 WANDB_DIR = "/leonardo_work/<account>/wandb"
 ```
+
+`gpus = "job"` and `transfer_ssh` are the two cluster fields of `rig-sync`'s registry
+(`rig-sync/references/configuration.md`, "Cluster fields"); both must be present for the login-node
+verify and the data-mover transfers below to work as described.
 
 `sync.toml` declares `[machines.leonardo] repo_path = "/leonardo_work/<account>/<project>"`.
 `rig-sync check-paths`, `doctor`, `repo-path`, and `storage-env` then work unchanged; the login
@@ -138,10 +144,13 @@ Speed weight for assignment math and cost normalization: **1.0 per A100 GPU**, t
 `environment-sync provision` and `verify` run on the login node over ssh, exactly as on a rig: the
 login node has internet, `git`, and the user-installed `uv` at `~/.local/bin/uv`. Two differences:
 
-- The login node has no GPU, so **the lane smoke cannot run at provision time**. `environment-sync
-  verify --machines leonardo` establishes the fingerprint only; the GPU smoke runs as the first
-  step inside every job, where the existing environment guard already performs it. State this in
-  the gate-3 preview: "Leonardo fingerprint verified on login node; GPU smoke deferred to the job".
+- The login node has no GPU, so **the lane smoke cannot run at provision time**. The registry's
+  `gpus = "job"` tells `environment-sync` so: `doctor` and `verify --machines leonardo` skip the
+  `nvidia-smi` probe, still compare OS/arch/libc and the fingerprint with the hub, and report
+  `gpus=deferred to job`; `--lane leonardo:<n>` is refused with a message saying why. The GPU
+  smoke runs as the first step inside every job, where the existing environment guard already
+  performs it. State this in the gate-3 preview: "Leonardo fingerprint verified on login node;
+  GPU smoke deferred to the job".
 - A large `uv sync` can exceed the 10-minute CPU limit and be killed. Re-running it resumes from
   the cache under `UV_CACHE_DIR`; if it is killed twice, provision from a `lrd_all_serial` job
   (budget-free) with the same command and verify again from the login node.
@@ -268,7 +277,11 @@ which jobs were resubmitted, why, and whether each resumes or restarts.
 - Artifact movement stays `rig-sync`'s job (`pull evaluations/<NNN_exp> --from leonardo`). For
   anything beyond small files, point the transfer at the data-mover alias `leonardo-dm` with
   absolute paths, because `$WORK` is undefined there and login nodes kill transfers at 10 CPU
-  minutes.
+  minutes. rig-sync uses `transfer_ssh` when declared: with `transfer_ssh = "leonardo-dm"` in the
+  registry, `pull`/`push --from/--to leonardo` already rsync through the data mover (the output
+  says `via leonardo-dm` and prints the rsync command line), and retry up to three times if the
+  connection still drops (rsync exit 12/255), resuming where the previous attempt stopped. Never
+  hand-write the rsync.
 - After the slice finishes, sync offline wandb runs from a login node:
   `ssh leonardo "cd <repo_path> && wandb sync --sync-all <WANDB_DIR>"`; if it is killed for CPU
   time, run the same command inside a `lrd_all_serial` job.

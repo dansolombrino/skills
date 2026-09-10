@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import subprocess
 import sys
 import tempfile
@@ -9,6 +10,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+from contextlib import redirect_stdout
 
 
 ROOT = Path(__file__).parents[1]
@@ -362,6 +364,99 @@ class EnvironmentSyncTests(unittest.TestCase):
                     )
                     with self.assertRaises(envsync.EnvironmentSyncError):
                         envsync.load_environment_settings(root, config)
+
+    def test_job_gpu_machine_skips_the_probe_and_reports_deferred(self) -> None:
+        cluster = envsync.rigsync.Machine(
+            "cluster", "cluster", None, Path("/work/project"), False, gpus_in_job=True
+        )
+        outputs = {"uname -s": b"Linux\n", "uname -m": b"x86_64\n", "getconf GNU_LIBC_VERSION": b"glibc 2.28\n"}
+
+        def fake_remote(machine, argv, *, check=True):
+            key = " ".join(argv)
+            if "nvidia-smi" in key:
+                raise AssertionError("nvidia-smi must not be probed on a job-GPU machine")
+            return subprocess.CompletedProcess([], 0, outputs[key], b"")
+
+        with mock.patch.object(envsync, "remote", side_effect=fake_remote):
+            facts = envsync.host_facts(cluster)
+        self.assertEqual((facts.system, facts.architecture, facts.libc), ("Linux", "x86_64", "glibc 2.28"))
+        self.assertEqual(facts.gpus, ())
+        self.assertEqual(envsync.gpu_summary(cluster, facts), "deferred to job")
+
+    def test_verify_accepts_job_gpu_machine_but_refuses_a_lane_on_it(self) -> None:
+        root = Path("/tmp/hub")
+        hub = envsync.rigsync.Machine("hub", "hub", None, root, True)
+        cluster = envsync.rigsync.Machine(
+            "cluster", "cluster", None, Path("/work/project"), False, gpus_in_job=True
+        )
+        config = envsync.rigsync.Config(
+            root, {"evaluations": {"path": "evaluations"}}, {"hub": hub, "cluster": cluster}
+        )
+
+        def facts(machine):
+            gpus = () if machine.gpus_in_job else ("GPU, 555.1",)
+            return envsync.HostFacts("Linux", "x86_64", "glibc", gpus)
+
+        stream = io.StringIO()
+        with mock.patch.object(envsync, "verify_source"), mock.patch.object(
+            envsync, "host_facts", side_effect=facts
+        ), mock.patch.object(envsync, "uv_version", return_value="0.11.32"), mock.patch.object(
+            envsync, "lock_check"
+        ), mock.patch.object(envsync, "environment_fingerprint", return_value="a" * 64), mock.patch.object(
+            envsync, "run_gpu_smoke"
+        ) as smoke, redirect_stdout(stream):
+            envsync.verify_environments(self.settings(root), config, [cluster], "a" * 40, [])
+            with self.assertRaisesRegex(envsync.EnvironmentSyncError, "no GPU on the ssh target"):
+                envsync.verify_environments(
+                    self.settings(root), config, [], "a" * 40, [envsync.Lane("cluster", "0")]
+                )
+        self.assertIn("OK cluster environment: " + "a" * 64 + "; gpus=deferred to job", stream.getvalue())
+        smoke.assert_not_called()
+
+    def test_verify_still_rejects_architecture_drift_on_a_job_gpu_machine(self) -> None:
+        root = Path("/tmp/hub")
+        hub = envsync.rigsync.Machine("hub", "hub", None, root, True)
+        cluster = envsync.rigsync.Machine(
+            "cluster", "cluster", None, Path("/work/project"), False, gpus_in_job=True
+        )
+        config = envsync.rigsync.Config(
+            root, {"evaluations": {"path": "evaluations"}}, {"hub": hub, "cluster": cluster}
+        )
+
+        def facts(machine):
+            if machine.gpus_in_job:
+                return envsync.HostFacts("Linux", "aarch64", "glibc", ())
+            return envsync.HostFacts("Linux", "x86_64", "glibc", ("GPU, 555.1",))
+
+        with mock.patch.object(envsync, "verify_source"), mock.patch.object(
+            envsync, "host_facts", side_effect=facts
+        ):
+            with self.assertRaisesRegex(envsync.EnvironmentSyncError, "aarch64"):
+                envsync.verify_environments(self.settings(root), config, [cluster], "a" * 40, [])
+
+    def test_doctor_reports_deferred_gpus_for_a_job_gpu_machine(self) -> None:
+        root = Path("/tmp/hub")
+        hub = envsync.rigsync.Machine("hub", "hub", None, root, True)
+        cluster = envsync.rigsync.Machine(
+            "cluster", "cluster", None, Path("/work/project"), False, gpus_in_job=True
+        )
+        config = envsync.rigsync.Config(
+            root, {"evaluations": {"path": "evaluations"}}, {"hub": hub, "cluster": cluster}
+        )
+
+        def facts(machine):
+            gpus = () if machine.gpus_in_job else ("GPU, 555.1",)
+            return envsync.HostFacts("Linux", "x86_64", "glibc", gpus)
+
+        ok = subprocess.CompletedProcess([], 0, b"", b"")
+        stream = io.StringIO()
+        with mock.patch.object(envsync.rigsync, "doctor"), mock.patch.object(
+            envsync, "local_hub", return_value=hub
+        ), mock.patch.object(envsync, "remote", return_value=ok), mock.patch.object(
+            envsync, "host_facts", side_effect=facts
+        ), mock.patch.object(envsync, "uv_version", return_value="0.11.32"), redirect_stdout(stream):
+            envsync.doctor(self.settings(root), config, [cluster])
+        self.assertIn("OK cluster: host=Linux/x86_64 libc=glibc; gpus=deferred to job; uv=0.11.32 (ready)", stream.getvalue())
 
 
 if __name__ == "__main__":

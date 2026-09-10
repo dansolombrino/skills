@@ -31,6 +31,15 @@ class Machine:
     quota_fs: str | None = None
     min_free_gb: float | None = None
     caches: tuple[tuple[str, str], ...] = ()
+    # `gpus = "job"` in the registry: the ssh target (a Slurm login node) has no GPU; GPUs exist
+    # only inside scheduled jobs. environment-sync skips its GPU probe and refuses lanes there.
+    gpus_in_job: bool = False
+    # `transfer_ssh` in the registry: a second ssh alias reaching the same filesystem, used by
+    # `pull`/`push` artifact rsync only (a data mover); git, doctor, and probes keep using `ssh`.
+    transfer_ssh: str | None = None
+
+
+GPU_ACCESS_VALUES = ("ssh", "job")
 
 
 @dataclass(frozen=True)
@@ -135,6 +144,17 @@ def load_config(root: Path, config_path: Path, registry_path: Path) -> Config:
                 raise RigSyncError(
                     f"{registry_path}: machines.{name}.min_free_gb must not be negative"
                 )
+        raw_gpus = registry_entry.get("gpus", "ssh")
+        if raw_gpus not in GPU_ACCESS_VALUES:
+            raise RigSyncError(
+                f"{registry_path}: machines.{name}.gpus must be one of "
+                + ", ".join(repr(value) for value in GPU_ACCESS_VALUES)
+            )
+        transfer_ssh = registry_entry.get("transfer_ssh")
+        if transfer_ssh is not None and (not isinstance(transfer_ssh, str) or not transfer_ssh):
+            raise RigSyncError(
+                f"{registry_path}: machines.{name}.transfer_ssh must be a non-empty string"
+            )
         raw_caches = registry_entry.get("caches", {})
         if not isinstance(raw_caches, dict):
             raise RigSyncError(f"{registry_path}: machines.{name}.caches must be a table")
@@ -164,6 +184,8 @@ def load_config(root: Path, config_path: Path, registry_path: Path) -> Config:
             quota_fs,
             float(min_free_gb) if min_free_gb is not None else None,
             tuple(sorted(caches)),
+            raw_gpus == "job",
+            transfer_ssh,
         )
 
     for group, entry in artifacts.items():
@@ -568,8 +590,8 @@ def source_manifest(root: Path) -> list[str]:
     return [path for path in paths if path != ".git" and not path.startswith(".git/")]
 
 
-def rsync_remote(machine: Machine, path: Path) -> str:
-    return f"{machine.ssh}:{shlex.quote(str(path))}/"
+def rsync_remote(machine: Machine, path: Path, *, alias: str | None = None) -> str:
+    return f"{alias or machine.ssh}:{shlex.quote(str(path))}/"
 
 
 def rsync_flags(machine: Machine) -> list[str]:
@@ -577,6 +599,46 @@ def rsync_flags(machine: Machine) -> list[str]:
     if not machine.local:
         flags += ["-e", "ssh -o BatchMode=yes -o ConnectTimeout=10"]
     return flags
+
+
+def transfer_alias(machine: Machine) -> str:
+    """The ssh alias artifact rsync goes through: `transfer_ssh` when declared, else `ssh`."""
+    return machine.transfer_ssh or machine.ssh
+
+
+# rsync exit codes that mean the connection dropped mid-transfer rather than that the transfer
+# itself was wrong: 12 (protocol data stream, what a killed remote rsync produces) and 255 (ssh
+# died). A data mover or a login node with a CPU-time limit can produce either on a large tree.
+RSYNC_RETRY_CODES = {12: "error in rsync protocol data stream", 255: "ssh connection lost"}
+RSYNC_ATTEMPTS = 3
+# ssh also exits 255 when it never connected; retrying those only delays the same answer.
+RSYNC_NO_RETRY_MARKERS = ("Permission denied", "Could not resolve hostname", "Host key verification failed")
+
+
+def run_rsync_with_retry(command: list[str], *, attempts: int = RSYNC_ATTEMPTS) -> None:
+    """Run an artifact rsync, retrying a bounded number of times when the connection drops.
+
+    rsync is idempotent, so a retry resumes from what already landed; `--partial` keeps a
+    half-copied large file for the delta pass instead of discarding it.
+    """
+    for attempt in range(1, attempts + 1):
+        result = run(command, check=False, show=True)
+        if result.returncode == 0:
+            return
+        reason = RSYNC_RETRY_CODES.get(result.returncode)
+        stderr = result.stderr.decode(errors="replace").strip()
+        if any(marker in stderr for marker in RSYNC_NO_RETRY_MARKERS):
+            reason = None
+        if reason is None or attempt == attempts:
+            suffix = f" after {attempts} attempts" if reason is not None else ""
+            raise RigSyncError(
+                f"command failed ({result.returncode}){suffix}: {shlex.join(command)}\n{stderr}"
+            )
+        print(
+            f"[retry] rsync exited {result.returncode} ({reason}); "
+            f"attempt {attempt + 1}/{attempts} resumes the transfer",
+            file=sys.stderr,
+        )
 
 
 def require_confirmation(dry_run: bool, confirmed: bool) -> None:
@@ -672,23 +734,35 @@ def transfer(
     if machine.local and machine.repo_path.resolve() == config.root.resolve():
         print(f"[local] {selector} already resides on {machine.name}")
         return
-    flags = rsync_flags(machine)
+    alias = transfer_alias(machine)
+    flags = rsync_flags(machine) + ["--partial"]
     if dry_run:
         flags.append("--dry-run")
     if direction == "push":
         if not local_path.exists():
             raise RigSyncError(f"source does not exist: {local_path}")
         if not dry_run:
+            # The parent is created over the login alias: `transfer_ssh` is for bulk rsync only.
             remote(machine, ["mkdir", "-p", str(remote_path.parent)])
         source = str(local_path)
-        destination = str(remote_path.parent) + "/" if machine.local else rsync_remote(machine, remote_path.parent)
+        destination = (
+            str(remote_path.parent) + "/"
+            if machine.local
+            else rsync_remote(machine, remote_path.parent, alias=alias)
+        )
     else:
         if not dry_run:
             local_path.parent.mkdir(parents=True, exist_ok=True)
-        source = str(remote_path) if machine.local else f"{machine.ssh}:{shlex.quote(str(remote_path))}"
+        source = str(remote_path) if machine.local else f"{alias}:{shlex.quote(str(remote_path))}"
         destination = str(local_path.parent) + "/"
-    print(f"[{ 'dry-run' if dry_run else direction }] {selector} {'to' if direction == 'push' else 'from'} {machine.name}")
-    run(flags + [source, destination], show=True)
+    via = f" via {alias}" if not machine.local and alias != machine.ssh else ""
+    print(
+        f"[{ 'dry-run' if dry_run else direction }] {selector} "
+        f"{'to' if direction == 'push' else 'from'} {machine.name}{via}"
+    )
+    command = flags + [source, destination]
+    print(f"[rsync] {shlex.join(command)}")
+    run_rsync_with_retry(command)
 
 
 def list_group(config: Config, machine: Machine, group: str) -> set[str]:

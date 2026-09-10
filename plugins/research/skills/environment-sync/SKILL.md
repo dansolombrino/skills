@@ -62,7 +62,10 @@ protected.
    uv-managed Python, and exact-sync the configured named environment. Refuse mutation while the
    project has active tmux lanes or `running` statuses.
 4. Run `verify` across the complete rig set, then once per approved GPU lane. Require every rig's
-   fingerprint to equal the local hub and every bounded GPU smoke to succeed.
+   fingerprint to equal the local hub and every bounded GPU smoke to succeed. A machine whose
+   registry entry declares `gpus = "job"` (a Slurm login node) is verified with `--machines`
+   only: the GPU probe is skipped and reported as `gpus=deferred to job`, `--lane` is refused for
+   it, and the smoke runs as the first step of every job instead.
 5. Give the verified fingerprint to `sweep-dispatch`; embed it in wave scripts and status
    provenance. Re-run verification before initial launch and recovery.
 

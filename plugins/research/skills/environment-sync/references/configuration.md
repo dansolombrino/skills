@@ -79,6 +79,13 @@ Environment sync requires Linux machines with the same architecture. libc, kerne
 GPU model may differ; their compatibility is established by successful creation of the locked
 environment plus the project GPU smoke.
 
+A machine whose registry entry declares `gpus = "job"` (a Slurm login node, see
+`rig-sync/references/configuration.md`, "Cluster fields") has no GPU on the ssh target. `doctor`
+and `verify` skip the `nvidia-smi` probe there and print `gpus=deferred to job`; OS, architecture,
+libc, uv version, lock, and fingerprint are checked exactly as on a rig. `verify --lane` refuses
+such a machine, because the smoke can only run inside a job — which is where the dispatch
+templates already run it as the first step.
+
 ## Adoption
 
 For an existing project, inventory its interpreter, direct/transitive packages, custom indexes,

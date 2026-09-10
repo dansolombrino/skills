@@ -819,6 +819,162 @@ class MachineEnvTests(unittest.TestCase):
         )
         self.assertEqual(parsed, {"HF_HOME": "/a/b", "QUOTED": "/c/d"})
 
+    def test_registry_accepts_job_gpus_and_transfer_ssh(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = root / "sync.toml"
+            registry = root / "machines.toml"
+            write(
+                config,
+                """
+                version = 1
+                [artifacts.evaluations]
+                path = "evaluations"
+                depth = 2
+                [machines.cluster]
+                repo_path = "/work/project"
+                [machines.rig]
+                repo_path = "/data/project"
+                """,
+            )
+            write(
+                registry,
+                """
+                [machines.cluster]
+                ssh = "cluster"
+                gpus = "job"
+                transfer_ssh = "cluster-dm"
+                [machines.rig]
+                ssh = "rig"
+                """,
+            )
+            with mock.patch.object(rigsync.socket, "gethostname", return_value="elsewhere"):
+                parsed = rigsync.load_config(root, config, registry)
+            cluster = parsed.machines["cluster"]
+            rig = parsed.machines["rig"]
+            self.assertTrue(cluster.gpus_in_job)
+            self.assertEqual(cluster.transfer_ssh, "cluster-dm")
+            self.assertEqual(rigsync.transfer_alias(cluster), "cluster-dm")
+            self.assertFalse(rig.gpus_in_job)
+            self.assertIsNone(rig.transfer_ssh)
+            self.assertEqual(rigsync.transfer_alias(rig), "rig")
+            # ssh probes keep using the login alias even when transfer_ssh is declared.
+            self.assertEqual(rigsync.ssh_base(cluster)[-1], "cluster")
+
+    def test_registry_rejects_unknown_gpus_value_and_empty_transfer_ssh(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = root / "sync.toml"
+            registry = root / "machines.toml"
+            write(
+                config,
+                """
+                version = 1
+                [artifacts.evaluations]
+                path = "evaluations"
+                [machines.cluster]
+                repo_path = "/work/project"
+                """,
+            )
+            for body, message in (
+                ('ssh = "cluster"\ngpus = "none"\n', "gpus must be one of"),
+                ('ssh = "cluster"\ntransfer_ssh = ""\n', "transfer_ssh must be a non-empty"),
+            ):
+                write(registry, "[machines.cluster]\n" + body)
+                with self.assertRaisesRegex(rigsync.RigSyncError, message):
+                    rigsync.load_config(root, config, registry)
+
+    def test_pull_and_push_rsync_through_transfer_ssh_but_mkdir_through_ssh(self) -> None:
+        machine = rigsync.Machine(
+            "cluster", "cluster", None, Path("/work/project"), False, transfer_ssh="cluster-dm"
+        )
+        config = rigsync.Config(
+            Path("/tmp/source"), {"evaluations": {"path": "evaluations"}}, {"cluster": machine}
+        )
+        completed = subprocess.CompletedProcess([], 0, b"", b"")
+        stream = io.StringIO()
+        with mock.patch.object(rigsync, "run", return_value=completed) as run_mock, redirect_stdout(stream):
+            rigsync.transfer(config, machine, "evaluations/000_exp", "pull", dry_run=True, confirmed=False)
+        command = run_mock.call_args.args[0]
+        self.assertEqual(command[0], "rsync")
+        self.assertIn("--dry-run", command)
+        self.assertIn("--partial", command)
+        self.assertEqual(command[-2], "cluster-dm:/work/project/evaluations/000_exp")
+        self.assertIn("via cluster-dm", stream.getvalue())
+        self.assertIn("[rsync] rsync", stream.getvalue())
+
+        with tempfile.TemporaryDirectory() as raw:
+            source_root = Path(raw)
+            (source_root / "evaluations" / "000_exp").mkdir(parents=True)
+            config = rigsync.Config(
+                source_root, {"evaluations": {"path": "evaluations"}}, {"cluster": machine}
+            )
+            with mock.patch.object(rigsync, "run", return_value=completed) as run_mock, redirect_stdout(io.StringIO()):
+                rigsync.transfer(
+                    config, machine, "evaluations/000_exp", "push", dry_run=False, confirmed=True
+                )
+        commands = [call.args[0] for call in run_mock.call_args_list]
+        mkdir = commands[0]
+        self.assertEqual(mkdir[0], "ssh")
+        self.assertEqual(mkdir[-2], "cluster")
+        self.assertIn("mkdir -p /work/project/evaluations", mkdir[-1])
+        push = commands[1]
+        self.assertEqual(push[-1], "cluster-dm:/work/project/evaluations/")
+
+    def test_transfer_without_transfer_ssh_is_unchanged(self) -> None:
+        machine = rigsync.Machine("peer", "peer-alias", None, Path("/tmp/peer"), False)
+        config = rigsync.Config(Path("/tmp/source"), {"evaluations": {"path": "evaluations"}}, {"peer": machine})
+        completed = subprocess.CompletedProcess([], 0, b"", b"")
+        stream = io.StringIO()
+        with mock.patch.object(rigsync, "run", return_value=completed) as run_mock, redirect_stdout(stream):
+            rigsync.transfer(config, machine, "evaluations", "pull", dry_run=True, confirmed=False)
+        command = run_mock.call_args.args[0]
+        self.assertEqual(command[-2], "peer-alias:/tmp/peer/evaluations")
+        self.assertNotIn(" via ", stream.getvalue())
+
+    def test_transfer_retries_dropped_connections_a_bounded_number_of_times(self) -> None:
+        dropped = subprocess.CompletedProcess([], 12, b"", b"rsync: connection unexpectedly closed")
+        ok = subprocess.CompletedProcess([], 0, b"", b"")
+        err = io.StringIO()
+        with mock.patch.object(rigsync, "run", side_effect=[dropped, dropped, ok]) as run_mock, redirect_stderr(err):
+            rigsync.run_rsync_with_retry(["rsync", "src", "dst"])
+        self.assertEqual(run_mock.call_count, 3)
+        self.assertIn("[retry] rsync exited 12", err.getvalue())
+        self.assertIn("attempt 2/3", err.getvalue())
+        self.assertIn("attempt 3/3", err.getvalue())
+
+        lost = subprocess.CompletedProcess([], 255, b"", b"client_loop: send disconnect")
+        with mock.patch.object(rigsync, "run", side_effect=[lost, lost, lost]) as run_mock, redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(rigsync.RigSyncError, r"command failed \(255\) after 3 attempts"):
+                rigsync.run_rsync_with_retry(["rsync", "src", "dst"])
+        self.assertEqual(run_mock.call_count, 3)
+
+        # ssh that never connected also exits 255; that is not a dropped connection.
+        denied = subprocess.CompletedProcess([], 255, b"", b"user@dm: Permission denied (publickey).")
+        with mock.patch.object(rigsync, "run", side_effect=[denied]) as run_mock, redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(rigsync.RigSyncError, r"command failed \(255\): rsync"):
+                rigsync.run_rsync_with_retry(["rsync", "src", "dst"])
+        self.assertEqual(run_mock.call_count, 1)
+
+        # Any other exit code is a real transfer error and is not retried.
+        broken = subprocess.CompletedProcess([], 23, b"", b"some files could not be transferred")
+        with mock.patch.object(rigsync, "run", side_effect=[broken]) as run_mock, redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(rigsync.RigSyncError, r"command failed \(23\)"):
+                rigsync.run_rsync_with_retry(["rsync", "src", "dst"])
+        self.assertEqual(run_mock.call_count, 1)
+
+    def test_push_source_keeps_using_the_login_alias(self) -> None:
+        machine = rigsync.Machine(
+            "cluster", "cluster", None, Path("/work/project"), False, transfer_ssh="cluster-dm"
+        )
+        config = rigsync.Config(Path("/tmp/source"), {"evaluations": {"path": "evaluations"}}, {"cluster": machine})
+        completed = subprocess.CompletedProcess([], 0, b"", b"")
+        with mock.patch.object(rigsync, "source_manifest", return_value=["source.txt"]), mock.patch.object(
+            rigsync, "run", return_value=completed
+        ) as run_mock, redirect_stdout(io.StringIO()):
+            rigsync.push_source(config, machine, dry_run=True, confirmed=False)
+        self.assertEqual(run_mock.call_args.args[0][-1], "cluster:/work/project/")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -94,12 +94,13 @@ UV_CACHE_DIR = "/absolute/large-volume/path/cache/uv"
 TMPDIR = "/absolute/large-volume/path/tmp"
 ```
 
-A Slurm cluster such as `leonardo` is declared the same way, with two deliberate omissions:
-no `hostname`, because the alias lands on whichever login node is free, and no `quota_fs`, because
-`quota -w` prints nothing on its Lustre filesystems while `df -P <storage_root>` already reports
-the project quota, which is what the fallback measures. Its `storage_root` is the project's
-absolute `$WORK` path, one entry per project account. The exact entry is in
-`sweep-dispatch/references/cineca-slurm.md`.
+A Slurm cluster such as `leonardo` is declared the same way, with two deliberate omissions and
+two additions. Omitted: no `hostname`, because the alias lands on whichever login node is free,
+and no `quota_fs`, because `quota -w` prints nothing on its Lustre filesystems while
+`df -P <storage_root>` already reports the project quota, which is what the fallback measures.
+Added: `gpus = "job"` and `transfer_ssh` (see [Cluster fields](#cluster-fields)). Its
+`storage_root` is the project's absolute `$WORK` path, one entry per project account. The exact
+entry is in `sweep-dispatch/references/cineca-slurm.md`.
 
 The `ssh` value is an alias from `~/.ssh/config`; ports, users, and keys remain there. Preserve
 legacy aliases that other projects may still reference. When `hostname` is present, `doctor`
@@ -138,6 +139,35 @@ far faster than the number suggests.
 
 Omit all three on rigs with a single volume and no quotas; `doctor` then skips the storage check
 rather than inventing a default.
+
+### Cluster fields
+
+Two optional fields describe a machine whose ssh alias is a **Slurm login node** rather than the
+box the GPUs are in. Omit both on every ordinary rig; nothing changes there.
+
+`gpus = "job"` declares that the ssh target has no GPU and that GPUs exist only inside scheduled
+jobs. The default, `"ssh"`, is the rig case: `nvidia-smi` is reachable over the alias. `rigsync`
+only records the flag; `environment-sync` acts on it. With `gpus = "job"`, its `doctor` and
+`verify` skip the `nvidia-smi` probe, still compare OS, architecture, and libc with the hub and
+still require the environment fingerprint to match, report `gpus=deferred to job`, and **refuse
+`--lane` for that machine** with a message saying so — the GPU smoke runs as the first step inside
+every job instead. `provision --confirm` therefore completes on a login node instead of installing
+correctly and then failing its own final verify.
+
+`transfer_ssh` names a second alias from `~/.ssh/config` that reaches the **same filesystem** as
+`ssh` — a cluster's data mover. It is used by `pull` and `push` **only**, i.e. by artifact rsync:
+`doctor`, `check-paths`, `push-source`, revision deployment, `provision-env`, and every probe keep
+using `ssh`, and so does the `mkdir -p` that `push` runs before its rsync. rsync paths are already
+absolute, so a data mover with no `$WORK` or login environment is fine. Declare it on clusters
+whose login nodes kill long processes: a multi-hundred-GB pull through the login node dies at the
+CPU-time limit, and the skill forbids a hand-written rsync as the workaround. `pull`/`push` print
+`via <transfer_ssh>` and the exact rsync command line, so the alias in use is always visible.
+
+Whether or not `transfer_ssh` is declared, `pull` and `push` run rsync with `--partial` and
+**retry a bounded number of times** (three attempts) when rsync exits 12 (protocol data stream,
+what a killed remote produces) or 255 (ssh died), printing a `[retry]` note each time. rsync is
+idempotent, so a retry resumes from what already landed. Any other exit code is a real transfer
+error and is not retried.
 
 ### `[machines.<rig>.caches]` — the machine environment
 

@@ -67,7 +67,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "5.10.5")
+        self.assertEqual(manifest["version"], "5.11.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -1707,6 +1707,20 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("no `quota_fs`", rigsync_config)
         self.assertIn("rig=leonardo", tracking)
         self.assertIn("scripts/**/leonardo.jobs", gitignore)
+
+        # the login node has no GPU and kills long transfers: both facts are registry fields,
+        # acted on by environment-sync (gpus) and rig-sync pull/push (transfer_ssh)
+        self.assertIn("### Cluster fields", rigsync_config)
+        self.assertIn('`gpus = "job"`', rigsync_config)
+        self.assertIn("`transfer_ssh`", rigsync_config)
+        self.assertIn("gpus=deferred to job", rigsync_config)
+        self.assertIn('gpus = "job"', reference)
+        self.assertIn('transfer_ssh = "leonardo-dm"', reference)
+        self.assertIn("rig-sync uses `transfer_ssh` when declared", reference)
+        self.assertIn("gpus=deferred to job", reference)
+        envsync_skill = (ROOT / "plugins/research/skills/environment-sync/SKILL.md").read_text()
+        self.assertIn('`gpus = "job"`', envsync_skill)
+        self.assertIn("gpus=deferred to job", envsync_skill)
 
 if __name__ == "__main__":
     unittest.main()

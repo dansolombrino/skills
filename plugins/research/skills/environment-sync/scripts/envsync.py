@@ -230,6 +230,11 @@ def host_facts(machine) -> HostFacts:
         if libc_result.returncode == 0
         else "unavailable"
     )
+    if machine.gpus_in_job:
+        # A Slurm login node: no GPU on the ssh target, so nvidia-smi cannot be probed here.
+        # OS, architecture, libc, and the fingerprint are still compared; the GPU smoke runs as
+        # the first step inside every job.
+        return HostFacts(system, architecture, libc, ())
     gpu_result = remote(
         machine,
         ["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
@@ -248,6 +253,19 @@ def host_facts(machine) -> HostFacts:
     if not gpus:
         raise EnvironmentSyncError(f"{machine.name}: nvidia-smi reported no GPUs")
     return HostFacts(system, architecture, libc, gpus)
+
+
+def gpu_summary(machine, facts: HostFacts) -> str:
+    return "deferred to job" if machine.gpus_in_job else str(len(facts.gpus))
+
+
+def require_lane_capable(machine) -> None:
+    if machine.gpus_in_job:
+        raise EnvironmentSyncError(
+            f"{machine.name}: no GPU on the ssh target (registry gpus = \"job\"); "
+            "--lane cannot smoke it. Verify with --machines only: the GPU smoke runs as the "
+            "first step inside every job."
+        )
 
 
 def uv_version(machine, executable: Path) -> str | None:
@@ -413,7 +431,7 @@ def doctor(settings: EnvironmentSettings, config, machines: list) -> None:
             uv_state = "ready" if observed_uv == settings.uv_version else "needs provision"
             print(
                 f"OK {machine.name}: host={facts.system}/{facts.architecture} libc={facts.libc}; "
-                f"gpus={len(facts.gpus)}; uv={observed_uv or 'missing'} ({uv_state})"
+                f"gpus={gpu_summary(machine, facts)}; uv={observed_uv or 'missing'} ({uv_state})"
             )
         except (EnvironmentSyncError, rigsync.RigSyncError) as exc:
             failures.append(f"{machine.name}: {exc}")
@@ -527,6 +545,7 @@ def verify_environments(
     for lane in lanes:
         if lane.machine not in config.machines:
             raise EnvironmentSyncError(f"unknown machine in lane: {lane.machine}")
+        require_lane_capable(config.machines[lane.machine])
         all_machines[lane.machine] = config.machines[lane.machine]
 
     hub_facts = host_facts(hub)
@@ -557,7 +576,8 @@ def verify_environments(
             f"environment fingerprint mismatch; hub {hub.name}={expected}; {detail}"
         )
     for machine in machines:
-        print(f"OK {machine.name} environment: {expected}")
+        deferred = "; gpus=deferred to job" if machine.gpus_in_job else ""
+        print(f"OK {machine.name} environment: {expected}{deferred}")
     for lane in lanes:
         run_gpu_smoke(settings, config.machines[lane.machine], lane)
     print(f"ENVIRONMENT_FINGERPRINT={expected}")
