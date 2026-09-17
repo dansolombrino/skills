@@ -72,6 +72,9 @@ class EnvironmentSyncTests(unittest.TestCase):
         write(root / "code/common/environment_smoke.py", "print('gpu ok')\n")
         return config
 
+    def target(self) -> envsync.Target:
+        return envsync.Target("0123456789abcdef", "20260802-120000", "a" * 40)
+
     def settings(self, root: Path) -> envsync.EnvironmentSettings:
         return envsync.EnvironmentSettings(
             root=root,
@@ -162,7 +165,7 @@ class EnvironmentSyncTests(unittest.TestCase):
                 self.settings(root),
                 config,
                 [machine],
-                "a" * 40,
+                self.target(),
                 dry_run=True,
                 confirmed=False,
             )
@@ -171,13 +174,21 @@ class EnvironmentSyncTests(unittest.TestCase):
     def test_sync_command_is_frozen_exact_and_uses_pinned_python(self) -> None:
         root = Path("/tmp/hub")
         machine = envsync.rigsync.Machine("hub", "hub", None, root, True)
-        command = envsync.sync_command(self.settings(root), machine, dry_run=True)
+        command = envsync.sync_command(self.settings(root), machine, self.target(), dry_run=True)
         self.assertIn("--frozen", command)
         self.assertIn("--exact", command)
         self.assertIn("--managed-python", command)
         self.assertIn("--dry-run", command)
         self.assertEqual(command[command.index("--python") + 1], "3.12.11")
-        self.assertIn("UV_PROJECT_ENVIRONMENT=/tmp/hub/research-env", command)
+        self.assertIn("--no-install-project", command)
+        self.assertIn("UV_PROJECT_ENVIRONMENT=/tmp/hub/.envs/0123456789abcdef", command)
+        self.assertEqual(
+            command[command.index("--project") + 1], "/tmp/hub/.waves/20260802-120000"
+        )
+        staged = envsync.sync_command(
+            self.settings(root), machine, envsync.Target("0123456789abcdef"), dry_run=False
+        )
+        self.assertEqual(staged[staged.index("--project") + 1], "/tmp/hub")
 
     def test_uv_install_is_versioned_user_local_and_does_not_use_sudo(self) -> None:
         root = Path("/tmp/hub")
@@ -194,26 +205,59 @@ class EnvironmentSyncTests(unittest.TestCase):
         self.assertIn("UV_NO_MODIFY_PATH", rendered)
         self.assertNotIn("sudo", rendered)
 
-    def test_provision_refuses_to_mutate_active_project(self) -> None:
+    def test_provision_refuses_to_resync_an_environment_an_active_wave_uses(self) -> None:
         root = Path("/tmp/hub")
         machine = envsync.rigsync.Machine("hub", "hub", None, root, True)
         config = envsync.rigsync.Config(
             root, {"evaluations": {"path": "evaluations"}}, {"hub": machine}
         )
+        other = "20260801-000000"
         with mock.patch.object(envsync, "verify_source"), mock.patch.object(
             envsync, "uv_version", return_value="0.11.32"
+        ), mock.patch.object(envsync, "environment_exists", return_value=True), mock.patch.object(
+            envsync.rigsync, "wave_activity", return_value={other: ["tmux:active"]}
         ), mock.patch.object(
-            envsync.rigsync, "project_activity", return_value=["tmux:active"]
-        ):
+            envsync.rigsync, "worktrees", return_value={other: Path("/tmp/hub/.waves") / other}
+        ), mock.patch.object(envsync.rigsync, "env_key_for_tree", return_value="0123456789abcdef"):
             with self.assertRaisesRegex(envsync.EnvironmentSyncError, "active work blocks"):
                 envsync.provision(
                     self.settings(root),
                     config,
                     [machine],
-                    "a" * 40,
+                    self.target(),
                     dry_run=False,
                     confirmed=True,
                 )
+
+    def test_provision_builds_a_new_key_while_other_waves_run(self) -> None:
+        root = Path("/tmp/hub")
+        machine = envsync.rigsync.Machine("hub", "hub", None, root, True)
+        config = envsync.rigsync.Config(
+            root, {"evaluations": {"path": "evaluations"}}, {"hub": machine}
+        )
+        ok = subprocess.CompletedProcess([], 0, b"", b"")
+        with mock.patch.object(envsync, "verify_source"), mock.patch.object(
+            envsync, "uv_version", return_value="0.11.32"
+        ), mock.patch.object(envsync, "environment_exists", return_value=False), mock.patch.object(
+            envsync.rigsync, "wave_activity", side_effect=AssertionError("not consulted")
+        ), mock.patch.object(envsync, "remote", return_value=ok) as remote_mock, mock.patch.object(
+            envsync, "verify_environments"
+        ) as verify:
+            envsync.provision(
+                self.settings(root), config, [machine], self.target(), dry_run=False, confirmed=True
+            )
+        self.assertTrue(any("sync" in call.args[1] for call in remote_mock.call_args_list))
+        verify.assert_called_once()
+
+    def test_staged_target_is_hub_only(self) -> None:
+        root = Path("/tmp/hub")
+        hub = envsync.rigsync.Machine("hub", "hub", None, root, True)
+        peer = envsync.rigsync.Machine("peer", "peer", None, Path("/tmp/peer"), False)
+        config = envsync.rigsync.Config(root, {}, {"hub": hub, "peer": peer})
+        with self.assertRaisesRegex(envsync.EnvironmentSyncError, "local hub only"):
+            envsync.provision(
+                self.settings(root), config, [peer], envsync.Target("0123456789abcdef"), dry_run=True, confirmed=False
+            )
 
     def test_verify_rejects_cross_rig_fingerprint_drift(self) -> None:
         root = Path("/tmp/hub")
@@ -226,7 +270,7 @@ class EnvironmentSyncTests(unittest.TestCase):
         )
         facts = envsync.HostFacts("Linux", "x86_64", "glibc 2.39", ("GPU, 555.1",))
 
-        def fingerprint(_settings, machine):
+        def fingerprint(_settings, machine, _target):
             return "a" * 64 if machine.name == "hub" else "b" * 64
 
         with mock.patch.object(envsync, "verify_source"), mock.patch.object(
@@ -238,7 +282,7 @@ class EnvironmentSyncTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(envsync.EnvironmentSyncError, "fingerprint mismatch"):
                 envsync.verify_environments(
-                    self.settings(root), config, [hub, peer], "a" * 40, []
+                    self.settings(root), config, [hub, peer], self.target(), []
                 )
 
     def test_verify_rejects_host_architecture_drift(self) -> None:
@@ -260,7 +304,7 @@ class EnvironmentSyncTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(envsync.EnvironmentSyncError, "aarch64"):
                 envsync.verify_environments(
-                    self.settings(root), config, [peer], "a" * 40, []
+                    self.settings(root), config, [peer], self.target(), []
                 )
 
     def test_environment_source_check_ignores_experiment_code_but_rejects_lock_drift(self) -> None:
@@ -271,6 +315,7 @@ class EnvironmentSyncTests(unittest.TestCase):
             subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.com"], check=True)
             self.make_contract(root)
             write(root / "code/train.py", "print('clean')\n")
+            write(root / ".gitignore", ".waves/\n.envs/\n")
             subprocess.run(["git", "-C", str(root), "add", "."], check=True)
             subprocess.run(["git", "-C", str(root), "commit", "-qm", "contract"], check=True)
             subprocess.run(["git", "-C", str(root), "remote", "add", "origin", str(root / "remote.git")], check=True)
@@ -287,11 +332,49 @@ class EnvironmentSyncTests(unittest.TestCase):
                 {"hub": machine},
                 envsync.rigsync.GitSettings("origin", "main"),
             )
-            write(root / "code/train.py", "print('staged experiment work')\n")
-            envsync.verify_source(config, machine, revision)
-            write(root / "uv.lock", "changed = true\n")
+            wave = "20260802-120000"
+            tree = root / ".waves" / wave
+            subprocess.run(["git", "-C", str(root), "worktree", "add", "-q", "--detach", str(tree), revision], check=True)
+            target = envsync.Target("0123456789abcdef", wave, revision)
+            write(tree / "code/train.py", "print('experiment work')\n")
+            envsync.verify_source(config, machine, target)
+            write(tree / "uv.lock", "changed = true\n")
             with self.assertRaisesRegex(envsync.EnvironmentSyncError, "environment contract dirty"):
-                envsync.verify_source(config, machine, revision)
+                envsync.verify_source(config, machine, target)
+            with self.assertRaisesRegex(envsync.EnvironmentSyncError, "missing wave worktree"):
+                envsync.verify_source(config, machine, envsync.Target("0123456789abcdef", "20260803-000000", revision))
+            staged = envsync.Target("0123456789abcdef")
+            write(root / "uv.lock", "staged = true\n")
+            subprocess.run(["git", "-C", str(root), "add", "uv.lock"], check=True)
+            envsync.verify_source(config, machine, staged)
+            write(root / "uv.lock", "unstaged = true\n")
+            with self.assertRaisesRegex(envsync.EnvironmentSyncError, "environment contract dirty"):
+                envsync.verify_source(config, machine, staged)
+
+    def test_staged_key_equals_the_key_of_the_commit_made_from_it(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Test"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "t@example.com"], check=True)
+            self.make_contract(root)
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            staged = envsync.staged_target(root)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "c"], check=True)
+            revision = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+            ).stdout.strip()
+            wave = envsync.wave_target(root, "20260802-120000", revision)
+            self.assertEqual(staged.key, wave.key)
+            self.assertTrue(staged.staged)
+            self.assertFalse(wave.staged)
+
+    def test_cli_target_needs_wave_and_revision_or_staged(self) -> None:
+        parser = envsync.build_parser()
+        for argv in (["verify", "--machines", "hub"], ["verify", "--machines", "hub", "--wave", "20260802-120000"],
+                     ["verify", "--machines", "hub", "--staged", "--wave", "20260802-120000"]):
+            with self.assertRaises(envsync.EnvironmentSyncError):
+                envsync.parse_target(Path("/nonexistent"), parser.parse_args(argv))
 
     def test_gpu_smoke_uses_project_venv_and_assigned_devices(self) -> None:
         root = Path("/tmp/hub")
@@ -299,12 +382,12 @@ class EnvironmentSyncTests(unittest.TestCase):
         completed = subprocess.CompletedProcess([], 0, b"ok\n", b"")
         with mock.patch.object(envsync, "remote", return_value=completed) as remote_mock:
             envsync.run_gpu_smoke(
-                self.settings(root), machine, envsync.Lane("hub", "0,1")
+                self.settings(root), machine, envsync.Lane("hub", "0,1"), self.target()
             )
         command = remote_mock.call_args.args[1]
         self.assertEqual(
             command[:3],
-            ["env", "CUDA_VISIBLE_DEVICES=0,1", "/tmp/hub/research-env/bin/python"],
+            ["env", "CUDA_VISIBLE_DEVICES=0,1", "/tmp/hub/.envs/0123456789abcdef/bin/python"],
         )
         self.assertNotIn("uv", command)
 
@@ -316,15 +399,15 @@ class EnvironmentSyncTests(unittest.TestCase):
         machine = envsync.rigsync.Machine("peer", "peer", None, Path("/srv/proj"), False)
         completed = subprocess.CompletedProcess([], 0, b"ok\n", b"")
         with mock.patch.object(envsync, "remote", return_value=completed) as remote_mock:
-            envsync.run_gpu_smoke(settings, machine, envsync.Lane("peer", "0"))
+            envsync.run_gpu_smoke(settings, machine, envsync.Lane("peer", "0"), self.target())
         command = remote_mock.call_args.args[1]
         self.assertEqual(
             command,
             [
                 "env",
                 "CUDA_VISIBLE_DEVICES=0",
-                "/srv/proj/research-env/bin/python",
-                "/srv/proj/code/common/environment_smoke.py",
+                "/srv/proj/.envs/0123456789abcdef/bin/python",
+                "/srv/proj/.waves/20260802-120000/code/common/environment_smoke.py",
             ],
         )
 
@@ -340,9 +423,9 @@ class EnvironmentSyncTests(unittest.TestCase):
         machine = envsync.rigsync.Machine("peer", "peer", None, Path("/srv/proj"), False)
         completed = subprocess.CompletedProcess([], 0, b"ok\n", b"")
         with mock.patch.object(envsync, "remote", return_value=completed) as remote_mock:
-            envsync.run_gpu_smoke(settings, machine, envsync.Lane("peer", "0"))
+            envsync.run_gpu_smoke(settings, machine, envsync.Lane("peer", "0"), self.target())
         command = remote_mock.call_args.args[1]
-        self.assertEqual(command[3], "/srv/proj/code/common/environment_smoke.py")
+        self.assertEqual(command[3], "/srv/proj/.waves/20260802-120000/code/common/environment_smoke.py")
         self.assertEqual(command[4:], ["--strict", "fp8"])
 
     def test_gpu_smoke_rejects_configs_with_no_resolvable_script(self) -> None:
@@ -405,10 +488,10 @@ class EnvironmentSyncTests(unittest.TestCase):
         ), mock.patch.object(envsync, "environment_fingerprint", return_value="a" * 64), mock.patch.object(
             envsync, "run_gpu_smoke"
         ) as smoke, redirect_stdout(stream):
-            envsync.verify_environments(self.settings(root), config, [cluster], "a" * 40, [])
+            envsync.verify_environments(self.settings(root), config, [cluster], self.target(), [])
             with self.assertRaisesRegex(envsync.EnvironmentSyncError, "no GPU on the ssh target"):
                 envsync.verify_environments(
-                    self.settings(root), config, [], "a" * 40, [envsync.Lane("cluster", "0")]
+                    self.settings(root), config, [], self.target(), [envsync.Lane("cluster", "0")]
                 )
         self.assertIn("OK cluster environment: " + "a" * 64 + "; gpus=deferred to job", stream.getvalue())
         smoke.assert_not_called()
@@ -432,7 +515,7 @@ class EnvironmentSyncTests(unittest.TestCase):
             envsync, "host_facts", side_effect=facts
         ):
             with self.assertRaisesRegex(envsync.EnvironmentSyncError, "aarch64"):
-                envsync.verify_environments(self.settings(root), config, [cluster], "a" * 40, [])
+                envsync.verify_environments(self.settings(root), config, [cluster], self.target(), [])
 
     def test_doctor_reports_deferred_gpus_for_a_job_gpu_machine(self) -> None:
         root = Path("/tmp/hub")

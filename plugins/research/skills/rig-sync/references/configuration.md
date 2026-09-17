@@ -50,8 +50,10 @@ at once and run `check-paths` before any remote step. Machine keys must match th
 used by dispatch.
 `git.remote` names the GitHub remote already configured on the hub; every rig must expose the
 same URL under that name. `git.branch` is the branch that dispatch commits are pushed to and that
-rigs may fast-forward. Revision deployment stops rather than switching branches or rewriting a
-working tree.
+must contain every deployed wave commit. Revision deployment never moves a main checkout: it adds
+the wave worktree `<repo_path>/.waves/<wave_id>`, and stops rather than switching branches or
+rewriting a working tree. Keyed wave environments live beside it in `<repo_path>/.envs/`. The
+project `.gitignore` must ignore both directories.
 
 `[environment]` is owned by `environment-sync`; it lives here so the same project and machine
 selection drive both revision and runtime parity. `rigsync.py` preserves but does not execute it.

@@ -399,6 +399,32 @@ because tmux sessions are global per rig across projects; the wave id lets succe
 coexist; the GPU field keeps parallel lanes apart. Generation, dispatch and recovery protocol:
 `sweep-dispatch`.
 
+### Wave isolation
+
+Every machine's `repo_path` holds one main checkout plus the shared storage tree (`.env`,
+`storage/`, `checkpoints/`, `evaluations/`, `logs/`, `plots/`). No wave executes from the main
+checkout. Each wave runs from its own detached worktree `.waves/<wave_id>/`, pinned to
+`wave--<wave_id>`, with its own lock-keyed environment `.envs/<env_key>/`; its scripts run with
+the project root as working directory and export `RESEARCH_PROJECT_ROOT`, so `paths.py` resolves
+storage and `.env` against the shared root while code, configuration, and tracked inputs come
+from the worktree. Consequently waves of different revisions and dependencies run side by side on
+one machine, and later commits never alter a dispatched wave — not even a Slurm job that starts
+hours after submission.
+
+This is the **wave-isolation contract**. A project is supported only if its `paths.py` honours
+`RESEARCH_PROJECT_ROOT` (with `source_path()` for tracked inputs), its `.gitignore` ignores
+`.waves/` and `.envs/`, and its wave scripts follow the current template. A project without it is
+unsupported, and the refusal names the missing part; migrating one is a separate, case-by-case,
+user-authorized change, never an opportunistic step of another skill. Waves launched before the
+contract can still be monitored and reconciled, but not recovered.
+
+Two runs of one identity must never be live in two waves at once: they would share status and
+artifact paths. Dispatch refuses such an overlap; the user may instead **supersede** the old
+placement (its queued or running work is cancelled with approval, and its rows become
+`superseded`). A finished wave's worktree and any environment no remaining worktree uses are
+**pruned** only after the user approves a dry run that the skills propose on their own; a pruned
+wave remains recoverable, because its worktree is recreated from its tag.
+
 ### Tested Git revision gate
 
 Every current wave is one immutable Git deployment decision:
@@ -409,15 +435,16 @@ Every current wave is one immutable Git deployment decision:
 - If the smoke leaves the staged patch and execution worktree unchanged, commit it and create
   annotated tag `wave--<wave_id>` at that commit. Push the configured branch and tag without
   force; both must resolve to the same full SHA on GitHub.
-- `rig-sync` may advance assigned rigs only by fast-forward to that SHA. Every rig must expose
-  the configured branch/remote, exact `HEAD` and tag, and clean tracked/staged/non-ignored
-  execution paths (`code/`, `config/`, `scripts/`, and root dependency manifests).
+- `rig-sync` deploys that SHA as the worktree `.waves/<wave_id>` on every assigned machine and the
+  hub, and never moves a main checkout. Every machine must expose the configured branch/remote on
+  its main checkout, and the worktree must sit exactly on the tag with clean
+  tracked/staged/non-ignored execution paths (`code/`, `config/`, `scripts/`, and root dependency
+  manifests).
 - Verify the revision across the full rig set before any lane launches, per rig immediately
   before tmux, inside every queued script before Python, and before crash recovery. Source drift
   exits `86`, stops the lane, and is not an experiment failure.
-- Never change a rig to a different revision while that project's tmux lane or `running` status
-  remains active. Never reset, stash, clean, force-push, or merge non-fast-forward to make a rig
-  comply. Machine `.env`, datasets, artifacts, logs, and installed environments remain outside
+- Never repair an existing worktree, and never reset, stash, clean, force-push, or merge to make
+  a machine comply. Machine `.env`, datasets, artifacts, logs, and installed environments remain outside
   the Git consistency claim and require the separate parity gate below.
 
 ### Verified environment parity gate
@@ -427,10 +454,14 @@ Every wave also carries one immutable user-space environment identity:
 - The project commits `pyproject.toml`, `uv.lock`, an exact `.python-version`,
   `code/common/environment.py`, and `[environment]` in `sync.toml`. Use only uv's configured
   default dependency groups; never add per-rig extras or manual packages.
-- `environment-sync` installs the exact required uv and Python without `sudo`, asks the user for
-  one environment directory name, records it as `[environment].name`, materializes that ignored
-  directory on each machine with `uv sync --frozen --exact`, and refuses mutation while project
-  lanes or `running` statuses exist.
+- `environment-sync` installs the exact required uv and Python without `sudo` and materializes
+  the wave's ignored `.envs/<env_key>` on each machine from the wave worktree with
+  `uv sync --frozen --exact --no-install-project`. `env_key` hashes the revision's `uv.lock`,
+  `.python-version`, and uv pin, so waves with identical inputs share an environment. A new key
+  can always be built; an existing key is never re-synced while an active wave uses it.
+- `[environment].name` (asked of the user once) names the hub **development** environment, which
+  the user owns and no wave uses. The pre-dispatch smoke runs in the keyed environment of the
+  staged lock, which is the same key the committed wave gets.
 - The fingerprint hashes the lock, exact interpreter, and canonical installed package
   names/versions. It must match the hub on every assigned rig. OS/architecture must be compatible;
   GPU/driver differences are allowed only when the project smoke passes under the assigned GPU set.

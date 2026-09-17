@@ -1,4 +1,4 @@
 interface:
   display_name: "Environment Sync"
-  short_description: "Provision and verify matching rig environments"
-  default_prompt: "Use $environment-sync to ask for the uv environment name when needed, then provision and verify it across approved Research 2.0 rigs."
+  short_description: "Provision and verify lock-keyed wave environments"
+  default_prompt: "Use $environment-sync to ask for the hub development environment name when needed, then provision and verify a wave's lock-keyed environment across approved Research 2.0 rigs."

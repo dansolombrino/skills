@@ -30,6 +30,10 @@ is never a lane: Slurm is its own coordination center and the cluster does not r
   has no lane file, releases a lane whose session is gone, and marks a lane *interrupted* when
   the rig rebooted after the claim. A dead chat therefore never leaves a phantom hold, and a
   live lane never goes unseen.
+- **Waves of one project may overlap in time.** Each wave runs from its own worktree, so two waves
+  of the same project can hold disjoint lanes on one rig at once; the board still refuses any
+  overlapping GPU set, whoever holds it. Lane panes and Slurm jobs keep the project root as their
+  working directory, so project inference is unchanged.
 - **Single writer per lane.** Only the chat that launched a wave (the orchestrator of
   `sweep-dispatch`, on the hub) claims, refreshes and releases its lanes. Monitoring subagents
   never touch the board. `reconcile` may run from anywhere and only corrects provenance.

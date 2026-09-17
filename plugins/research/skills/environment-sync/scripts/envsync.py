@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Provision and verify one named uv environment across configured research rigs."""
+"""Provision and verify lock-keyed wave environments across configured research rigs.
+
+Every wave runs with `<repo_path>/.envs/<env_key>`, built from the wave worktree
+`<repo_path>/.waves/<wave_id>`. The named `[environment].name` directory is the hub
+development environment; waves never use it and this helper never touches it.
+"""
 
 from __future__ import annotations
 
@@ -42,6 +47,8 @@ SECRET_PARAMETER_RE = re.compile(
 )
 RESERVED_ENVIRONMENT_NAMES = {
     ".env",
+    ".envs",
+    ".waves",
     ".git",
     ".rigsync_cache",
     "checkpoints",
@@ -68,6 +75,40 @@ class EnvironmentSettings:
     @property
     def uv_path(self) -> Path:
         return self.root / ".rigsync_cache" / "tools" / "uv" / self.uv_version / "uv"
+
+
+@dataclass(frozen=True)
+class Target:
+    """Which environment to build and from which source tree.
+
+    A wave target reads the wave worktree at its tagged revision. The staged target (hub only,
+    before the dispatch commit exists) reads the hub checkout, whose environment files must
+    match the index.
+    """
+
+    key: str
+    wave: str | None = None
+    revision: str | None = None
+
+    @property
+    def staged(self) -> bool:
+        return self.wave is None
+
+    def source(self, machine) -> Path:
+        return machine.repo_path if self.staged else rigsync.wave_tree(machine, self.wave)
+
+    def label(self) -> str:
+        return "staged hub files" if self.staged else f"wave {self.wave} at {self.revision}"
+
+
+ENVIRONMENT_PATHSPECS = [
+    ".python-version",
+    "pyproject.toml",
+    "uv.toml",
+    "uv.lock",
+    "sync.toml",
+    "code/common/environment.py",
+]
 
 
 @dataclass(frozen=True)
@@ -213,12 +254,34 @@ def uv_path(settings: EnvironmentSettings, machine) -> Path:
     return machine_path(settings, machine, relative)
 
 
-def environment_path(settings: EnvironmentSettings, machine) -> Path:
-    return machine.repo_path / settings.environment_name
+def environment_path(settings: EnvironmentSettings, machine, target: Target) -> Path:
+    return machine.repo_path / rigsync.ENVS_DIR / target.key
 
 
-def venv_python(settings: EnvironmentSettings, machine) -> Path:
-    return environment_path(settings, machine) / "bin" / "python"
+def venv_python(settings: EnvironmentSettings, machine, target: Target) -> Path:
+    return environment_path(settings, machine, target) / "bin" / "python"
+
+
+def wave_target(root: Path, wave: str, revision: str) -> Target:
+    try:
+        rigsync.validate_wave_revision(wave, revision)
+        key = rigsync.env_key_for_revision(root, revision)
+    except rigsync.RigSyncError as exc:
+        raise EnvironmentSyncError(str(exc)) from exc
+    return Target(key, wave, revision)
+
+
+def staged_target(root: Path) -> Target:
+    files = []
+    for name in rigsync.ENV_KEY_FILES:
+        result = rigsync.run(["git", "-C", str(root), "show", f":{name}"], check=False)
+        if result.returncode:
+            raise EnvironmentSyncError(f"{name} is not staged in {root}")
+        files.append(result.stdout)
+    try:
+        return Target(rigsync.env_key(*files))
+    except rigsync.RigSyncError as exc:
+        raise EnvironmentSyncError(str(exc)) from exc
 
 
 def host_facts(machine) -> HostFacts:
@@ -285,22 +348,31 @@ def require_revision(revision: str) -> None:
         raise EnvironmentSyncError("revision must be a full lowercase 40-character commit SHA")
 
 
-def verify_source(config, machine, revision: str) -> None:
+def verify_source(config, machine, target: Target) -> None:
+    tree = target.source(machine)
     try:
-        head, _branch, _remote_url = rigsync.git_repo_facts(config, machine)
-        pathspecs = [
-            ".python-version",
-            "pyproject.toml",
-            "uv.toml",
-            "uv.lock",
-            "sync.toml",
-            "code/common/environment.py",
-        ]
-        drift = rigsync.execution_drift(machine, pathspecs)
+        if target.staged:
+            # Staged files may differ from HEAD, but never from the working tree.
+            unstaged = rigsync.git_command(
+                machine, "diff", "--name-only", "--", *ENVIRONMENT_PATHSPECS
+            ).stdout.decode(errors="replace").split()
+            untracked = rigsync.git_command(
+                machine, "ls-files", "--others", "--exclude-standard", "--", *ENVIRONMENT_PATHSPECS
+            ).stdout.decode(errors="replace").split()
+            drift = [f"unstaged {path}" for path in unstaged + untracked]
+        else:
+            if not rigsync.path_exists(machine, tree):
+                raise EnvironmentSyncError(
+                    f"{machine.name}: missing wave worktree {tree}; run rig-sync deploy-revision first"
+                )
+            head = rigsync.git_command(machine, "rev-parse", "HEAD", tree=tree).stdout.decode().strip()
+            if head != target.revision:
+                raise EnvironmentSyncError(
+                    f"{machine.name}: {tree} HEAD={head}, expected {target.revision}"
+                )
+            drift = rigsync.execution_drift(machine, ENVIRONMENT_PATHSPECS, tree)
     except rigsync.RigSyncError as exc:
         raise EnvironmentSyncError(str(exc)) from exc
-    if head != revision:
-        raise EnvironmentSyncError(f"{machine.name}: HEAD={head}, expected {revision}")
     if drift:
         raise EnvironmentSyncError(
             f"{machine.name}: environment contract dirty: " + ", ".join(drift[:8])
@@ -326,17 +398,22 @@ def install_uv(settings: EnvironmentSettings, machine) -> None:
         )
 
 
-def sync_command(settings: EnvironmentSettings, machine, *, dry_run: bool) -> list[str]:
+def sync_command(
+    settings: EnvironmentSettings, machine, target: Target, *, dry_run: bool
+) -> list[str]:
+    # --no-install-project: one keyed environment serves every worktree with the same lock, so
+    # it must never hold an editable install pointing into one particular worktree.
     command = [
         "env",
         "UV_NO_MODIFY_PATH=1",
-        f"UV_PROJECT_ENVIRONMENT={environment_path(settings, machine)}",
+        f"UV_PROJECT_ENVIRONMENT={environment_path(settings, machine, target)}",
         str(uv_path(settings, machine)),
         "sync",
         "--project",
-        str(machine.repo_path),
+        str(target.source(machine)),
         "--frozen",
         "--exact",
+        "--no-install-project",
         "--managed-python",
         "--python",
         settings.python_version,
@@ -346,19 +423,24 @@ def sync_command(settings: EnvironmentSettings, machine, *, dry_run: bool) -> li
     return command
 
 
-def environment_fingerprint(settings: EnvironmentSettings, machine) -> str:
-    helper = machine.repo_path / "code" / "common" / "environment.py"
-    lock = machine.repo_path / "uv.lock"
+def environment_exists(settings: EnvironmentSettings, machine, target: Target) -> bool:
     exists = remote(
-        machine, ["test", "-x", str(venv_python(settings, machine))], check=False
+        machine, ["test", "-x", str(venv_python(settings, machine, target))], check=False
     )
-    if exists.returncode:
+    return exists.returncode == 0
+
+
+def environment_fingerprint(settings: EnvironmentSettings, machine, target: Target) -> str:
+    source = target.source(machine)
+    helper = source / "code" / "common" / "environment.py"
+    lock = source / "uv.lock"
+    if not environment_exists(settings, machine, target):
         raise EnvironmentSyncError(
-            f"{machine.name}: missing project environment {settings.environment_name}"
+            f"{machine.name}: missing wave environment {environment_path(settings, machine, target)}"
         )
     result = remote(
         machine,
-        [str(venv_python(settings, machine)), str(helper), "fingerprint", "--lock", str(lock)],
+        [str(venv_python(settings, machine, target)), str(helper), "fingerprint", "--lock", str(lock)],
         check=False,
     )
     if result.returncode:
@@ -372,7 +454,7 @@ def environment_fingerprint(settings: EnvironmentSettings, machine) -> str:
     return value
 
 
-def lock_check(settings: EnvironmentSettings, machine) -> None:
+def lock_check(settings: EnvironmentSettings, machine, target: Target) -> None:
     result = remote(
         machine,
         [
@@ -380,7 +462,7 @@ def lock_check(settings: EnvironmentSettings, machine) -> None:
             "lock",
             "--check",
             "--project",
-            str(machine.repo_path),
+            str(target.source(machine)),
         ],
         check=False,
     )
@@ -440,25 +522,51 @@ def doctor(settings: EnvironmentSettings, config, machines: list) -> None:
         raise EnvironmentSyncError(f"doctor failed on {len(failures)} machine(s)")
 
 
+def require_staged_on_hub(config, machines: list, target: Target) -> None:
+    if not target.staged:
+        return
+    hub = local_hub(config)
+    if [machine.name for machine in machines] != [hub.name]:
+        raise EnvironmentSyncError("--staged works on the local hub only")
+
+
+def key_in_use(config, machine, target: Target) -> list[str]:
+    """Evidence that an active wave on `machine` runs with `target`'s environment."""
+    try:
+        active = rigsync.wave_activity(config, machine)
+        trees = rigsync.worktrees(machine)
+        users = []
+        for wave, evidence in active.items():
+            if wave == rigsync.UNATTRIBUTED:
+                users.extend(evidence)
+            elif wave in trees and rigsync.env_key_for_tree(machine, trees[wave]) == target.key:
+                users.extend(evidence)
+    except rigsync.RigSyncError as exc:
+        raise EnvironmentSyncError(str(exc)) from exc
+    return users
+
+
 def provision(
     settings: EnvironmentSettings,
     config,
     machines: list,
-    revision: str,
+    target: Target,
     *,
     dry_run: bool,
     confirmed: bool,
 ) -> None:
-    require_revision(revision)
+    if target.revision is not None:
+        require_revision(target.revision)
     if not dry_run and not confirmed:
         raise EnvironmentSyncError("refusing write without --confirm; run --dry-run and obtain approval first")
+    require_staged_on_hub(config, machines, target)
     for machine in machines:
-        verify_source(config, machine, revision)
+        verify_source(config, machine, target)
         observed_uv = uv_version(machine, uv_path(settings, machine))
         if dry_run:
             print(
                 f"[dry-run] {machine.name}: uv {settings.uv_version}, Python {settings.python_version}, "
-                f"environment {environment_path(settings, machine)}"
+                f"environment {environment_path(settings, machine, target)} for {target.label()}"
             )
             if observed_uv != settings.uv_version:
                 print(
@@ -466,7 +574,7 @@ def provision(
                     f"https://astral.sh/uv/{settings.uv_version}/install.sh"
                 )
                 continue
-            result = remote(machine, sync_command(settings, machine, dry_run=True), check=False)
+            result = remote(machine, sync_command(settings, machine, target, dry_run=True), check=False)
             if result.stdout:
                 print(redact(result.stdout.decode(errors="replace")), end="")
             if result.stderr:
@@ -475,14 +583,15 @@ def provision(
                 raise EnvironmentSyncError(f"{machine.name}: uv sync dry-run failed")
             continue
 
-        try:
-            activity = rigsync.project_activity(config, machine)
-        except rigsync.RigSyncError as exc:
-            raise EnvironmentSyncError(str(exc)) from exc
-        if activity:
-            raise EnvironmentSyncError(
-                f"{machine.name}: active work blocks environment mutation: " + ", ".join(activity[:8])
-            )
+        # A new key is always safe to build; an existing one may be re-synced only while no
+        # active wave runs with it.
+        if environment_exists(settings, machine, target):
+            users = key_in_use(config, machine, target)
+            if users:
+                raise EnvironmentSyncError(
+                    f"{machine.name}: active work blocks environment mutation of "
+                    f"{environment_path(settings, machine, target)}: " + ", ".join(users[:8])
+                )
         if observed_uv != settings.uv_version:
             install_uv(settings, machine)
         remote(
@@ -498,27 +607,27 @@ def provision(
             ],
         )
         sync_result = remote(
-            machine, sync_command(settings, machine, dry_run=False), check=False
+            machine, sync_command(settings, machine, target, dry_run=False), check=False
         )
         if sync_result.returncode:
             stderr = redact(sync_result.stderr.decode(errors="replace").strip())
             raise EnvironmentSyncError(
                 f"{machine.name}: uv sync failed: {stderr or 'command failed'}"
             )
-        print(f"OK {machine.name}: provisioned exact environment")
+        print(f"OK {machine.name}: provisioned exact environment {target.key}")
     if not dry_run:
-        verify_environments(settings, config, machines, revision, [])
+        verify_environments(settings, config, machines, target, [])
 
 
-def run_gpu_smoke(settings: EnvironmentSettings, machine, lane: Lane) -> None:
+def run_gpu_smoke(settings: EnvironmentSettings, machine, lane: Lane, target: Target) -> None:
     # `remote` runs over SSH with no cwd, so the script path declared in sync.toml --
     # relative, because repo_path differs per rig -- has to be resolved against this
-    # machine's checkout the same way uv and the fingerprint helper already are.
-    script = machine_path(settings, machine, Path(settings.gpu_smoke[1]))
+    # machine's source tree for the target the same way uv and the fingerprint helper are.
+    script = target.source(machine) / settings.gpu_smoke[1]
     command = [
         "env",
         f"CUDA_VISIBLE_DEVICES={lane.gpus}",
-        str(venv_python(settings, machine)),
+        str(venv_python(settings, machine, target)),
         str(script),
         *settings.gpu_smoke[2:],
     ]
@@ -535,10 +644,12 @@ def verify_environments(
     settings: EnvironmentSettings,
     config,
     machines: list,
-    revision: str,
+    target: Target,
     lanes: list[Lane],
 ) -> str:
-    require_revision(revision)
+    if target.revision is not None:
+        require_revision(target.revision)
+    require_staged_on_hub(config, machines or [local_hub(config)], target)
     hub = local_hub(config)
     all_machines = {machine.name: machine for machine in machines}
     all_machines[hub.name] = hub
@@ -551,7 +662,7 @@ def verify_environments(
     hub_facts = host_facts(hub)
     fingerprints: dict[str, str] = {}
     for machine in all_machines.values():
-        verify_source(config, machine, revision)
+        verify_source(config, machine, target)
         facts = host_facts(machine)
         if facts.system != hub_facts.system or facts.architecture != hub_facts.architecture:
             raise EnvironmentSyncError(
@@ -563,8 +674,8 @@ def verify_environments(
             raise EnvironmentSyncError(
                 f"{machine.name}: uv={observed_uv or 'missing'}, expected {settings.uv_version}"
             )
-        lock_check(settings, machine)
-        fingerprints[machine.name] = environment_fingerprint(settings, machine)
+        lock_check(settings, machine, target)
+        fingerprints[machine.name] = environment_fingerprint(settings, machine, target)
 
     expected = fingerprints[hub.name]
     mismatched = {
@@ -579,9 +690,21 @@ def verify_environments(
         deferred = "; gpus=deferred to job" if machine.gpus_in_job else ""
         print(f"OK {machine.name} environment: {expected}{deferred}")
     for lane in lanes:
-        run_gpu_smoke(settings, config.machines[lane.machine], lane)
+        run_gpu_smoke(settings, config.machines[lane.machine], lane, target)
+    print(f"ENVIRONMENT_KEY={target.key}")
+    print(f"ENVIRONMENT_DIR={rigsync.ENVS_DIR}/{target.key}")
     print(f"ENVIRONMENT_FINGERPRINT={expected}")
     return expected
+
+
+def parse_target(root: Path, args) -> Target:
+    if args.staged:
+        if args.wave or args.revision:
+            raise EnvironmentSyncError("--staged takes no --wave or --revision")
+        return staged_target(root)
+    if not (args.wave and args.revision):
+        raise EnvironmentSyncError("give --wave and --revision, or --staged on the hub")
+    return wave_target(root, args.wave, args.revision)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -593,14 +716,16 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_p = sub.add_parser("doctor")
     doctor_p.add_argument("--machines", required=True)
     provision_p = sub.add_parser("provision")
-    provision_p.add_argument("--revision", required=True)
     provision_p.add_argument("--machines", required=True)
     provision_p.add_argument("--dry-run", action="store_true")
     provision_p.add_argument("--confirm", action="store_true")
     verify_p = sub.add_parser("verify")
-    verify_p.add_argument("--revision", required=True)
     verify_p.add_argument("--machines")
     verify_p.add_argument("--lane", action="append")
+    for target_p in (provision_p, verify_p):
+        target_p.add_argument("--wave")
+        target_p.add_argument("--revision")
+        target_p.add_argument("--staged", action="store_true")
     return parser
 
 
@@ -619,12 +744,14 @@ def main(argv: list[str] | None = None) -> int:
         config = rigsync.load_config(root, config_path, registry_path)
         if args.command == "doctor":
             doctor(settings, config, rigsync.selected_machines(config, args.machines))
-        elif args.command == "provision":
+            return 0
+        target = parse_target(root, args)
+        if args.command == "provision":
             provision(
                 settings,
                 config,
                 rigsync.selected_machines(config, args.machines),
-                args.revision,
+                target,
                 dry_run=args.dry_run,
                 confirmed=args.confirm,
             )
@@ -633,7 +760,7 @@ def main(argv: list[str] | None = None) -> int:
             if not args.machines and not lanes:
                 raise EnvironmentSyncError("verify requires --machines and/or at least one --lane")
             machines = rigsync.selected_machines(config, args.machines) if args.machines else []
-            verify_environments(settings, config, machines, args.revision, lanes)
+            verify_environments(settings, config, machines, target, lanes)
     except (EnvironmentSyncError, rigsync.RigSyncError) as exc:
         print(f"envsync: {exc}", file=sys.stderr)
         return 2

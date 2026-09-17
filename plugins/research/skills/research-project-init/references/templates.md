@@ -269,6 +269,9 @@ maintained per rig, and record why in the journal. `doctor` warns on every absol
 .env
 {{ENVIRONMENT_NAME}}/
 .rigsync_cache/
+# per-wave worktrees and lock-keyed wave environments, created by rig-sync and environment-sync
+.waves/
+.envs/
 storage/
 shitpads/*
 !shitpads/.gitkeep
@@ -333,6 +336,8 @@ hides it produces a user who thinks a run wrote nothing.
     "**/.git/objects/**": true,
     "**/.git/subtree-cache/**": true,
     "checkpoints/**": true,
+    ".waves/**": true,
+    ".envs/**": true,
     "plots/**": true,
     "evaluations/**": true,
     "logs/**": true,
@@ -444,7 +449,9 @@ mid-project forces a re-provision on every rig. Commit an exact
 hand-written; commit it once that gate has run. Copy
 `assets/environment.py` from the environment-sync skill's own installed directory to
 `code/common/environment.py`; do not rewrite its
-fingerprint algorithm per project. Keep `{{ENVIRONMENT_NAME}}/` and `.rigsync_cache/` ignored.
+fingerprint algorithm per project. Keep `{{ENVIRONMENT_NAME}}/`, `.rigsync_cache/`, `.waves/`, and
+`.envs/` ignored. Do not declare a build system: the project is never installed into its
+environment, so one lock-keyed wave environment can serve every worktree with the same lock.
 
 ## .githooks/pre-commit (journal guard)
 
@@ -467,18 +474,22 @@ Install with: `chmod +x .githooks/pre-commit && git config core.hooksPath .githo
 ## scripts/ wave script (log-capture core)
 
 Canonical pattern every launch script follows — the log path is the **mirror of the script's
-own path under `logs/`**. Full self-contained template with the self-guard, the
+own path under `logs/`**; the working directory is the project root, and code runs from the
+wave's worktree `.waves/<wave_id>/` with the wave's keyed environment. Full self-contained template with the self-guard, the
 `CUDA_VISIBLE_DEVICES`/`WAVE_ID` exports and the `.status.json` failed-fallback:
 sweep-dispatch skill, `references/templates.md`.
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")/../../../.." || exit 1  # to project root (depth varies with nesting)
+PROJECT_ROOT="${SLURM_SUBMIT_DIR:-$PWD}"
+cd "$PROJECT_ROOT"
+WAVE_TREE="$PROJECT_ROOT/.waves/<wave_id>"
+export RESEARCH_PROJECT_ROOT="$PROJECT_ROOT"
 LOGDIR="logs/NNN_experiment/<run_id folder>/wave_<wave_id>"
 mkdir -p "$LOGDIR"
 HYDRA_ARGS=(<tokens produced by hydra_override_arg; one per override>)
-{{ENVIRONMENT_NAME}}/bin/python code/NNN_experiment/script.py "${HYDRA_ARGS[@]}" 2>&1 \
+.envs/<env_key>/bin/python "$WAVE_TREE/code/NNN_experiment/script.py" "${HYDRA_ARGS[@]}" 2>&1 \
   | tee "$LOGDIR/wave_<rig>_gpu<ids>-$(date +%Y%m%d-%H%M%S).log"
 ```
 
@@ -488,7 +499,13 @@ captures both pipeline statuses so Python remains authoritative when both fail.
 ## code/common/paths.py
 
 ```python
-"""Resolve the repo-relative storage paths declared in .env.
+"""Resolve project storage and tracked inputs, for the hub checkout and for wave worktrees.
+
+Two roots exist. The *source root* holds the code being imported: the hub checkout
+during development, or a wave's detached worktree (<project>/.waves/<wave_id>) when a
+wave runs. The *project root* holds everything that is not source: .env, storage/,
+checkpoints/, evaluations/, logs/. A wave script exports RESEARCH_PROJECT_ROOT so the
+two resolve differently; without it they coincide.
 
 .env keeps project-scoped storage relative (CACHE_DIR=storage/cache) so that one
 file is correct on every rig: rig-sync already requires each rig's repo_path to
@@ -496,35 +513,61 @@ sit on that rig's large volume, so anything under the project root inherits that
 guarantee without naming a mount point. Absolute values are left alone -- they
 are a warned-about exception, not the shape to build against.
 
-Use project_path() for every storage location an experiment writes to. Building
-one from os.getcwd() works from the project root and silently writes somewhere
-else the first time a script is launched from anywhere but there.
+Use project_path() for every storage location an experiment reads or writes, and
+source_path() for tracked inputs (checked-in tables, prompts, fixtures) so a wave
+reads the exact revision it runs. Never build a storage path from os.getcwd() or
+Path(__file__): the first silently writes elsewhere when launched from another
+directory, the second writes into a wave worktree that is pruned later.
 """
 
 import os
 from pathlib import Path
 
 _MARKER = "pyproject.toml"
+ROOT_ENV = "RESEARCH_PROJECT_ROOT"
 
 
-def project_root() -> Path:
+def source_root() -> Path:
     """The directory holding pyproject.toml, found by walking up from this file."""
     for candidate in Path(__file__).resolve().parents:
         if (candidate / _MARKER).is_file():
             return candidate
-    raise RuntimeError(f"no {_MARKER} above {__file__}: cannot locate the project root")
+    raise RuntimeError(f"no {_MARKER} above {__file__}: cannot locate the source root")
+
+
+def project_root() -> Path:
+    """The shared project root: $RESEARCH_PROJECT_ROOT inside a wave, else the source root."""
+    value = os.environ.get(ROOT_ENV)
+    if not value:
+        return source_root()
+    root = Path(value)
+    if not root.is_absolute() or not (root / ".git").exists():
+        raise RuntimeError(f"{ROOT_ENV}={value!r} is not an absolute project root with .git")
+    return root
 
 
 def project_path(value: str | os.PathLike) -> Path:
-    """An absolute path: value as-is when absolute, else relative to the project root."""
+    """An absolute storage path: value as-is when absolute, else under the project root."""
     path = Path(value)
     return path if path.is_absolute() else project_root() / path
+
+
+def source_path(value: str | os.PathLike) -> Path:
+    """A tracked input of the running revision, relative to the source root."""
+    path = Path(value)
+    if path.is_absolute():
+        raise ValueError(f"source_path takes a repo-relative path, got {value!r}")
+    return source_root() / path
 
 
 def storage_path(var: str, default: str) -> Path:
     """Resolve an .env storage variable, falling back to its documented default."""
     return project_path(os.environ.get(var) or default)
 ```
+
+`.env` is loaded from `project_root() / ".env"`, so a wave reads the machine's real `.env` rather
+than looking for one inside its worktree. `RESEARCH_PROJECT_ROOT` support is the marker of the
+**wave-isolation contract** that `sweep-dispatch` checks before any dispatch.
 
 ## code/common/run_id.py
 

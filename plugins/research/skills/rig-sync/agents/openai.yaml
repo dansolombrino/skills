@@ -1,4 +1,4 @@
 interface:
   display_name: "Rig Sync"
-  short_description: "Declare rig paths, deploy revisions, sync artifacts"
-  default_prompt: "Use $rig-sync to validate declared rig paths, deploy an authorized Research 2.0 revision, or synchronize selected artifacts, paired with $environment-sync."
+  short_description: "Deploy wave worktrees, prune, and sync artifacts"
+  default_prompt: "Use $rig-sync to validate declared rig paths, deploy an authorized Research 2.0 wave as its own worktree, list active waves, propose an approved prune, or synchronize selected artifacts, paired with $environment-sync."

@@ -34,17 +34,24 @@ name = ".venv"
 gpu_smoke = ["python", "code/common/environment_smoke.py"]
 ```
 
-Before adding `name` or creating the environment, ask the user which single directory name to use.
-`.venv` may be suggested, but never inferred or silently selected. Reject paths, `.` and `..`;
-also reject names that collide with the project taxonomy, `.git`, `.env`, or `.rigsync_cache`.
-The chosen name is committed and must be identical across rigs.
+`name` is the hub **development** environment: the user's interpreter for the IDE, ad-hoc runs,
+and `uv add`. Waves never use it. Before adding `name`, ask the user which single directory name
+to use. `.venv` may be suggested, but never inferred or silently selected. Reject paths, `.` and
+`..`; also reject names that collide with the project taxonomy, `.git`, `.env`, `.envs`, `.waves`,
+or `.rigsync_cache`. The chosen name is committed.
+
+Wave environments are not named: they live at `<repo_path>/.envs/<env_key>`, where `env_key` is
+the first 16 hex digits of a SHA-256 over the wave revision's `uv.lock`, `.python-version`, and
+`[tool.uv].required-version`. `environment-sync` builds each one from the wave worktree with
+`uv sync --frozen --exact --no-install-project`, so a single environment serves every worktree with
+the same inputs. The project `.gitignore` ignores `.envs/` and `.waves/`.
 
 `gpu_smoke` is an argv array, not shell, of the form `["python", "<script>", ...args]`. Its first
-token must be `python`; environment sync replaces that token with the configured environment's
+token must be `python`; environment sync replaces that token with the wave environment's
 `bin/python` and supplies `CUDA_VISIBLE_DEVICES` for the approved lane. The second token is the
 smoke script, written **relative to the project root** and resolved against each rig's own
-`repo_path` — the verification runs over SSH with no working directory, so a path left unresolved
-would be read from `$HOME` on every peer. An option in that slot, an absolute path, or one
+wave worktree (`<repo_path>/.waves/<wave_id>`) — the verification runs over SSH with no working
+directory, so a path left unresolved would be read from `$HOME` on every peer. An option in that slot, an absolute path, or one
 escaping the project with `..` is rejected when the config loads. Any further tokens are passed to
 the script unchanged. Keep the test quick and bounded, perform a real device operation through the
 project's locked framework, and exit nonzero on incompatibility. Do not encode GPU ownership in
@@ -52,11 +59,14 @@ this command; `sweep-dispatch` owns per-wave authorization.
 
 Copy `assets/environment.py` from the environment-sync skill's own installed directory to
 `code/common/environment.py`. Generated wave scripts
-invoke its `fingerprint --lock uv.lock` command before experiment Python.
+invoke the worktree's copy, `fingerprint --lock <worktree>/uv.lock`, before experiment Python.
 
 ## Machine-local state
 
-- `<environment.name>/` — exact project environment, ignored and never copied.
+- `.envs/<env_key>/` — exact wave environments, ignored, never copied, removed only by an approved
+  `rig-sync prune`.
+- `.waves/<wave_id>/` — wave worktrees created by `rig-sync`, ignored.
+- `<environment.name>/` — the hub development environment, user-managed, ignored and never copied.
 - `.rigsync_cache/tools/uv/<version>/` — exact standalone uv binary, ignored.
 - uv-managed Python and package/download caches — user-local, machine-local, never fingerprinted.
 - `.env`, credentials, datasets, drivers, CUDA devices, logs, and artifacts — outside the

@@ -1,12 +1,15 @@
 # Launch script templates
 
-Placeholders in `<...>`. All paths relative to the project root; scripts assume they are
-invoked from the project root on the target rig. Layout and vocabulary (wave, lane, GPU set):
+Placeholders in `<...>`. Artifact paths are relative to the project root, which is also the
+working directory every script is invoked from on the target rig. Code, configuration, and the
+wave scripts themselves are read from the wave's detached worktree `.waves/<wave_id>/` (the
+wave-isolation contract in conventions); nothing is ever executed from the main checkout. Layout and vocabulary (wave, lane, GPU set):
 `../../research-project-init/references/conventions.md`.
 
 ## wave_<rig>_gpu<ids>.sh — one per (run, wave), self-contained and self-guarded
 
-Lives at `scripts/<NNN_exp>/<run_id folder>/wave_<wave_id>/wave_<rig>_gpu<ids>.sh` (the rendered
+Committed at `scripts/<NNN_exp>/<run_id folder>/wave_<wave_id>/wave_<rig>_gpu<ids>.sh` and executed
+as `.waves/<wave_id>/scripts/...` from the project root (the rendered
 `run_id_path` directories under `segments-v1`; `<run_id_flat>` under a legacy pin). This is the
 **only** script kind — it replaced the old `run.sh` + `launch_<rig>.sh` pair. The artifact guard
 that used to sit in the per-rig launcher now travels with each run, which is what keeps lane
@@ -18,7 +21,11 @@ dispatch idempotent.
 # run_id_flat: <flat run_id>
 # wave: <wave_id>   rig: <rig>   gpu: <ids>
 set -uo pipefail
-cd "$(dirname "$0")/../../../.." || exit 1  # → project root; one ../ per run-folder directory and sub-experiment level
+export WAVE_ID="<wave_id>"
+# project root = storage root = working directory; a Slurm job starts from its submit directory
+PROJECT_ROOT="${SLURM_SUBMIT_DIR:-$PWD}"
+cd "$PROJECT_ROOT" || exit 1
+WAVE_TREE="$PROJECT_ROOT/.waves/$WAVE_ID"
 
 RUN_ID_FLAT="<flat run_id>"
 RUN_ID_NAME="<run_id_name: the rendered run_id under segments-v1; the flat run_id under a legacy pin>"
@@ -29,7 +36,6 @@ EVAL_DIR="<exact evaluation directory resolved by canonical run_id_path>"
 STATUS_PATH="$EVAL_DIR/.status.json"
 LOG_DIR="logs/<NNN_exp>/<run_id folder>/wave_<wave_id>"   # logs/ mirrors scripts/
 ARTIFACT="<exact expected final artifact path under CHECKPOINT_DIR or EVAL_DIR>"
-export WAVE_ID="<wave_id>"
 
 # self-guard (idempotency): the expected final artifact is the only completion signal
 if [ -e "$ARTIFACT" ]; then
@@ -40,25 +46,34 @@ if grep -q '"state": "done"' "$STATUS_PATH" 2>/dev/null; then
 fi
 
 # exact Git revision guard: source drift blocks this lane with reserved exit 86
+# the wave worktree must belong to this project root and sit exactly on the wave tag
+WAVE_GIT_DIR=$(cd "$WAVE_TREE" 2>/dev/null && cd "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P) || {
+  echo "[source-drift] missing wave worktree $WAVE_TREE" >&2; exit 86;
+}
+if [ "$WAVE_GIT_DIR" != "$(cd "$PROJECT_ROOT/.git" 2>/dev/null && pwd -P)" ]; then
+  echo "[source-drift] $WAVE_TREE is not a worktree of $PROJECT_ROOT" >&2; exit 86
+fi
 SOURCE_TAG="wave--$WAVE_ID"
-SOURCE_REVISION=$(git rev-parse "refs/tags/$SOURCE_TAG^{commit}" 2>/dev/null) || {
+SOURCE_REVISION=$(git -C "$WAVE_TREE" rev-parse "refs/tags/$SOURCE_TAG^{commit}" 2>/dev/null) || {
   echo "[source-drift] missing $SOURCE_TAG" >&2; exit 86;
 }
-ACTUAL_REVISION=$(git rev-parse HEAD 2>/dev/null) || {
-  echo "[source-drift] project is not a Git working tree" >&2; exit 86;
+ACTUAL_REVISION=$(git -C "$WAVE_TREE" rev-parse HEAD 2>/dev/null) || {
+  echo "[source-drift] $WAVE_TREE is not a Git working tree" >&2; exit 86;
 }
 if [ "$ACTUAL_REVISION" != "$SOURCE_REVISION" ]; then
   echo "[source-drift] HEAD=$ACTUAL_REVISION expected=$SOURCE_REVISION ($SOURCE_TAG)" >&2
   exit 86
 fi
 SOURCE_PATHS=(code config scripts .python-version pyproject.toml uv.toml uv.lock sync.toml poetry.lock setup.cfg setup.py Pipfile Pipfile.lock requirements*.txt environment*.yml environment*.yaml Dockerfile*)
-if ! git diff --quiet -- "${SOURCE_PATHS[@]}" || \
-   ! git diff --cached --quiet -- "${SOURCE_PATHS[@]}" || \
-   [ -n "$(git ls-files --others --exclude-standard -- "${SOURCE_PATHS[@]}")" ]; then
+if ! git -C "$WAVE_TREE" diff --quiet -- "${SOURCE_PATHS[@]}" || \
+   ! git -C "$WAVE_TREE" diff --cached --quiet -- "${SOURCE_PATHS[@]}" || \
+   [ -n "$(git -C "$WAVE_TREE" ls-files --others --exclude-standard -- "${SOURCE_PATHS[@]}")" ]; then
   echo "[source-drift] execution files differ from $SOURCE_REVISION" >&2
   exit 86
 fi
+# storage resolves against the shared project root, never against the worktree
 export SOURCE_REVISION SOURCE_TAG
+export RESEARCH_PROJECT_ROOT="$PROJECT_ROOT"
 
 export CUDA_VISIBLE_DEVICES="<ids>"
 
@@ -103,10 +118,10 @@ if [ "$FREE_KIB" -lt "$MIN_FREE_KIB" ]; then
 fi
 
 # exact environment guard: runtime drift/incompatibility blocks this lane with reserved exit 87
-ENVIRONMENT_DIR="<environment.name from sync.toml>"
+ENVIRONMENT_DIR="<ENVIRONMENT_DIR printed by environment-sync verify: .envs/<env_key>>"
 EXPECTED_ENVIRONMENT_FINGERPRINT="<64-char fingerprint verified on every assigned rig>"
 ACTUAL_ENVIRONMENT_FINGERPRINT=$(
-  "$ENVIRONMENT_DIR/bin/python" code/common/environment.py fingerprint --lock uv.lock 2>/dev/null
+  "$ENVIRONMENT_DIR/bin/python" "$WAVE_TREE/code/common/environment.py" fingerprint --lock "$WAVE_TREE/uv.lock" 2>/dev/null
 ) || {
   echo "[environment-drift] cannot fingerprint $ENVIRONMENT_DIR" >&2; exit 87;
 }
@@ -114,7 +129,7 @@ if [ "$ACTUAL_ENVIRONMENT_FINGERPRINT" != "$EXPECTED_ENVIRONMENT_FINGERPRINT" ];
   echo "[environment-drift] actual=$ACTUAL_ENVIRONMENT_FINGERPRINT expected=$EXPECTED_ENVIRONMENT_FINGERPRINT" >&2
   exit 87
 fi
-ENVIRONMENT_SMOKE=(<shell-quoted gpu_smoke tokens after the leading python>)
+ENVIRONMENT_SMOKE=("$WAVE_TREE/<gpu_smoke script>" <shell-quoted remaining gpu_smoke tokens>)
 if ! "$ENVIRONMENT_DIR/bin/python" "${ENVIRONMENT_SMOKE[@]}"; then
   echo "[environment-drift] GPU compatibility smoke failed on $CUDA_VISIBLE_DEVICES" >&2
   exit 87
@@ -125,7 +140,7 @@ mkdir -p "$EVAL_DIR" "$LOG_DIR" || exit 1
 
 # full terminal capture: everything the run writes to stdout/stderr lands in the run log
 HYDRA_ARGS=(<tokens produced by hydra_override_arg; one per override>)
-"$ENVIRONMENT_DIR/bin/python" code/<NNN_exp>/<script>.py "${HYDRA_ARGS[@]}" 2>&1 \
+"$ENVIRONMENT_DIR/bin/python" "$WAVE_TREE/code/<NNN_exp>/<script>.py" "${HYDRA_ARGS[@]}" 2>&1 \
   | tee "$LOG_DIR/wave_<rig>_gpu<ids>-$(date +%Y%m%d-%H%M%S).log"
 pipeline_rc=("${PIPESTATUS[@]}")
 python_rc=${pipeline_rc[0]}
@@ -177,17 +192,27 @@ Notes:
   a crash re-executes only runs whose declared completion artifact is absent — resuming or
   restarting per the experiment's design-time resume decision. `.status.json` is inspected only
   to emit a useful inconsistency warning; it never overrides the golden artifact signal.
-- The Git guard resolves `wave--<wave_id>`, requires it and `HEAD` to name the same commit, and
-  rejects tracked/staged/non-ignored-untracked execution drift before any status/log write.
-  Reserved exit `86` means deployment drift, not experiment failure; the lane loop stops on it.
+- The working directory is the project root (`PROJECT_ROOT`): every artifact path, the storage
+  guard's `df -P .`, and the Slurm `--output` path resolve there, in the tree shared by all waves.
+  Code is read only from `WAVE_TREE`. `RESEARCH_PROJECT_ROOT` makes the project's `paths.py`
+  resolve storage and `.env` against the shared root although the imported code lives in the
+  worktree. Never `cd` into `WAVE_TREE`.
+- The Git guard requires `WAVE_TREE` to be a worktree of this project root, resolves
+  `wave--<wave_id>`, requires it and the worktree `HEAD` to name the same commit, and rejects
+  tracked/staged/non-ignored-untracked execution drift in the worktree before any status/log
+  write. The main checkout is never inspected: it may sit on any commit, which is what lets waves
+  of different revisions run side by side. Reserved exit `86` means deployment drift, not
+  experiment failure; the lane loop stops on it.
 - `CUDA_VISIBLE_DEVICES`, `WAVE_ID`, `SOURCE_REVISION`, `SOURCE_TAG`, and
   `ENVIRONMENT_FINGERPRINT` are exported here and read
   by StatusWriter. They are env vars, **not** config params, so they never enter the
   `guard_run_config` snapshot — otherwise relaunch placement/provenance would trip the collision
   guard.
-- The environment guard reads `ENVIRONMENT_DIR` from `[environment].name`, uses its `bin/python`
-  with the tracked fingerprint helper, and never invokes `uv sync`. Generate `ENVIRONMENT_SMOKE`
-  from `sync.toml`'s argv after removing its leading `python`. Exit `87` means runtime drift or GPU
+- The environment guard uses the wave's keyed environment `ENVIRONMENT_DIR` (`.envs/<env_key>`,
+  exactly as `environment-sync verify` printed it for this wave — never the hub development
+  environment named by `[environment].name`), runs the worktree's tracked fingerprint helper, and
+  never invokes `uv sync`. Generate `ENVIRONMENT_SMOKE` from `sync.toml`'s argv after removing its
+  leading `python`, with the script token prefixed by `$WAVE_TREE/`. Exit `87` means runtime drift or GPU
   incompatibility, not an experiment failure, and stops the lane.
 - The **storage guard** is emitted on quota'd rigs only, and sits *after* the artifact guard (a
   finished run must still skip cleanly) and *before* the environment guard, so a lane that cannot
@@ -293,7 +318,7 @@ path into a dispatch, monitor, or recovery command. A path spelled by hand is a 
 declared fact, and the copy is what goes stale when a rig's checkout moves.
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <repo_path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; rc=\$?; { [ \"\$rc\" -eq 86 ] || [ \"\$rc\" -eq 87 ] || [ \"\$rc\" -eq 88 ]; } && exit \"\$rc\"; done'"
+ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <repo_path on rig> && for s in .waves/<wave_id>/scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; rc=\$?; { [ \"\$rc\" -eq 86 ] || [ \"\$rc\" -eq 87 ] || [ \"\$rc\" -eq 88 ]; } && exit \"\$rc\"; done'"
 ```
 
 When `<rig>` is the current local hub, the hub subagent runs the inner command directly instead
@@ -301,9 +326,11 @@ of self-SSH:
 
 ```bash
 tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_rig-4090_gpu<ids> \
-  'cd <repo_path on rig-4090> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_rig-4090_gpu<ids>.sh; do bash "$s"; rc=$?; { [ "$rc" -eq 86 ] || [ "$rc" -eq 87 ] || [ "$rc" -eq 88 ]; } && exit "$rc"; done'
+  'cd <repo_path on rig-4090> && for s in .waves/<wave_id>/scripts/<NNN_exp>/*/wave_<wave_id>/wave_rig-4090_gpu<ids>.sh; do bash "$s"; rc=$?; { [ "$rc" -eq 86 ] || [ "$rc" -eq 87 ] || [ "$rc" -eq 88 ]; } && exit "$rc"; done'
 ```
 
+- The lane `cd`s to the project root and globs the scripts inside the wave worktree, so the tmux
+  pane's working directory stays the shared root (rig-board's probe relies on it).
 - Glob expansion sorts lexicographically ⇒ deterministic ordering.
 - The glob **is** the assignment record: a run is in this lane precisely because
   `wave_<rig>_gpu<ids>.sh` exists in its wave folder. Nothing to keep in sync.
@@ -314,8 +341,9 @@ tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_rig-4090_gpu<ids> \
   procedure.
 
 Before dispatching: use `rig-sync deploy-revision` then `verify-revision` for the approved wave
-commit across the complete assigned rig set; run approved `environment-sync provision` as
-needed, then verify the full set and every lane. Each rig subagent repeats both read-only gates
+commit across the complete assigned rig set plus the hub (this creates `.waves/<wave_id>` on each);
+run approved `environment-sync provision --wave <wave_id> --revision <sha>` as needed, then
+`environment-sync verify --wave <wave_id> --revision <sha>` for the full set and every lane. Each rig subagent repeats both read-only gates
 for its target immediately before tmux. Then remind
 the user how to watch: for a peer, `ssh <rig>` →
 `tmux attach -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>`; for the current local hub, run the
@@ -352,14 +380,15 @@ session already exists); the self-guarded wave scripts then skip done runs and r
 interrupted ones:
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux has-session -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 2>/dev/null || tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <repo_path on rig> && for s in scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; rc=\$?; { [ \"\$rc\" -eq 86 ] || [ \"\$rc\" -eq 87 ] || [ \"\$rc\" -eq 88 ]; } && exit \"\$rc\"; done'"
+ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "tmux has-session -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 2>/dev/null || tmux new-session -d -s <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids> 'cd <repo_path on rig> && for s in .waves/<wave_id>/scripts/<NNN_exp>/*/wave_<wave_id>/wave_<rig>_gpu<ids>.sh; do bash \"\$s\"; rc=\$?; { [ \"\$rc\" -eq 86 ] || [ \"\$rc\" -eq 87 ] || [ \"\$rc\" -eq 88 ]; } && exit \"\$rc\"; done'"
 ```
 
 For a local hub lane, run the same `tmux has-session ... || tmux new-session ...` command directly
 from the hub subagent; do not wrap it in SSH.
 
 Note it is the **same wave id** — a relaunch is not a new dispatch, so paths and session names
-are unchanged.
+are unchanged. Before relaunching, re-run `rig-sync deploy-revision` for the wave: it only verifies
+an existing worktree and recreates one that was pruned, from the same tag.
 
 ## Assignment math
 

@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
+import subprocess
 import sys
 import tempfile
 import time
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).parents[1]
@@ -67,7 +70,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "6.0.0")
+        self.assertEqual(manifest["version"], "7.0.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -1233,7 +1236,7 @@ class ResearchContractTests(unittest.TestCase):
         templates = (
             ROOT / "plugins/research/skills/sweep-dispatch/references/templates.md"
         ).read_text()
-        lane_loops = [line for line in templates.splitlines() if "for s in scripts/" in line]
+        lane_loops = [line for line in templates.splitlines() if "for s in .waves/<wave_id>/scripts/" in line]
 
         self.assertEqual(len(lane_loops), 3)
         for index, loop in enumerate(lane_loops):
@@ -1493,7 +1496,7 @@ class ResearchContractTests(unittest.TestCase):
             status_template,
         )
         environment_guard = templates.index("EXPECTED_ENVIRONMENT_FINGERPRINT")
-        python = templates.index('"$ENVIRONMENT_DIR/bin/python" code/<NNN_exp>/<script>.py')
+        python = templates.index('"$ENVIRONMENT_DIR/bin/python" "$WAVE_TREE/code/<NNN_exp>/<script>.py"')
         self.assertLess(environment_guard, python)
         self.assertIn('"$rc" -eq 87', templates)
 
@@ -1513,15 +1516,208 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("Ask which single directory name", project_init)
         for skill in (environment_sync, project_init):
             self.assertRegex(skill, r"(?i)never infer|never .*default")
-        self.assertIn('ENVIRONMENT_DIR="<environment.name from sync.toml>"', dispatch)
+        self.assertIn("hub development environment", environment_sync.lower())
+        self.assertIn("hub development", project_init)
+        self.assertIn('ENVIRONMENT_DIR="<ENVIRONMENT_DIR printed by environment-sync verify', dispatch)
         self.assertNotIn(".venv/bin/python", dispatch)
+        self.assertNotIn("<environment.name from sync.toml>", dispatch)
+
+    def test_wave_isolation_contract_is_stated_and_enforced(self) -> None:
+        skills = ROOT / "plugins/research/skills"
+        dispatch = (skills / "sweep-dispatch/SKILL.md").read_text()
+        templates = (skills / "sweep-dispatch/references/templates.md").read_text()
+        slurm = (skills / "sweep-dispatch/references/cineca-slurm.md").read_text()
+        conventions = (skills / "research-project-init/references/conventions.md").read_text()
+        init_templates = (skills / "research-project-init/references/templates.md").read_text()
+        tracking = (skills / "experiments-tracking/SKILL.md").read_text()
+        rig_sync = (skills / "rig-sync/SKILL.md").read_text()
+        env_sync = (skills / "environment-sync/SKILL.md").read_text()
+
+        self.assertIn("### Wave isolation", conventions)
+        self.assertIn("wave-isolation contract", dispatch)
+        self.assertIn("1g. **wave-isolation contract check**", dispatch)
+        # The old single-checkout freeze is gone everywhere.
+        for text in (dispatch, rig_sync, conventions):
+            self.assertNotIn("fast-forward", text)
+        self.assertNotIn("may not be deployed onto a rig while an older", dispatch)
+        # Scripts run from the shared root and read code from the worktree.
+        self.assertIn('PROJECT_ROOT="${SLURM_SUBMIT_DIR:-$PWD}"', templates)
+        self.assertIn('WAVE_TREE="$PROJECT_ROOT/.waves/$WAVE_ID"', templates)
+        self.assertIn('export RESEARCH_PROJECT_ROOT="$PROJECT_ROOT"', templates)
+        self.assertNotIn('cd "$(dirname "$0")', templates)
+        self.assertNotIn('cd "$(dirname "$0")', init_templates)
+        guard = templates.index("git rev-parse --git-common-dir")
+        python = templates.index('"$WAVE_TREE/code/<NNN_exp>/<script>.py"')
+        self.assertLess(guard, python)
+        self.assertIn("sbatch --parsable .waves/<wave_id>/scripts/", slurm)
+        self.assertNotIn('cd "$SLURM_SUBMIT_DIR"', slurm)
+        # Ignores, editor excludes, and the paths helper.
+        for entry in (".waves/", ".envs/"):
+            self.assertIn(f"\n{entry}\n", init_templates)
+        self.assertIn('".waves/**": true', init_templates)
+        self.assertIn('ROOT_ENV = "RESEARCH_PROJECT_ROOT"', init_templates)
+        self.assertIn("def source_path(", init_templates)
+        # Overlap, supersede, prune.
+        self.assertIn("1h. **overlap refusal**", dispatch)
+        self.assertIn("## Supersede", dispatch)
+        self.assertIn("superseded", tracking)
+        self.assertIn("`superseded`", slurm)
+        for text in (dispatch, tracking):
+            self.assertIn("rig-sync prune", text)
+            self.assertIn("--dry-run", text)
+        self.assertIn("propose pruning", tracking.lower())
+        self.assertIn("activity", rig_sync)
+        self.assertIn("--staged", env_sync)
+        self.assertIn(".envs/<env_key>", env_sync)
+
+    def render_wave_script(self, wave: str, env_dir: str) -> str:
+        templates = (
+            ROOT / "plugins/research/skills/sweep-dispatch/references/templates.md"
+        ).read_text()
+        start = templates.index("## wave_<rig>_gpu<ids>.sh")
+        body = templates[templates.index("```bash\n", start) + len("```bash\n"):]
+        body = body[: body.index("\n```\n")]
+        # Drop the behemoth-only block, as generation does on every other rig.
+        head, _, rest = body.partition("# ---- behemoth lanes ONLY")
+        body = head + rest.partition("# ---- end behemoth block\n")[2]
+        values = {
+            '"<wave_id>"': f'"{wave}"',
+            '"<flat run_id>"': '"seed=0"',
+            '"<run_id_name: the rendered run_id under segments-v1; the flat run_id under a legacy pin>"': '"seed=0"',
+            '"<segments-v1, or a legacy nested | collapsed-v1 | hashed-v1, copied from the experiment record>"': '"nested"',
+            '"<exact checkpoint directory resolved by canonical run_id_path>"': f'"checkpoints/000_x/{wave}"',
+            '"<exact evaluation directory resolved by canonical run_id_path>"': f'"evaluations/000_x/{wave}"',
+            '"logs/<NNN_exp>/<run_id folder>/wave_<wave_id>"': f'"logs/000_x/seed=0/wave_{wave}"',
+            '"<exact expected final artifact path under CHECKPOINT_DIR or EVAL_DIR>"': f'"evaluations/000_x/{wave}/result.json"',
+            '"<ids>"': '"0"',
+            "<MIN_FREE_KIB from storage-env, raised to this wave's checkpoint footprint>": "0",
+            '"<QUOTA_FS from storage-env; empty means the rig has no quota and df is used>"': '""',
+            '"<ENVIRONMENT_DIR printed by environment-sync verify: .envs/<env_key>>"': f'"{env_dir}"',
+            '"<64-char fingerprint verified on every assigned rig>"': '"' + "f" * 64 + '"',
+            '("$WAVE_TREE/<gpu_smoke script>" <shell-quoted remaining gpu_smoke tokens>)': '("$WAVE_TREE/code/common/environment_smoke.py")',
+            "(<tokens produced by hydra_override_arg; one per override>)": "(seed=0)",
+            "code/<NNN_exp>/<script>.py": "code/000_x/train.py",
+            "wave_<rig>_gpu<ids>-": "wave_rig_gpu0-",
+        }
+        for placeholder, value in values.items():
+            self.assertIn(placeholder, body)
+            body = body.replace(placeholder, value)
+        code = "\n".join(line for line in body.splitlines() if not line.lstrip().startswith("#"))
+        self.assertNotRegex(code, r"<[a-z_]+>")
+        return body
+
+    def test_rendered_wave_scripts_of_two_revisions_run_side_by_side(self) -> None:
+        def git(*args: str, cwd: Path) -> str:
+            return subprocess.run(
+                ["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True
+            ).stdout.strip()
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "project"
+            root.mkdir()
+            git("init", "-q", "-b", "main", cwd=root)
+            git("config", "user.name", "T", cwd=root)
+            git("config", "user.email", "t@example.com", cwd=root)
+            (root / ".gitignore").write_text(".waves/\n.envs/\nevaluations/\nlogs/\n__pycache__/\n")
+            (root / "code/common").mkdir(parents=True)
+            (root / "code/000_x").mkdir()
+            (root / "code/common/environment.py").write_text("")
+            (root / "code/common/environment_smoke.py").write_text("")
+            # The stub interpreter below "runs" train.py by copying its VERSION line into the artifact.
+            waves = {"20260801-000000": "v1", "20260802-000000": "v2"}
+            env_dir = ".envs/0123456789abcdef"
+            for wave, version in waves.items():
+                (root / "code/000_x/train.py").write_text(f"VERSION={version}\n")
+                script = root / "scripts/000_x/seed=0" / f"wave_{wave}" / "wave_rig_gpu0.sh"
+                script.parent.mkdir(parents=True, exist_ok=True)
+                script.write_text(self.render_wave_script(wave, env_dir))
+                git("add", ".", cwd=root)
+                git("commit", "-qm", f"wave {wave}", cwd=root)
+                git("tag", "-a", f"wave--{wave}", "-m", wave, cwd=root)
+                git("worktree", "add", "-q", "--detach", str(root / ".waves" / wave), f"wave--{wave}", cwd=root)
+            python = root / env_dir / "bin/python"
+            python.parent.mkdir(parents=True)
+            python.write_text(
+                "#!/usr/bin/env bash\n"
+                'case "$1" in\n'
+                "  *environment.py) echo " + "f" * 64 + ";;\n"
+                "  *environment_smoke.py) exit 0;;\n"
+                '  *train.py) test "$PWD" = "$RESEARCH_PROJECT_ROOT" || exit 9;\n'
+                '     mkdir -p "$(dirname "$ARTIFACT_UNDER_TEST")"; grep VERSION "$1" > "$ARTIFACT_UNDER_TEST";;\n'
+                "  -) cat > /dev/null;;\n"
+                "esac\n"
+            )
+            python.chmod(0o755)
+            # Move the main checkout past both waves: neither wave may notice.
+            (root / "code/000_x/train.py").write_text("VERSION=v3-uncommitted\n")
+
+            def run_wave(wave: str) -> subprocess.CompletedProcess:
+                artifact = root / "evaluations/000_x" / wave / "result.json"
+                env = {**os.environ, "ARTIFACT_UNDER_TEST": str(artifact)}
+                env.pop("SLURM_SUBMIT_DIR", None)
+                env.pop("RESEARCH_PROJECT_ROOT", None)
+                script = f".waves/{wave}/scripts/000_x/seed=0/wave_{wave}/wave_rig_gpu0.sh"
+                return subprocess.run(["bash", script], cwd=root, env=env, capture_output=True, text=True)
+
+            for wave, version in waves.items():
+                with self.subTest(wave=wave):
+                    result = run_wave(wave)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    artifact = root / "evaluations/000_x" / wave / "result.json"
+                    self.assertEqual(artifact.read_text().strip(), f"VERSION={version}")
+                    self.assertTrue(list((root / f"logs/000_x/seed=0/wave_{wave}").glob("*.log")))
+            # Tampering with a wave's worktree is source drift.
+            first = "20260801-000000"
+            (root / "evaluations/000_x" / first / "result.json").unlink()
+            (root / ".waves" / first / "code/000_x/train.py").write_text("VERSION=tampered\n")
+            self.assertEqual(run_wave(first).returncode, 86)
+            # A missing (pruned) worktree is source drift, not a crash.
+            second = "20260802-000000"
+            (root / "evaluations/000_x" / second / "result.json").unlink()
+            relative = f"scripts/000_x/seed=0/wave_{second}/wave_rig_gpu0.sh"
+            copy = Path(raw) / "copy.sh"
+            copy.write_text((root / ".waves" / second / relative).read_text())
+            git("worktree", "remove", str(root / ".waves" / second), cwd=root)
+            missing = subprocess.run(["bash", str(copy)], cwd=root, capture_output=True, text=True)
+            self.assertEqual(missing.returncode, 86, missing.stderr)
+            self.assertIn("missing wave worktree", missing.stderr)
+
+    def test_paths_template_splits_storage_and_source_roots(self) -> None:
+        templates = (
+            ROOT / "plugins/research/skills/research-project-init/references/templates.md"
+        ).read_text()
+        start = templates.index("## code/common/paths.py")
+        code = templates[templates.index("```python\n", start) + len("```python\n"):]
+        code = code[: code.index("```\n")]
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            shared = base / "project"
+            tree = shared / ".waves" / "20260802-120000"
+            (shared / ".git").mkdir(parents=True)
+            (tree / "code/common").mkdir(parents=True)
+            (tree / "pyproject.toml").write_text("[project]\n")
+            (tree / "code/common/paths.py").write_text(code)
+            spec = importlib.util.spec_from_file_location("paths_under_test", tree / "code/common/paths.py")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            with mock.patch.dict(os.environ, {"RESEARCH_PROJECT_ROOT": str(shared)}):
+                self.assertEqual(module.project_path("evaluations"), shared / "evaluations")
+                self.assertEqual(module.source_path("code/x.csv"), tree.resolve() / "code/x.csv")
+                self.assertEqual(module.storage_path("CACHE_DIR_UNSET_FOR_TEST", "storage/cache"), shared / "storage/cache")
+            with mock.patch.dict(os.environ, {"RESEARCH_PROJECT_ROOT": ""}):
+                self.assertEqual(module.project_root(), tree.resolve())
+            with mock.patch.dict(os.environ, {"RESEARCH_PROJECT_ROOT": str(base)}):
+                with self.assertRaises(RuntimeError):
+                    module.project_root()
+            with self.assertRaises(ValueError):
+                module.source_path("/abs")
 
     def test_behemoth_guard_precedes_python(self) -> None:
         templates = (
             ROOT / "plugins/research/skills/sweep-dispatch/references/templates.md"
         ).read_text()
         guard = templates.index("BEHEMOTH_AUTHORIZED_GPUS")
-        python = templates.index('"$ENVIRONMENT_DIR/bin/python" code/<NNN_exp>/<script>.py')
+        python = templates.index('"$ENVIRONMENT_DIR/bin/python" "$WAVE_TREE/code/<NNN_exp>/<script>.py"')
         self.assertLess(guard, python)
 
     def test_git_revision_guard_precedes_python_and_records_provenance(self) -> None:
@@ -1531,8 +1727,8 @@ class ResearchContractTests(unittest.TestCase):
         status_template = (
             ROOT / "plugins/research/skills/research-project-init/references/templates.md"
         ).read_text()
-        source_guard = templates.index("SOURCE_REVISION=$(git rev-parse")
-        python = templates.index('"$ENVIRONMENT_DIR/bin/python" code/<NNN_exp>/<script>.py')
+        source_guard = templates.index('SOURCE_REVISION=$(git -C "$WAVE_TREE" rev-parse')
+        python = templates.index('"$ENVIRONMENT_DIR/bin/python" "$WAVE_TREE/code/<NNN_exp>/<script>.py"')
         self.assertLess(source_guard, python)
         self.assertIn(
             '"source_revision": os.environ.get("SOURCE_REVISION")', status_template

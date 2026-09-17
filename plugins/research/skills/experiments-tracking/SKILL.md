@@ -1,6 +1,6 @@
 ---
 name: experiments-tracking
-description: Keep a Research 2.0 EXPERIMENTS.md true and derive active-run, lane, and wave ETAs from provenance-valid schema-v2 status plus artifacts. Use when runs are generated, launched, checked, reported, or discussed, when the user asks about experiment status or ETA, or at session start to reconcile factual run state; do not interpret or migrate legacy tracking layouts.
+description: Keep a Research 2.0 EXPERIMENTS.md true and derive active-run, lane, and wave ETAs from provenance-valid schema-v2 status plus artifacts, and propose pruning finished wave worktrees. Use when runs are generated, launched, checked, reported, or discussed, when the user asks about experiment status or ETA, or at session start to reconcile factual run state; do not interpret or migrate legacy tracking layouts.
 ---
 
 # experiments-tracking
@@ -67,13 +67,14 @@ smoke pass: exit 0 and evaluations/000_grokking/smoke/result.json says one step 
   `.status.json`; before the run starts they come from the generated script's path. A run executed
 as a Slurm job on `leonardo` has `rig=leonardo`, `gpu=1` (the count requested, since the card index
 is Slurm's), and its job id(s) in `notes`.
-- Statuses: `todo` → `inpr` → `done` | `failed`. `started`/`ended` use `MM-DD HH:MM` (year only if
+- Statuses: `todo` → `inpr` → `done` | `failed`, plus terminal `superseded` for a placement the
+  user replaced with a later wave (`sweep-dispatch` § Supersede); its `notes` name that wave. `started`/`ended` use `MM-DD HH:MM` (year only if
   ambiguous), and `elapsed` is compact (`45m`, `1h45m`, `2d3h`) from `elapsed_s`. **Elapsed values
   are the project's reference runtimes** — use them to estimate wall-clock and split temporal
   budgets when planning future waves.
 - `progress` — render schema-v2 `progress_unit progress_completed/progress_total`.
 - `eta` — the **only computed column**. Recompute it on **every** reconciliation pass, and leave
-  it blank for `todo`/`done`/`failed` rows and whenever there is no sound basis. Never write ETA
+  it blank for `todo`/`done`/`failed`/`superseded` rows and whenever there is no sound basis. Never write ETA
   into `.status.json` or present it as measured fact — say `estimated` and state the basis when
   reporting it.
 
@@ -134,13 +135,17 @@ here: a lane on the board is not evidence that a run is done, failed, or even st
 - Observing progress ⇒ refresh `progress` and recompute `eta`; during a launch chat do this before
   every fixed ten-minute report as well as on urgent transitions.
 - Observing completion ⇒ flip to `done`/`failed` per the signals, fill `ended` + `elapsed`, clear `eta`.
+- An approved supersede ⇒ flip the replaced rows to `superseded`, clear `eta`, and name the new
+  wave in `notes`.
 
 ## Reconciliation (mandatory)
 
 Whenever a session on rig-4090 touches the project — and always when asked about statuses — sweep
 the signals and fix any stale rows. Match a status to its row by **(semantic run identity,
 `wave_id`)**, reading the exact status path from that wave's generated record; a run with several
-rows only ever has one live one (its latest wave). Missing `wave_id` or schema-v2 provenance makes
+rows only ever has one live one (its latest wave); `sweep-dispatch` refuses to create a second
+live row, and `superseded` rows are terminal and skipped here, even when the status file at their
+path now belongs to the superseding wave. Missing `wave_id` or schema-v2 provenance makes
 the project unsupported. Resolve `wave--<wave_id>` and require the status's `source_tag` and
 `source_revision` to match it, then require `environment_fingerprint` to match the value in that
 wave's README/scripts. A missing or mismatched source/environment value is an integrity error: flag
@@ -157,3 +162,15 @@ recorded evaluation directory vanished ⇒ back to `todo` (outputs were deleted,
 path disagreement or mixed tree blocks instead of substituting different paths. Recompute `eta` for
 every `inpr` row while you are here. Reconciliation is deterministic: md always converges to the
 recorded signals without inferring slash depth.
+
+A wave launched before the wave-isolation contract (conventions; it has no `.waves/<wave_id>`
+worktree) is reconciled the same way, but flag it as "legacy wave, not recoverable": recovery
+refuses it.
+
+Then **propose pruning** — never skip it, never do it silently. Run
+`rig-sync activity --machines <the project's machines>` and compare with the rows: every wave
+whose rows are all terminal (`done`/`failed`/`superseded`) but whose worktree still exists, plus
+any keyed environment no worktree uses, is a candidate. If there is any, show
+`rig-sync prune --machines <...> --waves <candidates> --dry-run` and ask the user; run it with
+`--confirm` only on approval. A wave with failed runs the user may still recover is a fine
+candidate too: recovery recreates the worktree, but say so when proposing.

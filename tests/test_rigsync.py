@@ -61,10 +61,13 @@ class RigSyncTests(unittest.TestCase):
         subprocess.run(["git", "init", "-q", "-b", "main", str(hub)], check=True)
         subprocess.run(["git", "-C", str(hub), "config", "user.name", "Test User"], check=True)
         subprocess.run(["git", "-C", str(hub), "config", "user.email", "test@example.com"], check=True)
-        write(hub / ".gitignore", "__pycache__/\n*.pyc\nevaluations/\n")
+        write(hub / ".gitignore", "__pycache__/\n*.pyc\nevaluations/\n.waves/\n.envs/\n")
         write(hub / "code/train.py", "print('v1')\n")
         write(hub / "config/train.yaml", "steps: 1\n")
         write(hub / "scripts/bootstrap.sh", "#!/usr/bin/env bash\n")
+        write(hub / "uv.lock", "version = 1\n")
+        write(hub / ".python-version", "3.11.9\n")
+        write(hub / "pyproject.toml", '[project]\nname = "p"\n[tool.uv]\nrequired-version = "==0.7.16"\n')
         subprocess.run(["git", "-C", str(hub), "add", "."], check=True)
         subprocess.run(["git", "-C", str(hub), "commit", "-qm", "initial"], check=True)
         subprocess.run(["git", "-C", str(hub), "remote", "add", "origin", str(bare)], check=True)
@@ -290,15 +293,222 @@ class RigSyncTests(unittest.TestCase):
             parsed = rigsync.load_config(root, config, registry)
             self.assertEqual(parsed.git, rigsync.GitSettings("origin", "main"))
 
-    def test_deploy_revision_dry_run_then_fast_forwards_exact_tagged_commit(self) -> None:
+    def head(self, machine: rigsync.Machine, tree: Path | None = None) -> str:
+        return rigsync.git_command(machine, "rev-parse", "HEAD", tree=tree).stdout.decode().strip()
+
+    def test_deploy_revision_adds_detached_worktree_and_leaves_main_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             config, machine, old_revision, revision = self.make_git_fixture(Path(raw))
             wave = "20260802-120000"
+            tree = machine.repo_path / ".waves" / wave
             rigsync.deploy_revision(config, [machine], wave, revision, dry_run=True, confirmed=False)
-            self.assertEqual(rigsync.git_command(machine, "rev-parse", "HEAD").stdout.decode().strip(), old_revision)
+            self.assertFalse(tree.exists())
             rigsync.deploy_revision(config, [machine], wave, revision, dry_run=False, confirmed=True)
-            self.assertEqual(rigsync.git_command(machine, "rev-parse", "HEAD").stdout.decode().strip(), revision)
+            self.assertEqual(self.head(machine, tree), revision)
+            self.assertEqual(self.head(machine), old_revision)
             rigsync.verify_revision(config, [machine], wave, revision)
+            # Idempotent: an existing worktree is verified, never recreated.
+            rigsync.deploy_revision(config, [machine], wave, revision, dry_run=False, confirmed=True)
+
+    def test_two_waves_at_different_revisions_coexist(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            config, machine, _old_revision, revision = self.make_git_fixture(Path(raw))
+            first = "20260802-120000"
+            rigsync.deploy_revision(config, [machine], first, revision, dry_run=False, confirmed=True)
+            # Simulate an active first wave: the second deploy must not care.
+            write(machine.repo_path / "evaluations/a/.status.json", f'{{"state": "running", "wave_id": "{first}"}}')
+            hub = config.root
+            write(hub / "code/train.py", "print('v3')\n")
+            subprocess.run(["git", "-C", str(hub), "commit", "-qam", "wave 2"], check=True)
+            second_revision = subprocess.run(
+                ["git", "-C", str(hub), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+            ).stdout.strip()
+            second = "20260803-120000"
+            subprocess.run(["git", "-C", str(hub), "tag", "-a", f"wave--{second}", "-m", "w"], check=True)
+            subprocess.run(["git", "-C", str(hub), "push", "-q", "origin", "main", f"wave--{second}"], check=True)
+            rigsync.deploy_revision(config, [machine], second, second_revision, dry_run=False, confirmed=True)
+            rigsync.verify_revision(config, [machine], first, revision)
+            rigsync.verify_revision(config, [machine], second, second_revision)
+            self.assertEqual(
+                (machine.repo_path / ".waves" / first / "code/train.py").read_text(), "print('v2')\n"
+            )
+            self.assertEqual(
+                (machine.repo_path / ".waves" / second / "code/train.py").read_text(), "print('v3')\n"
+            )
+
+    def test_deploy_revision_recreates_a_pruned_worktree_after_the_branch_moved_on(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            config, machine, _old_revision, revision = self.make_git_fixture(Path(raw))
+            wave = "20260802-120000"
+            rigsync.deploy_revision(config, [machine], wave, revision, dry_run=False, confirmed=True)
+            rigsync.git_command(machine, "worktree", "remove", str(machine.repo_path / ".waves" / wave))
+            rigsync.git_command(machine, "tag", "-d", f"wave--{wave}")
+            hub = config.root
+            write(hub / "EXPERIMENTS.md", "tracking\n")
+            subprocess.run(["git", "-C", str(hub), "add", "EXPERIMENTS.md"], check=True)
+            subprocess.run(["git", "-C", str(hub), "commit", "-qm", "tracking"], check=True)
+            subprocess.run(["git", "-C", str(hub), "push", "-q", "origin", "main"], check=True)
+            rigsync.deploy_revision(config, [machine], wave, revision, dry_run=False, confirmed=True)
+            self.assertEqual(self.head(machine, machine.repo_path / ".waves" / wave), revision)
+
+    def test_deploy_revision_requires_the_hub_to_ignore_wave_dirs(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            config, machine, _old_revision, revision = self.make_git_fixture(Path(raw))
+            write(config.root / ".gitignore", "__pycache__/\n")
+            with self.assertRaisesRegex(rigsync.RigSyncError, "wave-isolation contract"):
+                rigsync.deploy_revision(
+                    config, [machine], "20260802-120000", revision, dry_run=True, confirmed=False
+                )
+
+    def test_verify_revision_rejects_dirty_worktree_and_missing_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            config, machine, _old_revision, revision = self.make_git_fixture(Path(raw))
+            wave = "20260802-120000"
+            with self.assertRaisesRegex(rigsync.RigSyncError, "verification failed"):
+                rigsync.verify_revision(config, [machine], wave, revision)
+            rigsync.deploy_revision(config, [machine], wave, revision, dry_run=False, confirmed=True)
+            write(machine.repo_path / ".waves" / wave / "code/train.py", "print('dirty')\n")
+            with self.assertRaisesRegex(rigsync.RigSyncError, "verification failed"):
+                rigsync.verify_revision(config, [machine], wave, revision)
+
+    def test_verify_revision_rejects_wrong_tag(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            config, machine, _old_revision, revision = self.make_git_fixture(Path(raw))
+            wave = "20260802-120000"
+            rigsync.deploy_revision(config, [machine], wave, revision, dry_run=False, confirmed=True)
+            rigsync.git_command(machine, "tag", "-d", f"wave--{wave}")
+            with self.assertRaisesRegex(rigsync.RigSyncError, "verification failed"):
+                rigsync.verify_revision(config, [machine], wave, revision)
+
+    def test_env_key_follows_lock_python_and_uv_pins_only(self) -> None:
+        pyproject = b'[project]\nname = "p"\n[tool.uv]\nrequired-version = "==0.7.16"\n'
+        base = rigsync.env_key(b"lock", b"3.11.9\n", pyproject)
+        self.assertRegex(base, r"^[0-9a-f]{16}$")
+        self.assertEqual(base, rigsync.env_key(b"lock", b"3.11.9", pyproject + b"# comment\n"))
+        self.assertNotEqual(base, rigsync.env_key(b"lock2", b"3.11.9", pyproject))
+        self.assertNotEqual(base, rigsync.env_key(b"lock", b"3.11.10", pyproject))
+        self.assertNotEqual(
+            base, rigsync.env_key(b"lock", b"3.11.9", pyproject.replace(b"0.7.16", b"0.7.17"))
+        )
+
+    def test_prune_removes_terminal_worktree_and_unused_envs_only(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            config, machine, _old_revision, revision = self.make_git_fixture(Path(raw))
+            wave = "20260802-120000"
+            rigsync.deploy_revision(config, [machine], wave, revision, dry_run=False, confirmed=True)
+            key = rigsync.env_key_for_revision(config.root, revision)
+            envs = machine.repo_path / ".envs"
+            (envs / key / "bin").mkdir(parents=True)
+            (envs / "0123456789abcdef").mkdir()
+            (envs / "hand-made").mkdir()
+            idle = mock.patch.object(rigsync, "wave_activity", return_value={})
+            with idle:
+                rigsync.prune(config, [machine], [wave], dry_run=True, confirmed=False)
+            self.assertTrue((machine.repo_path / ".waves" / wave).exists())
+            with idle:
+                rigsync.prune(config, [machine], [wave], dry_run=False, confirmed=True)
+            self.assertFalse((machine.repo_path / ".waves" / wave).exists())
+            self.assertFalse((envs / key).exists())
+            self.assertFalse((envs / "0123456789abcdef").exists())
+            self.assertTrue((envs / "hand-made").exists())
+
+    def test_prune_keeps_envs_of_remaining_worktrees(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            config, machine, _old_revision, revision = self.make_git_fixture(Path(raw))
+            keep, drop = "20260802-120000", "20260801-120000"
+            rigsync.deploy_revision(config, [machine], keep, revision, dry_run=False, confirmed=True)
+            rigsync.git_command(machine, "worktree", "add", "--detach", str(machine.repo_path / ".waves" / drop), revision)
+            key = rigsync.env_key_for_revision(config.root, revision)
+            (machine.repo_path / ".envs" / key).mkdir(parents=True)
+            with mock.patch.object(rigsync, "wave_activity", return_value={}):
+                rigsync.prune(config, [machine], [drop], dry_run=False, confirmed=True)
+            self.assertTrue((machine.repo_path / ".envs" / key).exists())
+            self.assertTrue((machine.repo_path / ".waves" / keep).exists())
+
+    def test_prune_refuses_active_unattributed_and_dirty(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            config, machine, _old_revision, revision = self.make_git_fixture(Path(raw))
+            wave = "20260802-120000"
+            rigsync.deploy_revision(config, [machine], wave, revision, dry_run=False, confirmed=True)
+            with mock.patch.object(rigsync, "wave_activity", return_value={wave: ["tmux:x"]}):
+                with self.assertRaisesRegex(rigsync.RigSyncError, "active wave"):
+                    rigsync.prune(config, [machine], [wave], dry_run=True, confirmed=False)
+            with mock.patch.object(rigsync, "wave_activity", return_value={"?": ["status:x"]}):
+                with self.assertRaisesRegex(rigsync.RigSyncError, "without a wave id"):
+                    rigsync.prune(config, [machine], [wave], dry_run=True, confirmed=False)
+            write(machine.repo_path / ".waves" / wave / "notes.txt", "x")
+            with mock.patch.object(rigsync, "wave_activity", return_value={}):
+                with self.assertRaisesRegex(rigsync.RigSyncError, "dirty"):
+                    rigsync.prune(config, [machine], [wave], dry_run=True, confirmed=False)
+            with self.assertRaisesRegex(rigsync.RigSyncError, "--confirm"):
+                rigsync.prune(config, [machine], [wave], dry_run=False, confirmed=False)
+
+    def test_remove_environment_refuses_unexpected_paths(self) -> None:
+        machine = rigsync.Machine("peer", "peer", None, Path("/srv/p"), False)
+        for path in (Path("/srv/p/.envs"), Path("/srv/p/.envs/../code"), Path("/srv/p/.envs/x/0123456789abcdef")):
+            with self.assertRaisesRegex(rigsync.RigSyncError, "unexpected path"):
+                rigsync.remove_environment(machine, path)
+
+    def test_wave_activity_groups_tmux_status_and_slurm_by_wave(self) -> None:
+        machine = rigsync.Machine("cluster", "cluster", None, Path("/work/proj"), False, gpus_in_job=True)
+        config = rigsync.Config(
+            Path("/hub/proj"), {"evaluations": {"path": "evaluations"}}, {"cluster": machine}
+        )
+
+        def fake_remote(target, argv, *, check=True):
+            if argv[0] == "tmux":
+                out = b"proj_002_x_20260801-000000_cluster_gpu0\nproj_misc\nother_20260802-000000_x\n"
+                return subprocess.CompletedProcess(argv, 0, out, b"")
+            if argv[0] == "test":
+                return subprocess.CompletedProcess(argv, 0, b"", b"")
+            if argv[0] == "sh" and "pwd -P" in argv[2]:
+                return subprocess.CompletedProcess(argv, 0, b"/lustre/work/proj\n", b"")
+            if argv[0] == "sh":
+                return subprocess.CompletedProcess(argv, 0, b"/work/proj/evaluations/r/.status.json\n", b"")
+            if argv[0] == "grep":
+                out = b'/work/proj/evaluations/r/.status.json:"wave_id": "20260802-000000"\n'
+                return subprocess.CompletedProcess(argv, 0, out, b"")
+            if argv[0] == "squeue":
+                out = (
+                    b"11|20260803-000000__model=a|/work/proj\n"
+                    b"12|20260804-000000__model=a|/work/other\n"
+                    b"13|interactive|/work/proj\n"
+                    b"14|20260805-000000__model=b|/lustre/work/proj\n"
+                )
+                return subprocess.CompletedProcess(argv, 0, out, b"")
+            raise AssertionError(argv)
+
+        with mock.patch.object(rigsync, "remote", side_effect=fake_remote):
+            active = rigsync.wave_activity(config, machine)
+        self.assertEqual(
+            active,
+            {
+                "20260801-000000": ["tmux:proj_002_x_20260801-000000_cluster_gpu0"],
+                "?": ["tmux:proj_misc", "slurm:13:interactive"],
+                "20260802-000000": ["status:/work/proj/evaluations/r/.status.json"],
+                "20260803-000000": ["slurm:11:20260803-000000__model=a"],
+                "20260805-000000": ["slurm:14:20260805-000000__model=b"],
+            },
+        )
+
+    def test_wave_activity_fails_closed_when_squeue_breaks(self) -> None:
+        machine = rigsync.Machine("cluster", "cluster", None, Path("/work/proj"), False, gpus_in_job=True)
+        config = rigsync.Config(Path("/hub/proj"), {}, {"cluster": machine})
+
+        def fake_remote(target, argv, *, check=True):
+            if argv[0] == "tmux":
+                return subprocess.CompletedProcess(argv, 1, b"", b"")
+            return subprocess.CompletedProcess(argv, 1, b"", b"slurm down")
+
+        with mock.patch.object(rigsync, "remote", side_effect=fake_remote):
+            with self.assertRaisesRegex(rigsync.RigSyncError, "Slurm queue"):
+                rigsync.wave_activity(config, machine)
+
+    def test_worktree_capable_needs_git_2_17(self) -> None:
+        self.assertTrue(rigsync.worktree_capable("git version 2.43.0"))
+        self.assertTrue(rigsync.worktree_capable("git version 2.17.1"))
+        self.assertFalse(rigsync.worktree_capable("git version 2.16.9"))
+        self.assertFalse(rigsync.worktree_capable("garbage"))
 
     def test_prepare_git_project_clones_only_after_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -310,36 +520,6 @@ class RigSyncTests(unittest.TestCase):
             self.assertFalse(destination.exists())
             rigsync.prepare(config, machine, dry_run=False, confirmed=True)
             self.assertTrue((destination / ".git").is_dir())
-
-    def test_deploy_revision_rejects_dirty_execution_tree(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            config, machine, _old_revision, revision = self.make_git_fixture(Path(raw))
-            write(machine.repo_path / "code/train.py", "print('dirty')\n")
-            with self.assertRaisesRegex(rigsync.RigSyncError, "execution tree dirty"):
-                rigsync.deploy_revision(
-                    config, [machine], "20260802-120000", revision, dry_run=True, confirmed=False
-                )
-
-    def test_deploy_revision_restores_missing_tag_at_existing_revision(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            config, machine, _old_revision, revision = self.make_git_fixture(Path(raw))
-            wave = "20260802-120000"
-            rigsync.deploy_revision(config, [machine], wave, revision, dry_run=False, confirmed=True)
-            rigsync.git_command(machine, "tag", "-d", f"wave--{wave}")
-            rigsync.deploy_revision(config, [machine], wave, revision, dry_run=False, confirmed=True)
-            tag_revision = rigsync.git_command(
-                machine, "rev-parse", f"refs/tags/wave--{wave}^{{commit}}"
-            ).stdout.decode().strip()
-            self.assertEqual(tag_revision, revision)
-
-    def test_deploy_revision_rejects_active_work_before_revision_change(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            config, machine, _old_revision, revision = self.make_git_fixture(Path(raw))
-            with mock.patch.object(rigsync, "project_activity", return_value=["tmux:active"]):
-                with self.assertRaisesRegex(rigsync.RigSyncError, "active work blocks"):
-                    rigsync.deploy_revision(
-                        config, [machine], "20260802-120000", revision, dry_run=True, confirmed=False
-                    )
 
     def test_project_activity_fails_closed_when_tmux_probe_breaks(self) -> None:
         machine = rigsync.Machine("peer", "peer", None, Path("/tmp/peer"), False)
@@ -386,15 +566,6 @@ class RigSyncTests(unittest.TestCase):
                 self.run_status_probe(config, machine),
                 [f"status:{repo / 'evaluations/001/b/.status.json'}"],
             )
-
-    def test_verify_revision_rejects_wrong_tag(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            config, machine, _old_revision, revision = self.make_git_fixture(Path(raw))
-            rigsync.git_command(machine, "fetch", "origin", "main")
-            rigsync.git_command(machine, "merge", "--ff-only", revision)
-            rigsync.git_command(machine, "tag", "-d", "wave--20260802-120000", check=False)
-            with self.assertRaisesRegex(rigsync.RigSyncError, "verification failed"):
-                rigsync.verify_revision(config, [machine], "20260802-120000", revision)
 
     def test_execution_drift_allows_runtime_caches_but_rejects_ignored_source(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

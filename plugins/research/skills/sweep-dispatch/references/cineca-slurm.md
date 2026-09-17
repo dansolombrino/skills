@@ -90,7 +90,7 @@ already in the queue keep running; only observation is lost until a new certific
 | area | quota | cleanup | role in this plugin |
 |---|---|---|---|
 | `$HOME` | 50 GB | none, no backup on Leonardo | dotfiles, `uv`, `tmux`, the ssh certificate |
-| `$WORK` = `/leonardo_work/<account>` | 1 TB per project | kept 6 months after the project | **storage root**: checkout, environment, checkpoints, evaluations |
+| `$WORK` = `/leonardo_work/<account>` | 1 TB per project | kept 6 months after the project | **storage root**: checkout, wave worktrees (`.waves/`), keyed environments (`.envs/`), checkpoints, evaluations |
 | `$FAST` = `/leonardo_scratch/fast/<account>` | 1 TB per project, fixed | 6 months after the project | datasets and hub caches (`HF_HOME` and friends) |
 | `$CINECA_SCRATCH` | none | **files idle for 40 days are deleted** | never for anything a run must find again |
 | `$TMPDIR` on a compute node | 10 GB RAM | per job | scratch inside a job only |
@@ -146,7 +146,8 @@ login node has internet, `git`, and the user-installed `uv` at `~/.local/bin/uv`
 
 - The login node has no GPU, so **the lane smoke cannot run at provision time**. The registry's
   `gpus = "job"` tells `environment-sync` so: `doctor` and `verify --machines leonardo` skip the
-  `nvidia-smi` probe, still compare OS/arch/libc and the fingerprint with the hub, and report
+  `nvidia-smi` probe, still compare OS/arch/libc and the wave environment's fingerprint with the
+  hub, and report
   `gpus=deferred to job`; `--lane leonardo:<n>` is refused with a message saying why. The GPU
   smoke runs as the first step inside every job, where the existing environment guard already
   performs it. State this in the gate-3 preview: "Leonardo fingerprint verified on login node;
@@ -158,7 +159,8 @@ login node has internet, `git`, and the user-installed `uv` at `~/.local/bin/uv`
 ## The job script
 
 One sbatch script per (run, wave), at the same path and with the same name as a rig's wave script:
-`scripts/<NNN_exp>/<run_id folder>/wave_<wave_id>/wave_leonardo_gpu1.sh`. The body is the
+`scripts/<NNN_exp>/<run_id folder>/wave_<wave_id>/wave_leonardo_gpu1.sh`, submitted from the
+wave worktree as `.waves/<wave_id>/scripts/...`. The body is the
 [standard wave script](templates.md) verbatim — artifact guard, Git guard, storage guard,
 environment guard and smoke, `tee` log, failed-status fallback — with this header in place of
 the bare shebang and without the `CUDA_VISIBLE_DEVICES` export (Slurm sets it):
@@ -182,10 +184,16 @@ the bare shebang and without the `CUDA_VISIBLE_DEVICES` export (Slurm sets it):
 # run: <flat run_id>   experiment: <NNN_exp>
 # wave: <wave_id>   rig: leonardo   gpu: 1 (Slurm-assigned)
 set -uo pipefail
-cd "$SLURM_SUBMIT_DIR" || exit 1
 export WANDB_MODE=offline
 export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
+# ...then the standard body from `export WAVE_ID=...` on
 ```
+
+- `sbatch` copies the script into Slurm's spool, so `$0` is meaningless inside the job. The
+  standard body therefore takes the project root from `SLURM_SUBMIT_DIR`, which is why every
+  submission `cd`s to `<repo_path on leonardo>` first and never into the worktree. A queued job
+  reads its code from `.waves/<wave_id>/` whenever it starts, so later waves, commits, or
+  deployments on the same account can never change what it runs.
 
 - Resources are fixed: **one GPU, 8 cores, 128 GB** — a quarter of a Booster node, matching how
   the site bills a GPU. Change them only for a run that needs several GPUs, and then only with the
@@ -208,10 +216,11 @@ export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
 
 ## Submit
 
-Per job, from the hub, after the all-rig Git deployment gate and `verify-revision` on `leonardo`:
+Per job, from the hub, after the all-rig Git deployment gate (`deploy-revision` created
+`.waves/<wave_id>` on `leonardo`) and `verify-revision` on `leonardo`:
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=20 leonardo "cd <repo_path on leonardo> && squeue --me --noheader --format=%j | grep -Fxq '<wave_id>__<run_id_name>' && echo ALREADY-QUEUED || sbatch --parsable scripts/<NNN_exp>/<run_id folder>/wave_<wave_id>/wave_leonardo_gpu1.sh"
+ssh -o BatchMode=yes -o ConnectTimeout=20 leonardo "cd <repo_path on leonardo> && squeue --me --noheader --format=%j | grep -Fxq '<wave_id>__<run_id_name>' && echo ALREADY-QUEUED || sbatch --parsable .waves/<wave_id>/scripts/<NNN_exp>/<run_id folder>/wave_<wave_id>/wave_leonardo_gpu1.sh"
 ```
 
 - The exact job-name check is the never-double-submit rule: the job name is unique per (run,
@@ -249,6 +258,7 @@ State mapping (`squeue` while queued or running, `sacct` once gone):
 | `FAILED`, `OUT_OF_MEMORY` | `failed` (code) | report with the tail of `slurm-%j.out`; no automatic resubmit |
 | `TIMEOUT` | `interrupted` (walltime) | resubmit **only if the run resumes from checkpoint**; a restart-from-scratch design makes a resubmit futile, so propose a longer `--time` to the user instead |
 | `NODE_FAIL`, `PREEMPTED`, `CANCELLED` not by the user, `BOOT_FAIL` | `interrupted` (machine fault) | resubmit the same script, same wave id |
+| `CANCELLED` by the user for a supersede | `superseded` | none; the row names the superseding wave (SKILL.md § Supersede) |
 | exit code `86`/`87`/`88` in `sacct` | drift or storage, never a run failure | stop the slice, report, do not resubmit |
 
 - ETA for a queued job = `squeue --start` estimate (labeled `scheduler estimate`; often absent,
@@ -260,12 +270,15 @@ State mapping (`squeue` while queued or running, `sacct` once gone):
   job is running, every ten while everything is pending. Never poll from inside a job.
 - A stale heartbeat with `RUNNING` in `squeue` is a hang, not a machine fault: report it, and
   never `scancel` without the user's approval (the cost is already spent and is not refunded).
+  The only other `scancel` is a user-approved supersede, and it names exact job ids.
 - The certificate check from the precondition section is rerun on every ssh failure before the
   site is called unreachable.
 
 ## Recover
 
-Resubmission is the entire recovery: the same script, same wave id, same job name, guarded by
+Resubmission is the entire recovery, after `rig-sync deploy-revision` for the wave (it verifies
+the worktree, or recreates it if it was pruned): the same script, same wave id, same job name,
+guarded by
 the exact job-name check above, so a job that Slurm already requeued or that is still queued is
 never doubled. Append the new job id to `leonardo.jobs` as `<timestamp> <jobid> resubmitted after
 <state>`. Recovery never edits the sbatch header: a different walltime, QOS, or resource line is a

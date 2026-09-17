@@ -26,7 +26,8 @@ values, and material the user supplies explicitly. See "Directives are closed" i
    would need rewriting, or nontrivial files, stop as unsupported. Do not offer migration.
 3. Confirm project name, path, one-line description, GitHub remote, dispatch branch, exact Python
    patch, exact uv version, bounded GPU smoke command, and whether evaluations/plots are committed.
-   Ask which single directory name the uv virtual environment should have; suggest `.venv` only as
+   Ask which single directory name the uv virtual environment should have — the hub development
+   environment; waves use lock-keyed environments under `.envs/` instead. Suggest `.venv` only as
    an option, and never infer or silently default the name. Reject project-surface collisions.
 4. Confirm the rig set this project will ever dispatch to, and require an entry in the user
    registry `~/.config/rigsync/machines.toml`
@@ -69,7 +70,8 @@ values, and material the user supplies explicitly. See "Directives are closed" i
 4. Install `.githooks/pre-commit`. It requires a journal update when experiment-relevant files are
    committed; the active layer's mode determines whether the entry is user-approved or delegated.
 5. Create `code/common/run_id.py`, `code/common/status.py`, `code/common/paths.py` (which resolves
-   the repo-relative storage values in `.env` against the project root), and
+   the repo-relative storage values in `.env` against the shared project root, honouring the
+   `RESEARCH_PROJECT_ROOT` a wave exports, and tracked inputs against the running source tree), and
    `code/common/environment_smoke.py`
    (the default `gpu_smoke` target named in `sync.toml`), and copy the canonical
    `assets/environment.py` from the environment-sync skill's own installed directory (the folder
@@ -82,7 +84,10 @@ values, and material the user supplies explicitly. See "Directives are closed" i
    push only when the approved envelope explicitly covers that remote and branch. Never force-push
    or overwrite remote history.
 2. Configure `environment-sync`, run doctor, and require the exact environment plus GPU smoke
-   gate. Manual mode requires its preview approval; auto mode may confirm inside the envelope.
+   gate on the hub for the staged lock (`provision --staged`, then `verify --staged` with the hub
+   lane). Create the hub development environment named in `[environment].name` with the pinned uv
+   (`UV_PROJECT_ENVIRONMENT=<name> uv sync --frozen`); it is the user's, and waves never use it.
+   Manual mode requires its preview approval; auto mode may confirm inside the envelope.
 3. Bring up every intended rig in this order; each step's failure stops the ones after it.
    Manual mode requires preview approval; auto mode may confirm inside the envelope.
    1. Confirm the user registry declares every intended rig, `storage_root` included (admission

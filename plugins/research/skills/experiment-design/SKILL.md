@@ -156,7 +156,9 @@ display-only status contract makes the repository unsupported; do not upgrade it
 ## 4c. Pre-dispatch smoke test (must resolve)
 
 1. Resolve one repeatable hub command that exercises the real entrypoint with the smallest safe
-   workload and cannot collide with a production run_id or final artifact.
+   workload and cannot collide with a production run_id or final artifact. Write its interpreter
+   as the placeholder `<env>/bin/python`, never a literal environment directory: `sweep-dispatch`
+   substitutes the keyed environment of the staged lock.
 2. Resolve its pass criterion: exit zero plus the named lightweight output/assertion that proves
    initialization and one meaningful unit of work completed.
 3. Record both in the experiment's EXPERIMENTS.md section header. `sweep-dispatch` reruns this
@@ -178,7 +180,16 @@ display-only status contract makes the repository unsupported; do not upgrade it
 4. Use project = research project, group = `NNN_experiment`, run name = `run_id_name(...)` (the rendered run_id; flat run_id for legacy pins) as the proposal.
    Manual mode waits for approval; auto mode may adopt or safely refine it inside the envelope.
 5. Online mode on all rigs; `WANDB_API_KEY` from `.env`.
-6. wandb files go under `logs/` — `wandb.init(dir=<project_root>/"logs")` — never the project root.
+6. wandb files go under `logs/` — `wandb.init(dir=project_path("logs"))` — never the project root.
+
+## 5b. Paths in experiment code (canon)
+
+Waves run the code from a detached worktree while storage stays in the shared project root
+(conventions, "Wave isolation"). So every storage location an entrypoint reads or writes —
+`.env`, checkpoints, evaluations, logs, caches, inputs produced by earlier experiments — goes
+through `code/common/paths.py` `project_root()`/`project_path()`, and every tracked input
+(checked-in tables, prompts, fixtures) through `source_path()`. Never derive a storage path from
+`Path(__file__)` or `os.getcwd()`.
 
 ## 6. Wrap up
 

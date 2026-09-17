@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import shlex
@@ -64,6 +65,11 @@ DEPENDENCY_FILE_RE = re.compile(
     r"Pipfile(?:\.lock)?|Dockerfile(?:\..+)?|requirements[^/]*\.txt|"
     r"environment[^/]*\.ya?ml)$"
 )
+WAVES_DIR = ".waves"
+ENVS_DIR = ".envs"
+ENV_KEY_RE = re.compile(r"^[0-9a-f]{16}$")
+ENV_KEY_FILES = ("uv.lock", ".python-version", "pyproject.toml")
+SESSION_WAVE_RE = re.compile(r"_(\d{8}-\d{6})_")
 ALLOWED_IGNORED_PARTS = {
     "__pycache__",
     ".pytest_cache",
@@ -251,8 +257,56 @@ def require_git(config: Config) -> GitSettings:
     return config.git
 
 
-def git_command(machine: Machine, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-    return remote(machine, ["git", "-C", str(machine.repo_path), *args], check=check)
+def git_command(
+    machine: Machine, *args: str, check: bool = True, tree: Path | None = None
+) -> subprocess.CompletedProcess:
+    return remote(machine, ["git", "-C", str(tree or machine.repo_path), *args], check=check)
+
+
+def wave_tree(machine: Machine, wave: str) -> Path:
+    """The detached worktree a wave executes from: `<repo_path>/.waves/<wave_id>`."""
+    return machine.repo_path / WAVES_DIR / wave
+
+
+def env_key(lock: bytes, python_version: bytes, pyproject: bytes) -> str:
+    """Key of a wave environment: the inputs that decide what `uv sync --frozen` installs.
+
+    Two revisions with the same lock, interpreter pin, and uv pin share one environment under
+    `.envs/<key>`; any change to one of them yields a new key and therefore a new environment.
+    """
+    try:
+        parsed = tomllib.loads(pyproject.decode())
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise RigSyncError(f"cannot parse pyproject.toml for the environment key: {exc}") from exc
+    uv_pin = parsed.get("tool", {}).get("uv", {}).get("required-version", "")
+    digest = hashlib.sha256()
+    for label, value in (
+        (b"uv.lock", lock),
+        (b".python-version", python_version.strip()),
+        (b"required-version", str(uv_pin).encode()),
+    ):
+        digest.update(label + b"\0" + str(len(value)).encode() + b"\0" + value)
+    return digest.hexdigest()[:16]
+
+
+def env_key_for_revision(root: Path, revision: str) -> str:
+    files = []
+    for name in ENV_KEY_FILES:
+        result = run(["git", "-C", str(root), "show", f"{revision}:{name}"], check=False)
+        if result.returncode:
+            raise RigSyncError(f"revision {revision} has no {name}; the environment key needs it")
+        files.append(result.stdout)
+    return env_key(*files)
+
+
+def env_key_for_tree(machine: Machine, tree: Path) -> str:
+    files = []
+    for name in ENV_KEY_FILES:
+        result = remote(machine, ["cat", str(tree / name)], check=False)
+        if result.returncode:
+            raise RigSyncError(f"{machine.name}: {tree} has no {name}")
+        files.append(result.stdout)
+    return env_key(*files)
 
 
 def canonical_remote_url(config: Config) -> str:
@@ -265,14 +319,23 @@ def canonical_remote_url(config: Config) -> str:
 
 
 def validate_wave_revision(wave: str, revision: str) -> str:
-    if not WAVE_RE.fullmatch(wave):
-        raise RigSyncError(f"invalid wave id: {wave!r}")
+    validate_wave(wave)
     if not REVISION_RE.fullmatch(revision):
         raise RigSyncError("revision must be a full lowercase 40-character commit SHA")
     return f"wave--{wave}"
 
 
+def validate_wave(wave: str) -> None:
+    if not WAVE_RE.fullmatch(wave):
+        raise RigSyncError(f"invalid wave id: {wave!r}")
+
+
 def verify_remote_revision(config: Config, tag: str, revision: str) -> None:
+    """The remote tag must name `revision`, and the remote branch must contain it.
+
+    The branch may have moved on since dispatch (tracking and journal commits, later waves): a
+    wave's worktree is pinned by its tag, so recovery must still find its revision acceptable.
+    """
     git = require_git(config)
     branch_ref = f"refs/heads/{git.branch}"
     tag_ref = f"refs/tags/{tag}^{{}}"
@@ -297,8 +360,19 @@ def verify_remote_revision(config: Config, tag: str, revision: str) -> None:
         if separator:
             refs[ref] = sha
     problems = []
-    if refs.get(branch_ref) != revision:
-        problems.append(f"{branch_ref}={refs.get(branch_ref, 'missing')}")
+    branch_sha = refs.get(branch_ref)
+    if branch_sha is None:
+        problems.append(f"{branch_ref}=missing")
+    elif branch_sha != revision:
+        contained = run(
+            ["git", "-C", str(config.root), "merge-base", "--is-ancestor", revision, branch_sha],
+            check=False,
+        )
+        if contained.returncode:
+            problems.append(
+                f"{branch_ref}={branch_sha} does not contain {revision} "
+                "(or that commit is unknown on the hub: fetch the branch there first)"
+            )
     if refs.get(tag_ref) != revision:
         problems.append(f"{tag_ref}={refs.get(tag_ref, 'missing')}")
     if problems:
@@ -328,7 +402,9 @@ def ignored_runtime_path(path: str) -> bool:
     )
 
 
-def execution_drift(machine: Machine, pathspecs: list[str]) -> list[str]:
+def execution_drift(
+    machine: Machine, pathspecs: list[str], tree: Path | None = None
+) -> list[str]:
     result = git_command(
         machine,
         "status",
@@ -338,6 +414,7 @@ def execution_drift(machine: Machine, pathspecs: list[str]) -> list[str]:
         "--ignored=matching",
         "--",
         *pathspecs,
+        tree=tree,
     )
     drift: list[str] = []
     entries = [entry for entry in result.stdout.split(b"\0") if entry]
@@ -359,8 +436,23 @@ def execution_drift(machine: Machine, pathspecs: list[str]) -> list[str]:
     return drift
 
 
-def project_activity(config: Config, machine: Machine) -> list[str]:
-    activity: list[str] = []
+UNATTRIBUTED = "?"
+
+
+def wave_activity(config: Config, machine: Machine) -> dict[str, list[str]]:
+    """Active work of this project on `machine`, grouped by wave id.
+
+    Evidence: project tmux sessions, `running` statuses, and — on a Slurm login node — queued or
+    running jobs submitted from this project root. Evidence that names no wave is grouped under
+    `UNATTRIBUTED`; callers must treat it as blocking.
+    """
+    activity: dict[str, list[str]] = {}
+
+    def add(wave: str | None, evidence: str) -> None:
+        activity.setdefault(wave if wave and WAVE_RE.fullmatch(wave) else UNATTRIBUTED, []).append(
+            evidence
+        )
+
     project_prefix = f"{config.root.name}_"
     sessions = remote(
         machine,
@@ -368,11 +460,10 @@ def project_activity(config: Config, machine: Machine) -> list[str]:
         check=False,
     )
     if sessions.returncode == 0:
-        activity.extend(
-            f"tmux:{name}"
-            for name in sessions.stdout.decode(errors="replace").splitlines()
-            if name.startswith(project_prefix)
-        )
+        for name in sessions.stdout.decode(errors="replace").splitlines():
+            if name.startswith(project_prefix):
+                match = SESSION_WAVE_RE.search(name[len(project_prefix):])
+                add(match.group(1) if match else None, f"tmux:{name}")
     elif sessions.returncode != 1:
         stderr = sessions.stderr.decode(errors="replace").strip()
         raise RigSyncError(
@@ -382,36 +473,76 @@ def project_activity(config: Config, machine: Machine) -> list[str]:
     if evaluations:
         status_root = machine.repo_path / evaluations
         exists = remote(machine, ["test", "-d", str(status_root)], check=False)
-        if exists.returncode == 1:
-            return activity
-        if exists.returncode:
+        if exists.returncode not in (0, 1):
             raise RigSyncError(f"{machine.name}: cannot inspect status root {status_root}")
-        running = remote(
-            machine,
-            [
-                "sh",
-                "-c",
-                # `{} \;` (not `{} +`): with `+`, find propagates grep's exit
-                # status, and grep -l exits 1 whenever no file matches, so a rig
-                # holding only done/failed statuses would look like a probe failure.
-                "find \"$1\" -name .status.json -type f -exec "
-                "grep -l '\"state\"[[:space:]]*:[[:space:]]*\"running\"' {} \\; 2>/dev/null",
-                "sh",
-                str(status_root),
-            ],
-            check=False,
+        if exists.returncode == 0:
+            for path, wave in running_statuses(machine, status_root):
+                add(wave, f"status:{path}")
+    if machine.gpus_in_job:
+        queue = remote(
+            machine, ["squeue", "--me", "--noheader", "--format=%i|%j|%Z"], check=False
         )
-        if running.returncode:
-            stderr = running.stderr.decode(errors="replace").strip()
+        if queue.returncode:
+            stderr = queue.stderr.decode(errors="replace").strip()
             raise RigSyncError(
-                f"{machine.name}: cannot inspect running statuses: {stderr or 'find failed'}"
+                f"{machine.name}: cannot inspect the Slurm queue: {stderr or 'squeue failed'}"
             )
-        activity.extend(
-            f"status:{path}"
-            for path in running.stdout.decode(errors="replace").splitlines()
-            if path
-        )
+        # Slurm may report the physical submit directory; accept the declared and resolved forms.
+        roots = {str(machine.repo_path).rstrip("/")}
+        if path_exists(machine, machine.repo_path):
+            roots.add(resolved_dir(machine, machine.repo_path))
+        for line in queue.stdout.decode(errors="replace").splitlines():
+            job_id, _, rest = line.strip().partition("|")
+            name, _, workdir = rest.rpartition("|")
+            if workdir.rstrip("/") not in roots:
+                continue
+            wave, separator, _run = name.partition("__")
+            add(wave if separator else None, f"slurm:{job_id}:{name}")
     return activity
+
+
+def running_statuses(machine: Machine, status_root: Path) -> list[tuple[str, str | None]]:
+    running = remote(
+        machine,
+        [
+            "sh",
+            "-c",
+            # `{} \;` (not `{} +`): with `+`, find propagates grep's exit
+            # status, and grep -l exits 1 whenever no file matches, so a rig
+            # holding only done/failed statuses would look like a probe failure.
+            "find \"$1\" -name .status.json -type f -exec "
+            "grep -l '\"state\"[[:space:]]*:[[:space:]]*\"running\"' {} \\; 2>/dev/null",
+            "sh",
+            str(status_root),
+        ],
+        check=False,
+    )
+    if running.returncode:
+        stderr = running.stderr.decode(errors="replace").strip()
+        raise RigSyncError(
+            f"{machine.name}: cannot inspect running statuses: {stderr or 'find failed'}"
+        )
+    paths = [path for path in running.stdout.decode(errors="replace").splitlines() if path]
+    if not paths:
+        return []
+    waves = remote(
+        machine,
+        ["grep", "-H", "-o", '"wave_id"[[:space:]]*:[[:space:]]*"[^"]*"', *paths],
+        check=False,
+    )
+    by_path: dict[str, str] = {}
+    for line in waves.stdout.decode(errors="replace").splitlines():
+        path, _, match = line.rpartition(':"wave_id"')
+        value = match.rpartition(":")[2].strip().strip('"')
+        if path:
+            by_path.setdefault(path, value)
+    return [(path, by_path.get(path)) for path in paths]
+
+
+def project_activity(config: Config, machine: Machine) -> list[str]:
+    return [
+        evidence for entries in wave_activity(config, machine).values() for evidence in entries
+    ]
 
 
 def git_repo_facts(config: Config, machine: Machine) -> tuple[str, str, str]:
@@ -425,8 +556,8 @@ def git_repo_facts(config: Config, machine: Machine) -> tuple[str, str, str]:
     return head, branch, remote_url
 
 
-def reject_unsupported_git_layout(machine: Machine) -> None:
-    submodules = git_command(machine, "cat-file", "-e", "HEAD:.gitmodules", check=False)
+def reject_unsupported_git_layout(machine: Machine, tree: Path | None = None) -> None:
+    submodules = git_command(machine, "cat-file", "-e", "HEAD:.gitmodules", check=False, tree=tree)
     if submodules.returncode == 0:
         raise RigSyncError(f"{machine.name}: Git submodules are not supported by revision deployment")
     lfs = git_command(
@@ -438,6 +569,7 @@ def reject_unsupported_git_layout(machine: Machine) -> None:
         "--",
         ".gitattributes",
         check=False,
+        tree=tree,
     )
     if lfs.returncode == 0:
         raise RigSyncError(f"{machine.name}: Git LFS needs an explicit checkout policy")
@@ -468,6 +600,40 @@ def reject_unsupported_revision(config: Config, revision: str) -> None:
         raise RigSyncError("approved revision needs an explicit Git LFS checkout policy")
 
 
+def require_wave_isolation_ignores(config: Config) -> None:
+    """The hub must ignore `.waves/` and `.envs/`, or worktrees leak into source listings."""
+    for name in (WAVES_DIR, ENVS_DIR):
+        probe = run(
+            ["git", "-C", str(config.root), "check-ignore", "-q", f"{name}/probe"], check=False
+        )
+        if probe.returncode == 1:
+            raise RigSyncError(
+                f"wave-isolation contract missing: `{name}/` is not ignored by the project .gitignore"
+            )
+        if probe.returncode:
+            raise RigSyncError(f"cannot check whether `{name}/` is ignored")
+
+
+def path_exists(machine: Machine, path: Path) -> bool:
+    result = remote(machine, ["test", "-e", str(path)], check=False)
+    if result.returncode not in (0, 1):
+        raise RigSyncError(f"{machine.name}: cannot inspect {path}")
+    return result.returncode == 0
+
+
+def resolved_dir(machine: Machine, path: Path, relative_to_git: bool = False) -> str:
+    """Physical path of `path`, or of the Git common dir of the worktree at `path`."""
+    script = (
+        'cd "$1" && cd "$(git rev-parse --git-common-dir)" && pwd -P'
+        if relative_to_git
+        else 'cd "$1" && pwd -P'
+    )
+    result = remote(machine, ["sh", "-c", script, "sh", str(path)], check=False)
+    if result.returncode:
+        raise RigSyncError(f"{machine.name}: cannot resolve {path}")
+    return result.stdout.decode(errors="replace").strip()
+
+
 def verify_revision(
     config: Config,
     machines: list[Machine],
@@ -482,28 +648,37 @@ def verify_revision(
     pathspecs = execution_pathspecs(config, revision)
     failures: list[str] = []
     for machine in machines:
+        tree = wave_tree(machine, wave)
         try:
-            head, branch, remote_url = git_repo_facts(config, machine)
-            reject_unsupported_git_layout(machine)
-            tag_result = git_command(machine, "rev-parse", f"refs/tags/{tag}^{{commit}}", check=False)
-            tag_revision = tag_result.stdout.decode(errors="replace").strip()
-            drift = execution_drift(machine, pathspecs)
+            _head, branch, remote_url = git_repo_facts(config, machine)
             problems = []
             if branch != git.branch:
-                problems.append(f"branch={branch or '(detached)'} expected={git.branch}")
+                problems.append(f"main checkout branch={branch or '(detached)'} expected={git.branch}")
             if remote_url != expected_url:
                 problems.append(f"remote={remote_url!r} expected={expected_url!r}")
-            if head != revision:
-                problems.append(f"HEAD={head} expected={revision}")
-            if tag_result.returncode or tag_revision != revision:
-                problems.append(f"tag {tag} does not resolve to {revision}")
-            if drift:
-                problems.append("execution tree dirty: " + ", ".join(drift[:8]))
+            if not path_exists(machine, tree):
+                problems.append(f"missing wave worktree {tree}")
+            else:
+                common = resolved_dir(machine, tree, relative_to_git=True)
+                if common != resolved_dir(machine, machine.repo_path / ".git"):
+                    problems.append(f"{tree} is not a worktree of {machine.repo_path}")
+                reject_unsupported_git_layout(machine, tree)
+                head = git_command(machine, "rev-parse", "HEAD", tree=tree).stdout.decode().strip()
+                if head != revision:
+                    problems.append(f"worktree HEAD={head} expected={revision}")
+                tag_result = git_command(
+                    machine, "rev-parse", f"refs/tags/{tag}^{{commit}}", check=False
+                )
+                if tag_result.returncode or tag_result.stdout.decode().strip() != revision:
+                    problems.append(f"tag {tag} does not resolve to {revision}")
+                drift = execution_drift(machine, pathspecs, tree)
+                if drift:
+                    problems.append("execution tree dirty: " + ", ".join(drift[:8]))
             if problems:
                 failures.append(f"{machine.name}: " + "; ".join(problems))
                 print(f"FAIL {machine.name} revision: " + "; ".join(problems))
             else:
-                print(f"OK {machine.name} revision: {revision} ({tag})")
+                print(f"OK {machine.name} revision: {revision} ({tag}) at {tree}")
         except RigSyncError as exc:
             failures.append(str(exc))
             print(f"FAIL {machine.name} revision: {exc}")
@@ -519,67 +694,158 @@ def deploy_revision(
     dry_run: bool,
     confirmed: bool,
 ) -> None:
+    """Materialize `wave--<wave>` as the detached worktree `.waves/<wave>` on every machine.
+
+    The main checkout is never moved, so waves of other revisions keep running untouched. An
+    existing worktree is only verified, never repaired; a missing one (first dispatch, or a
+    pruned wave being recovered) is created.
+    """
     require_confirmation(dry_run, confirmed)
     tag = validate_wave_revision(wave, revision)
     verify_remote_revision(config, tag, revision)
     reject_unsupported_revision(config, revision)
+    require_wave_isolation_ignores(config)
     git = require_git(config)
     expected_url = canonical_remote_url(config)
-    pathspecs = execution_pathspecs(config, revision)
-    preflight: list[tuple[Machine, str]] = []
+    preflight: list[tuple[Machine, bool]] = []
     for machine in machines:
-        head, branch, remote_url = git_repo_facts(config, machine)
-        reject_unsupported_git_layout(machine)
+        _head, branch, remote_url = git_repo_facts(config, machine)
         problems = []
         if branch != git.branch:
-            problems.append(f"branch={branch or '(detached)'} expected={git.branch}")
+            problems.append(f"main checkout branch={branch or '(detached)'} expected={git.branch}")
         if remote_url != expected_url:
             problems.append(f"remote={remote_url!r} expected={expected_url!r}")
-        drift = execution_drift(machine, pathspecs)
-        if drift:
-            problems.append("execution tree dirty: " + ", ".join(drift[:8]))
-        if head != revision:
-            activity = project_activity(config, machine)
-            if activity:
-                problems.append("active work blocks revision change: " + ", ".join(activity[:8]))
         if problems:
             raise RigSyncError(f"{machine.name}: " + "; ".join(problems))
-        preflight.append((machine, head))
+        preflight.append((machine, path_exists(machine, wave_tree(machine, wave))))
 
-    for machine, head in preflight:
-        action = "verify/fetch tag" if head == revision else f"fast-forward {head} -> {revision}"
-        print(f"[{'dry-run' if dry_run else 'deploy-revision'}] {machine.name}: {action} ({tag})")
+    for machine, exists in preflight:
+        tree = wave_tree(machine, wave)
+        action = "verify existing worktree" if exists else f"add worktree at {revision}"
+        print(f"[{'dry-run' if dry_run else 'deploy-revision'}] {machine.name}: {action} {tree} ({tag})")
         if dry_run:
             continue
-        if machine.local and machine.repo_path.resolve() == config.root.resolve():
-            continue
-        git_command(machine, "fetch", "--no-tags", git.remote, git.branch)
-        fetched = git_command(machine, "rev-parse", "FETCH_HEAD").stdout.decode().strip()
-        if fetched != revision:
-            raise RigSyncError(
-                f"{machine.name}: fetched {git.remote}/{git.branch} at {fetched}, expected {revision}"
+        hub = machine.local and machine.repo_path.resolve() == config.root.resolve()
+        if not hub:
+            git_command(
+                machine,
+                "fetch",
+                "--no-tags",
+                git.remote,
+                f"refs/tags/{tag}:refs/tags/{tag}",
             )
-        git_command(
-            machine,
-            "fetch",
-            "--no-tags",
-            git.remote,
-            f"refs/tags/{tag}:refs/tags/{tag}",
-        )
-        tag_revision = git_command(machine, "rev-parse", f"refs/tags/{tag}^{{commit}}").stdout.decode().strip()
+        tag_revision = git_command(
+            machine, "rev-parse", f"refs/tags/{tag}^{{commit}}"
+        ).stdout.decode().strip()
         if tag_revision != revision:
-            raise RigSyncError(f"{machine.name}: fetched tag {tag} resolves to {tag_revision}")
-        if head != revision:
-            fast_forward = git_command(
-                machine, "merge-base", "--is-ancestor", head, revision, check=False
-            )
-            if fast_forward.returncode:
-                raise RigSyncError(
-                    f"{machine.name}: {head} cannot fast-forward to approved revision {revision}"
-                )
-            git_command(machine, "merge", "--ff-only", revision)
+            raise RigSyncError(f"{machine.name}: tag {tag} resolves to {tag_revision}")
+        if not exists:
+            git_command(machine, "worktree", "add", "--detach", str(tree), revision)
     if not dry_run:
         verify_revision(config, machines, wave, revision)
+
+
+def worktrees(machine: Machine) -> dict[str, Path]:
+    """Wave worktrees registered in this machine's repository, by wave id."""
+    listing = git_command(machine, "worktree", "list", "--porcelain")
+    base = machine.repo_path / WAVES_DIR
+    found: dict[str, Path] = {}
+    for line in listing.stdout.decode(errors="replace").splitlines():
+        if not line.startswith("worktree "):
+            continue
+        path = Path(line[len("worktree "):])
+        if path.parent == base and WAVE_RE.fullmatch(path.name):
+            found[path.name] = path
+    return found
+
+
+def environments(machine: Machine) -> list[str]:
+    base = machine.repo_path / ENVS_DIR
+    if not path_exists(machine, base):
+        return []
+    listing = remote(
+        machine, ["find", str(base), "-mindepth", "1", "-maxdepth", "1", "-type", "d"]
+    )
+    return sorted(
+        PurePosixPath(line).name
+        for line in listing.stdout.decode(errors="replace").splitlines()
+        if line
+    )
+
+
+def activity(config: Config, machines: list[Machine]) -> None:
+    for machine in machines:
+        active = wave_activity(config, machine)
+        for wave, evidence in sorted(active.items()):
+            print(f"ACTIVE {machine.name} {wave}: " + ", ".join(evidence[:8]))
+        trees = worktrees(machine)
+        print(f"WAVES {machine.name}: " + (" ".join(sorted(trees)) or "(none)"))
+        print(f"ENVS {machine.name}: " + (" ".join(environments(machine)) or "(none)"))
+
+
+def prune(
+    config: Config,
+    machines: list[Machine],
+    waves: list[str],
+    dry_run: bool,
+    confirmed: bool,
+) -> None:
+    """Remove the named terminal waves' worktrees, then environments no worktree still uses."""
+    require_confirmation(dry_run, confirmed)
+    if not waves:
+        raise RigSyncError("prune needs at least one wave id")
+    for wave in waves:
+        validate_wave(wave)
+    plans = []
+    for machine in machines:
+        active = wave_activity(config, machine)
+        if UNATTRIBUTED in active:
+            raise RigSyncError(
+                f"{machine.name}: activity without a wave id blocks pruning: "
+                + ", ".join(active[UNATTRIBUTED][:8])
+            )
+        busy = sorted(set(waves) & set(active))
+        if busy:
+            raise RigSyncError(f"{machine.name}: active wave(s) cannot be pruned: {', '.join(busy)}")
+        trees = worktrees(machine)
+        doomed = {wave: trees[wave] for wave in waves if wave in trees}
+        for wave, tree in doomed.items():
+            dirty = git_command(
+                machine, "status", "--porcelain", "--untracked-files=all", tree=tree
+            ).stdout.decode(errors="replace").strip()
+            if dirty:
+                raise RigSyncError(f"{machine.name}: worktree {tree} is dirty; not pruning it")
+        kept = {env_key_for_tree(machine, tree) for wave, tree in trees.items() if wave not in doomed}
+        unused = []
+        for name in environments(machine):
+            if not ENV_KEY_RE.fullmatch(name):
+                print(f"[prune] {machine.name}: leaving unmanaged {ENVS_DIR}/{name}")
+            elif name not in kept:
+                unused.append(name)
+        plans.append((machine, doomed, unused))
+
+    for machine, doomed, unused in plans:
+        label = "dry-run" if dry_run else "prune"
+        absent = sorted(set(waves) - set(doomed))
+        if absent:
+            print(f"[{label}] {machine.name}: no worktree for {', '.join(absent)}")
+        for wave, tree in sorted(doomed.items()):
+            print(f"[{label}] {machine.name}: remove worktree {tree}")
+            if not dry_run:
+                git_command(machine, "worktree", "remove", str(tree))
+        for name in unused:
+            path = machine.repo_path / ENVS_DIR / name
+            print(f"[{label}] {machine.name}: remove unused environment {path}")
+            if not dry_run:
+                remove_environment(machine, path)
+        if not dry_run:
+            git_command(machine, "worktree", "prune")
+
+
+def remove_environment(machine: Machine, path: Path) -> None:
+    if path.parent != machine.repo_path / ENVS_DIR or not ENV_KEY_RE.fullmatch(path.name):
+        raise RigSyncError(f"{machine.name}: refusing to remove unexpected path {path}")
+    remote(machine, ["rm", "-rf", "--", str(path)])
 
 
 def source_manifest(root: Path) -> list[str]:
@@ -1298,6 +1564,15 @@ def push_env(
     run(flags + [str(source), destination], show=True)
 
 
+MIN_GIT = (2, 17)
+
+
+def worktree_capable(version_text: str) -> bool:
+    """`git worktree remove`, which pruning relies on, arrived in Git 2.17."""
+    match = re.search(r"(\d+)\.(\d+)", version_text)
+    return bool(match) and (int(match.group(1)), int(match.group(2))) >= MIN_GIT
+
+
 def doctor(config: Config, machines: list[Machine]) -> None:
     failures = 0
     for binary in ("rsync", "ssh", "git"):
@@ -1351,6 +1626,14 @@ def doctor(config: Config, machines: list[Machine]) -> None:
                     f"branch={branch or '(detached)'} remote={remote_url}"
                 )
                 failures += not identity_ok
+                version = remote(machine, ["git", "--version"], check=False)
+                version_ok = worktree_capable(version.stdout.decode(errors="replace"))
+                print(
+                    f"{'OK' if version_ok else 'FAIL'} {machine.name} Git worktrees: "
+                    f"{version.stdout.decode(errors='replace').strip() or 'unknown version'}"
+                    + ("" if version_ok else f" (need >= {'.'.join(map(str, MIN_GIT))})")
+                )
+                failures += not version_ok
                 auth = remote(
                     machine,
                     [
@@ -1418,6 +1701,13 @@ def build_parser() -> argparse.ArgumentParser:
     verify_p.add_argument("--revision", required=True)
     verify_p.add_argument("--branch", required=True)
     verify_p.add_argument("--machines", required=True)
+    activity_p = sub.add_parser("activity")
+    activity_p.add_argument("--machines", required=True)
+    prune_p = sub.add_parser("prune")
+    prune_p.add_argument("--machines", required=True)
+    prune_p.add_argument("--waves", required=True)
+    prune_p.add_argument("--dry-run", action="store_true")
+    prune_p.add_argument("--confirm", action="store_true")
     prepare_p = sub.add_parser("prepare")
     prepare_p.add_argument("--machine", required=True)
     prepare_p.add_argument("--dry-run", action="store_true")
@@ -1483,6 +1773,17 @@ def main(argv: list[str] | None = None) -> int:
                 )
             else:
                 verify_revision(config, machines, args.wave, args.revision)
+        elif args.command == "activity":
+            activity(config, selected_machines(config, args.machines))
+        elif args.command == "prune":
+            require_git(config)
+            prune(
+                config,
+                selected_machines(config, args.machines),
+                [part for part in args.waves.split(",") if part],
+                args.dry_run,
+                args.confirm,
+            )
         elif args.command == "prepare":
             if args.machine not in config.machines:
                 raise RigSyncError(f"unknown machine: {args.machine}")
