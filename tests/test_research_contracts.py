@@ -70,7 +70,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "7.0.0")
+        self.assertEqual(manifest["version"], "7.1.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -1354,6 +1354,33 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("Ask which single directory name", skill)
         self.assertIn('name = "{{ENVIRONMENT_NAME}}"', templates)
         self.assertIn("{{ENVIRONMENT_NAME}}/", templates)
+
+    def test_a_rig_may_declare_several_storage_roots(self) -> None:
+        """One root per machine forced every project onto one disk, full or not.
+
+        A project's volume is the declared root containing its resolved
+        repo_path; the single-root form must keep working, and an unmounted
+        disk's empty mount point must not pass for the volume.
+        """
+        rig_root = ROOT / "plugins/research/skills/rig-sync"
+        rig_config = (rig_root / "references/configuration.md").read_text()
+        rig_skill = (rig_root / "SKILL.md").read_text()
+        conventions = (
+            ROOT / "plugins/research/skills/research-project-init/references/conventions.md"
+        ).read_text()
+
+        for token in (
+            "storage_roots = [",
+            '`storage_root = "..."` is the single-root form, still accepted',
+            "{ path, quota_fs, min_free_gb, system_disk }",
+            "the declared root containing its resolved\n`repo_path`",
+            "filesystem is the one mounted at `/`",
+            "Roots must not repeat or nest",
+        ):
+            self.assertIn(token, rig_config, token)
+        self.assertIn("never add a root to the registry", rig_skill)
+        self.assertIn("declared, never guessed", conventions)
+        self.assertNotIn("declared, never inferred", conventions + rig_skill)
 
     def test_project_init_bootstraps_the_machine_registry_before_any_rig_write(self) -> None:
         """A scaffold that skips the registry leaves every rig on ~/.cache.

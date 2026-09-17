@@ -7,7 +7,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from unittest import mock
 from contextlib import redirect_stderr, redirect_stdout
 
@@ -276,7 +276,7 @@ class RigSyncTests(unittest.TestCase):
         with mock.patch.object(rigsync, "remote", return_value=reachable), redirect_stdout(stream):
             with self.assertRaisesRegex(rigsync.RigSyncError, "doctor failed"):
                 rigsync.doctor(config, [machine])
-        self.assertIn("FAIL peer storage: no storage_root declared", stream.getvalue())
+        self.assertIn("FAIL peer storage: no storage root declared", stream.getvalue())
 
     def test_write_requires_confirmation_after_dry_run(self) -> None:
         machine = rigsync.Machine("peer", "peer", None, Path("/tmp/peer"), False)
@@ -599,31 +599,31 @@ class StorageCheckTests(unittest.TestCase):
             hostname=None,
             repo_path=Path("/large/projects/thing"),
             local=False,
-            storage_root=Path("/large"),
-            quota_fs="/dev/small",
-            min_free_gb=50.0,
+            storage_roots=(rigsync.StorageRoot(PurePosixPath("/large"), "/dev/small", 50.0),),
         )
         defaults.update(kwargs)
         return rigsync.Machine(**defaults)
 
-    def run_check(self, machine, resolved: str, quota: str | None):
-        """Drive check_storage with canned readlink/quota/df output."""
-        responses = [subprocess.CompletedProcess([], 0, resolved.encode(), b"")]
+    @staticmethod
+    def df(root_row: str, system_row: str = "/dev/system 480000000 80000000 400000000 17% /") -> str:
+        return f"Filesystem 1024-blocks Used Available Capacity Mounted on\n{root_row}\n{system_row}\n"
+
+    LARGE_DF = "/dev/large 3748905484 1233908892 2514996592 33% /large"
+
+    def run_check(self, machine, resolved: str, quota: str | None, df: str | None = None):
+        """Drive check_storage with canned readlink, df, and quota output, in call order."""
+        responses = [
+            subprocess.CompletedProcess([], 0, resolved.encode(), b""),
+            subprocess.CompletedProcess([], 0, (df or self.df(self.LARGE_DF)).encode(), b""),
+        ]
         if quota is None:
             responses.append(subprocess.CompletedProcess([], 1, b"", b"no quota"))
-            responses.append(
-                subprocess.CompletedProcess(
-                    [],
-                    0,
-                    b"Filesystem 1024-blocks Used Available Capacity Mounted\n"
-                    b"/dev/large 3748905484 1233908892 2514996592 33% /large\n",
-                    b"",
-                )
-            )
         else:
             responses.append(subprocess.CompletedProcess([], 0, quota.encode(), b""))
-        with mock.patch.object(rigsync, "remote", side_effect=responses):
-            return rigsync.check_storage(machine)
+        with mock.patch.object(rigsync, "remote", side_effect=responses) as remote_mock:
+            result = rigsync.check_storage(machine)
+        self.remote_calls = [call.args[1] for call in remote_mock.call_args_list]
+        return result
 
     def test_parses_quota_columns_not_df(self) -> None:
         free, allowance = rigsync._parse_quota(self.QUOTA, "/dev/small")
@@ -651,9 +651,9 @@ class StorageCheckTests(unittest.TestCase):
     def test_machines_without_storage_root_fail_rather_than_pass_silently(self) -> None:
         # Returning (0, []) here made doctor report nothing at all about storage on
         # a registry written before the storage fields existed, which reads as a pass.
-        failures, lines = rigsync.check_storage(self.machine(storage_root=None))
+        failures, lines = rigsync.check_storage(self.machine(storage_roots=()))
         self.assertEqual(failures, 1)
-        self.assertTrue(any("no storage_root declared" in line for line in lines))
+        self.assertTrue(any("no storage root declared" in line for line in lines))
         self.assertTrue(all(line.startswith("FAIL") for line in lines))
 
     def test_repo_path_outside_storage_root_fails(self) -> None:
@@ -664,7 +664,7 @@ class StorageCheckTests(unittest.TestCase):
             self.QUOTA,
         )
         self.assertEqual(failures, 1)
-        self.assertTrue(any("outside declared storage_root" in line for line in lines))
+        self.assertTrue(any("outside every declared storage root (/large)" in line for line in lines))
 
     def test_symlink_into_storage_root_passes(self) -> None:
         # ~/projects -> /large/projects must not be reported as misplaced.
@@ -672,24 +672,179 @@ class StorageCheckTests(unittest.TestCase):
             self.machine(repo_path=Path("/home/someone/projects/thing")),
             "/large/projects/thing\n/large\n",
             self.QUOTA,
+            df=self.df("/dev/small 3748905484 1233908892 2514996592 33% /large"),
         )
         self.assertEqual(failures, 0)
         self.assertTrue(any("storage root" in line and line.startswith("OK") for line in lines))
 
     def test_headroom_below_floor_fails(self) -> None:
         failures, lines = self.run_check(
-            self.machine(min_free_gb=99.0), "/large/projects/thing\n/large\n", self.QUOTA
+            self.machine(storage_roots=(rigsync.StorageRoot(PurePosixPath("/large"), "/dev/small", 99.0),)),
+            "/large/projects/thing\n/large\n",
+            self.QUOTA,
+            df=self.df("/dev/small 3748905484 1233908892 2514996592 33% /large"),
         )
         self.assertEqual(failures, 1)
         self.assertTrue(any(line.startswith("FAIL") and "storage free" in line for line in lines))
 
     def test_falls_back_to_df_when_quota_unavailable(self) -> None:
         failures, lines = self.run_check(
-            self.machine(), "/large/projects/thing\n/large\n", None
+            self.machine(), "/large/projects/thing\n/large\n", None,
+            df=self.df("/dev/small 3748905484 1233908892 2514996592 33% /large"),
         )
         self.assertEqual(failures, 0)
-        self.assertTrue(any("via df(" in line for line in lines))
+        self.assertTrue(any("via df(/large)" in line for line in lines))
         self.assertTrue(any(line.startswith("WARN") for line in lines))
+
+    def three_roots(self, **second) -> rigsync.Machine:
+        return self.machine(
+            storage_roots=(
+                rigsync.StorageRoot(PurePosixPath("/mnt/full"), None, 10.0),
+                rigsync.StorageRoot(PurePosixPath("/mnt/fresh"), **{"min_free_gb": 100.0, **second}),
+                rigsync.StorageRoot(PurePosixPath("/mnt/fast")),
+            ),
+            repo_path=Path("/mnt/fresh/projects/thing"),
+        )
+
+    def test_repo_on_the_second_of_three_roots_is_measured_on_that_root(self) -> None:
+        failures, lines = self.run_check(
+            self.three_roots(),
+            "/mnt/fresh/projects/thing\n/mnt/full\n/mnt/fresh\n/mnt/fast\n",
+            None,
+            df=self.df("/dev/sdb1 1900000000 100000 1899900000 1% /mnt/fresh"),
+        )
+        self.assertEqual(failures, 0, lines)
+        self.assertIn("OK peer storage root: /mnt/fresh/projects/thing on /mnt/fresh", lines)
+        self.assertIn("OK peer storage volume: /mnt/fresh on /dev/sdb1 at /mnt/fresh", lines)
+        # The chosen root's floor and df, never another root's.
+        self.assertTrue(any("via df(/mnt/fresh) (floor 100.0G)" in line for line in lines))
+        self.assertEqual(self.remote_calls[1], ["df", "-P", "/mnt/fresh", "/"])
+        # No quota_fs on that root, so quota is never asked.
+        self.assertEqual(len(self.remote_calls), 2)
+
+    def test_repo_under_no_declared_root_lists_them_all(self) -> None:
+        failures, lines = self.run_check(
+            self.three_roots(),
+            "/home/me/thing\n/mnt/full\n/mnt/fresh\n/mnt/fast\n",
+            None,
+        )
+        self.assertEqual(failures, 1)
+        self.assertTrue(
+            any("outside every declared storage root (/mnt/full, /mnt/fresh, /mnt/fast)" in line for line in lines)
+        )
+
+    def test_unresolvable_root_fails(self) -> None:
+        failures, lines = self.run_check(self.three_roots(), "/mnt/fresh/projects/thing\n/mnt/full\n", None)
+        self.assertEqual(failures, 1)
+        self.assertTrue(any("cannot resolve" in line for line in lines))
+
+    def test_root_on_the_system_filesystem_fails_as_unmounted(self) -> None:
+        # An unmounted disk leaves its mount point on the system disk; paths still match.
+        system = "/dev/sda2 460000000 75000000 360000000 18% /"
+        failures, lines = self.run_check(
+            self.three_roots(),
+            "/mnt/fresh/projects/thing\n/mnt/full\n/mnt/fresh\n/mnt/fast\n",
+            None,
+            df=self.df(system, system),
+        )
+        self.assertEqual(failures, 1, lines)
+        self.assertTrue(any("is on the system filesystem" in line and line.startswith("FAIL") for line in lines))
+
+    def test_system_disk_opt_out_accepts_a_root_on_the_system_filesystem(self) -> None:
+        system = "/dev/sda2 460000000 75000000 360000000 18% /"
+        failures, lines = self.run_check(
+            self.three_roots(system_disk=True),
+            "/mnt/fresh/projects/thing\n/mnt/full\n/mnt/fresh\n/mnt/fast\n",
+            None,
+            df=self.df(system, system),
+        )
+        self.assertEqual(failures, 0, lines)
+
+    def test_quota_fs_that_does_not_back_the_root_fails(self) -> None:
+        failures, lines = self.run_check(
+            self.machine(), "/large/projects/thing\n/large\n", self.QUOTA
+        )
+        # df says /dev/large backs /large, but the root declares /dev/small.
+        self.assertEqual(failures, 1)
+        self.assertTrue(
+            any("backed by /dev/large, not the declared quota_fs /dev/small" in line for line in lines)
+        )
+
+
+class StorageRootRegistryTests(unittest.TestCase):
+    def load(self, storage: str) -> rigsync.Machine:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            write(
+                root / "sync.toml",
+                """
+                version = 1
+                [artifacts.evaluations]
+                path = "evaluations"
+                [machines.peer]
+                repo_path = "/mnt/a/project"
+                """,
+            )
+            (root / "machines.toml").write_text('[machines.peer]\nssh = "peer"\n' + storage + "\n")
+            return rigsync.load_config(root, root / "sync.toml", root / "machines.toml").machines["peer"]
+
+    def test_legacy_single_root_carries_the_machine_level_rules(self) -> None:
+        machine = self.load('storage_root = "/data/me"\nquota_fs = "/dev/q"\nmin_free_gb = 50')
+        self.assertEqual(
+            machine.storage_roots, (rigsync.StorageRoot(PurePosixPath("/data/me"), "/dev/q", 50.0),)
+        )
+
+    def test_string_and_table_entries_with_per_root_rules(self) -> None:
+        machine = self.load(
+            "min_free_gb = 30\n"
+            'storage_roots = ["/mnt/a", { path = "/mnt/b", quota_fs = "/dev/b", min_free_gb = 90 },'
+            ' { path = "/srv", system_disk = true }]'
+        )
+        self.assertEqual(
+            machine.storage_roots,
+            (
+                rigsync.StorageRoot(PurePosixPath("/mnt/a"), None, 30.0),
+                rigsync.StorageRoot(PurePosixPath("/mnt/b"), "/dev/b", 90.0),
+                rigsync.StorageRoot(PurePosixPath("/srv"), None, 30.0, True),
+            ),
+        )
+
+    def test_no_root_declared_loads_as_empty(self) -> None:
+        self.assertEqual(self.load("").storage_roots, ())
+
+    def test_invalid_declarations_stop_the_load(self) -> None:
+        cases = {
+            'storage_root = "/mnt/a"\nstorage_roots = ["/mnt/b"]': "not both",
+            "storage_roots = []": "non-empty array",
+            'storage_roots = "/mnt/a"': "non-empty array",
+            'storage_roots = ["/mnt/a", "/mnt/a/inner"]': "nests /mnt/a/inner inside /mnt/a",
+            'storage_roots = ["/mnt/a", "/mnt/a/"]': "lists /mnt/a twice",
+            'storage_roots = ["mnt/a"]': "absolute",
+            'storage_roots = ["/mnt/a/../b"]': "absolute",
+            'storage_roots = [{ path = "/mnt/a", size = 1 }]': "unknown key",
+            'storage_roots = [{ quota_fs = "/dev/a" }]': "path must be a non-empty string",
+            'storage_roots = [{ path = "/mnt/a", system_disk = "yes" }]': "true or false",
+            'storage_roots = [{ path = "/mnt/a", min_free_gb = -1 }]': "must not be negative",
+            'storage_roots = [1]': "path string or a table",
+            'quota_fs = "/dev/a"\nstorage_roots = ["/mnt/a"]': "ambiguous",
+            'storage_root = "relative"': "absolute",
+        }
+        for storage, message in cases.items():
+            with self.subTest(storage=storage):
+                with self.assertRaisesRegex(rigsync.RigSyncError, message):
+                    self.load(storage)
+
+    def test_root_for_picks_the_containing_root_only(self) -> None:
+        roots = (
+            rigsync.StorageRoot(PurePosixPath("/mnt/a")),
+            rigsync.StorageRoot(PurePosixPath("/mnt/ab")),
+        )
+        self.assertEqual(rigsync.root_for(roots, PurePosixPath("/mnt/ab/x")), roots[1])
+        self.assertEqual(rigsync.root_for(roots, PurePosixPath("/mnt/a")), roots[0])
+        self.assertIsNone(rigsync.root_for(roots, PurePosixPath("/mnt/abc")))
+        # Resolved roots that happen to nest: the deepest one wins.
+        real = [PurePosixPath("/disk"), PurePosixPath("/disk/b")]
+        self.assertEqual(rigsync.root_for(roots, PurePosixPath("/disk/b/x"), real), roots[1])
 
 
 class MachineEnvTests(unittest.TestCase):
@@ -705,7 +860,7 @@ class MachineEnvTests(unittest.TestCase):
             hostname=None,
             repo_path=Path("/large/projects/thing"),
             local=False,
-            storage_root=Path("/large"),
+            storage_roots=(rigsync.StorageRoot(PurePosixPath("/large")),),
             caches=self.CACHES if caches is None else caches,
         )
 
@@ -832,7 +987,7 @@ class MachineEnvTests(unittest.TestCase):
             self.assertEqual(rigsync.check_project_env(self.machine(caches=())), (0, []))
 
     def declared(
-        self, root: Path, repo_path: str, storage_root: str | None
+        self, root: Path, repo_path: str, storage_root: str | None, roots: str = ""
     ) -> rigsync.Config:
         # storage_root=None reproduces a registry written before the storage fields
         # were reintroduced: host identity only.
@@ -860,6 +1015,7 @@ class MachineEnvTests(unittest.TestCase):
             f"""
             [machines.peer]
             ssh = "peer"{storage}
+            {roots}
             [machines.unused-rig]
             ssh = "unused-rig"
             """,
@@ -911,7 +1067,7 @@ class MachineEnvTests(unittest.TestCase):
                     rigsync.check_paths(config, root / "sync.toml", root / "machines.toml")
             output = stream.getvalue()
             self.assertIn("FAIL peer path", output)
-            self.assertIn("no storage_root declared", output)
+            self.assertIn("no storage root declared", output)
             self.assertNotIn("SKIP", output)
 
     def test_check_paths_exits_nonzero_without_a_storage_root(self) -> None:
@@ -945,6 +1101,63 @@ class MachineEnvTests(unittest.TestCase):
         self.assertIn("QUOTA_FS=/dev/sdb1\n", printed)
         self.assertIn("MIN_FREE_GB=50\n", printed)
         self.assertIn(f"MIN_FREE_KIB={50 * 1024 * 1024}\n", printed)
+
+    def test_check_paths_accepts_a_repo_path_under_any_declared_root(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = self.declared(
+                root, "/mnt/fresh/projects/demo", None, roots='storage_roots = ["/mnt/full", "/mnt/fresh"]'
+            )
+            stream = io.StringIO()
+            with redirect_stdout(stream):
+                rigsync.check_paths(config, root / "sync.toml", root / "machines.toml")
+            self.assertIn("OK peer path: /mnt/fresh/projects/demo under /mnt/fresh", stream.getvalue())
+
+    def test_check_paths_lists_every_root_when_none_contains_the_repo(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = self.declared(
+                root, "/home/me/demo", None, roots='storage_roots = ["/mnt/full", "/mnt/fresh"]'
+            )
+            stream = io.StringIO()
+            with redirect_stdout(stream):
+                with self.assertRaisesRegex(rigsync.RigSyncError, "check-paths failed"):
+                    rigsync.check_paths(config, root / "sync.toml", root / "machines.toml")
+            self.assertIn(
+                "not under any declared storage root (/mnt/full, /mnt/fresh)", stream.getvalue()
+            )
+
+    def test_storage_env_reports_the_rules_of_the_root_the_repo_resolves_to(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = self.declared(
+                root,
+                "/home/me/demo",
+                None,
+                roots=(
+                    'storage_roots = [{ path = "/mnt/full", quota_fs = "/dev/sda1" },\n'
+                    '                 { path = "/mnt/fresh", quota_fs = "/dev/sdb1", min_free_gb = 80 }]'
+                ),
+            )
+            machine = config.machines["peer"]
+            # ~/demo is a symlink onto the second volume; only resolving says so.
+            resolved = subprocess.CompletedProcess([], 0, b"/mnt/fresh/demo\n/mnt/full\n/mnt/fresh\n", b"")
+            stream = io.StringIO()
+            with mock.patch.object(rigsync, "remote", return_value=resolved), redirect_stdout(stream):
+                rigsync.print_storage_env(machine)
+            self.assertIn("QUOTA_FS=/dev/sdb1\n", stream.getvalue())
+            self.assertIn("MIN_FREE_GB=80\n", stream.getvalue())
+
+    def test_storage_env_refuses_a_repo_outside_every_root(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = self.declared(
+                root, "/home/me/demo", None, roots='storage_roots = ["/mnt/full", "/mnt/fresh"]'
+            )
+            resolved = subprocess.CompletedProcess([], 0, b"/home/me/demo\n/mnt/full\n/mnt/fresh\n", b"")
+            with mock.patch.object(rigsync, "remote", return_value=resolved):
+                with self.assertRaisesRegex(rigsync.RigSyncError, "outside every declared storage root"):
+                    rigsync.print_storage_env(config.machines["peer"])
 
     def test_storage_env_falls_back_to_the_default_floor(self) -> None:
         machine = rigsync.Machine("peer", "peer", None, Path("/large/p"), False)

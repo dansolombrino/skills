@@ -32,7 +32,8 @@ values, and material the user supplies explicitly. See "Directives are closed" i
 4. Confirm the rig set this project will ever dispatch to, and require an entry in the user
    registry `~/.config/rigsync/machines.toml`
    (`rig-sync` → `references/configuration.md`) for each one before scaffolding: `ssh`, `hostname`,
-   `storage_root`, plus `quota_fs`/`min_free_gb` on a quota'd rig and `[machines.<rig>.caches]`
+   its storage roots (`storage_roots`, or the single-root `storage_root`), plus
+   `quota_fs`/`min_free_gb` on a quota'd rig and `[machines.<rig>.caches]`
    wherever the rig owns its shared caches. Read the entry and confirm those fields are actually
    present; an entry carrying only `ssh` is not admission, because a registry that never declares a
    volume leaves the storage checks with nothing to measure against. The registry is written once
@@ -90,15 +91,15 @@ values, and material the user supplies explicitly. See "Directives are closed" i
    Manual mode requires its preview approval; auto mode may confirm inside the envelope.
 3. Bring up every intended rig in this order; each step's failure stops the ones after it.
    Manual mode requires preview approval; auto mode may confirm inside the envelope.
-   1. Confirm the user registry declares every intended rig, `storage_root` included (admission
+   1. Confirm the user registry declares every intended rig, storage roots included (admission
       above). A rig with no entry cannot be declared in `sync.toml` at all, and one with no
-      `storage_root` fails the path gate below.
-   2. Write `sync.toml` with one hand-supplied absolute `repo_path` per rig, each on that rig's
-      declared `storage_root`. Declare every rig the project will dispatch to, not only the hub —
+      storage root fails the path gate below.
+   2. Write `sync.toml` with one hand-supplied absolute `repo_path` per rig, each under one of
+      that rig's declared storage roots. Declare every rig the project will dispatch to, not only the hub —
       adding one later is a hand edit that no gate prompts for.
    3. Run `rig-sync check-paths` and require it to pass. This is the only check that catches a
       `repo_path` off the rig's large volume *before* something is cloned into it. It fails, rather
-      than skipping, on a rig whose registry entry declares no `storage_root`.
+      than skipping, on a rig whose registry entry declares no storage root.
    4. Run `rig-sync provision-env --dry-run` then `--confirm` for each rig that declares caches.
       Without this a rig has no `HF_HOME`/`UV_CACHE_DIR` and falls back to `~/.cache` — the small
       quota'd volume on a shared machine. It edits shell startup files, so it is a protected write;

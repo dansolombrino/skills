@@ -81,7 +81,7 @@ a uv cache is routinely one of the largest directories on a research rig.
 
 `.env` is the other half of that split, and it holds no absolute path at all: project-scoped
 storage is declared relative to the project root and resolved by `code/common/paths.py`. Since
-`doctor` already requires each rig's `repo_path` to sit on that rig's `storage_root`, relative
+`doctor` already requires each rig's `repo_path` to sit under one of that rig's storage roots, relative
 paths land on the large volume everywhere without the file naming a mount point. That is what
 makes `.env` rig-independent and copyable to a peer with `rigsync push-env`.
 

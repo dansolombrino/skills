@@ -496,7 +496,7 @@ and no reboot to detect. A **job** there is one Slurm allocation hosting one run
 12-hour certificate the agent cannot issue.
 
 The storage column is a property of the rig, not of a project. Its concrete values — which volume
-is the large one, where the storage root is, where the shared caches sit — live in the user's
+are the large ones, where the storage roots are, where the shared caches sit — live in the user's
 machine registry (`rig-sync` → `references/configuration.md`), never in a skill or a committed
 project file.
 
@@ -545,10 +545,13 @@ A shared machine shares its **disk** the same way it shares its cards, and `behe
 **per-user disk quotas** on more than one filesystem. The home volume is the small one; the
 large volume is a separate mount with its own, much larger quota.
 
-A rig's storage root is **declared, never inferred**. The agent never defaults a `repo_path`, a
-cache directory, a `TMPDIR`, or an artifact destination to `$HOME` or `~/.cache` on a quota'd rig.
-Where the large volume is mounted is a fact that belongs in the machine registry; a skill that
-guesses it is wrong on the next rig.
+A rig's storage roots are **declared, never guessed**. A rig may have several; the registry lists
+every volume a project may live on (`storage_roots`, or the single-root `storage_root`), and a
+project's volume is the declared root containing its resolved `repo_path`. The agent never adds a
+root to the registry on its own, and never defaults a `repo_path`, a cache directory, a `TMPDIR`,
+or an artifact destination to `$HOME` or `~/.cache` on a quota'd rig. Where the large volumes are
+mounted is a fact that belongs in the machine registry; a skill that guesses it is wrong on the
+next rig.
 
 **A quota is not free space.** `df` reports the filesystem, not the user's allowance: it can show
 terabytes available on a volume where the next write fails with `Disk quota exceeded`. Checking
@@ -565,7 +568,7 @@ Three consequences worth stating explicitly, because each one has bitten:
   paths that vary per machine do not belong in per-project files.
 - **Project-scoped storage is repo-relative, not absolute.** `.env` declares `storage/cache`, not
   a mount point, and `code/common/paths.py` resolves it against the project root. Since a rig's
-  `repo_path` is already required to sit on its large volume, relative paths inherit that for
+  `repo_path` is already required to sit under one of its storage roots, relative paths inherit that for
   free — and the same `.env` is then correct on every rig, present and future. An absolute
   per-rig path in any per-project file is a defect: right on the machine it was typed on, wrong on
   the next, and repaired by pointing it at `$HOME`.

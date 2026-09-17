@@ -92,7 +92,7 @@ done
 # Omit only on rigs with a single volume and no quotas. A quota is not free space -- df reports the
 # filesystem, not the user's allowance -- so ask quota first and fall back to df only when absent.
 # Both values come from `rig-sync storage-env --machine <rig>`, which reads the machine registry.
-# Never retype them: QUOTA_FS must name the filesystem backing that rig's storage_root, and a
+# Never retype them: QUOTA_FS must name the filesystem backing the project's storage root, and a
 # hand-typed one produces a headroom number for a disk nothing is being written to. MIN_FREE_KIB
 # may be RAISED above the printed floor to cover this wave's checkpoint footprint -- a run writing
 # 350 MB every 30 s eats headroom far faster than the rig-level number suggests -- but never

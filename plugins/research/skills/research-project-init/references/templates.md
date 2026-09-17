@@ -238,8 +238,8 @@ it does not exist is to retarget it at `$HOME`, which on a quota'd rig is the sm
 sequence is exactly how a wave dies mid-checkpoint with `Disk quota exceeded`.
 
 Keep only what is genuinely per-project, and keep project-scoped storage **relative to the project
-root**. `rig-sync doctor` already requires each rig's `repo_path` to resolve under that rig's
-declared `storage_root`, so a relative path lands on the large volume everywhere, without this
+root**. `rig-sync doctor` already requires each rig's `repo_path` to resolve under one of that
+rig's declared storage roots, so a relative path lands on the project's large volume everywhere, without this
 file naming a mount point that is true on exactly one machine.
 
 ```bash
@@ -259,7 +259,7 @@ copies this one file to every peer rather than rendering a different one per mac
 rig later needs no edit here at all.
 
 Do not reach for an absolute path. If a project genuinely needs one that neither the machine
-environment nor the project root provides, derive it from that machine's declared `storage_root`
+environment nor the project root provides, derive it from the project's storage root on that machine
 (`rig-sync` → `references/configuration.md`), accept that the file is now rig-specific and must be
 maintained per rig, and record why in the journal. `doctor` warns on every absolute value here.
 
@@ -427,7 +427,7 @@ Create this from the `rig-sync` skill's configuration reference. The user regist
 here at all.
 
 Declare `[git]` with the approved remote/branch, the standard artifact groups, and one absolute
-`repo_path` per intended rig — each on that rig's declared `storage_root`; do not put SSH aliases,
+`repo_path` per intended rig — each under one of that rig's declared storage roots; do not put SSH aliases,
 ports, users, or keys here. Nothing derives `repo_path`, so declare every rig the project will ever
 dispatch to now: adding one later is a hand edit that no gate asks for. Run `rig-sync check-paths`
 before any remote step — it is the only check that catches a path off the rig's large volume before

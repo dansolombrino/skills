@@ -22,15 +22,34 @@ class RigSyncError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class StorageRoot:
+    """One volume a machine sets aside for project checkouts, with that volume's own rules.
+
+    `quota_fs` names the filesystem whose per-user quota bounds this root, `min_free_gb` is its
+    headroom floor, and `system_disk` opts the root out of the check that it is not the
+    filesystem of `/` -- the check that catches an unmounted disk's empty mount point.
+    """
+
+    path: PurePosixPath
+    quota_fs: str | None = None
+    min_free_gb: float | None = None
+    system_disk: bool = False
+
+    @property
+    def floor_gb(self) -> float:
+        return self.min_free_gb if self.min_free_gb is not None else DEFAULT_MIN_FREE_GB
+
+
+@dataclass(frozen=True)
 class Machine:
     name: str
     ssh: str
     hostname: str | None
     repo_path: Path
     local: bool
-    storage_root: Path | None = None
-    quota_fs: str | None = None
-    min_free_gb: float | None = None
+    # Every volume this machine hosts project checkouts on. A project's root is never declared
+    # per project: it is whichever of these contains its resolved repo_path (`root_for`).
+    storage_roots: tuple[StorageRoot, ...] = ()
     caches: tuple[tuple[str, str], ...] = ()
     # `gpus = "job"` in the registry: the ssh target (a Slurm login node) has no GPU; GPUs exist
     # only inside scheduled jobs. environment-sync skips its GPU probe and refuses lanes there.
@@ -91,6 +110,117 @@ def _load_toml(path: Path) -> dict:
     return value
 
 
+STORAGE_ROOT_KEYS = frozenset({"path", "quota_fs", "min_free_gb", "system_disk"})
+
+
+def _registry_quota_fs(value: object, where: str) -> str | None:
+    if value is not None and (not isinstance(value, str) or not value):
+        raise RigSyncError(f"{where} must be a non-empty string")
+    return value
+
+
+def _registry_floor(value: object, where: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise RigSyncError(f"{where} must be a number")
+    if value < 0:
+        raise RigSyncError(f"{where} must not be negative")
+    return float(value)
+
+
+def _registry_root_path(value: object, where: str) -> PurePosixPath:
+    if not isinstance(value, str) or not value:
+        raise RigSyncError(f"{where} must be a non-empty string")
+    path = PurePosixPath(value)
+    if not path.is_absolute() or ".." in path.parts:
+        raise RigSyncError(f"{where} must be an absolute path without '..'")
+    return path
+
+
+def _parse_storage_roots(entry: dict, where: str) -> tuple[StorageRoot, ...]:
+    """Read a registry entry's storage roots, accepting the single-root legacy form.
+
+    `storage_root = "..."` with machine-level `quota_fs`/`min_free_gb` is one root carrying those
+    rules. `storage_roots` lists several, each a path or a table with its own rules; there a
+    machine-level `min_free_gb` is the default floor, and a machine-level `quota_fs` is refused
+    because it cannot say which root it backs. Roots must not repeat or nest, so a path is
+    contained by at most one of them.
+    """
+    quota_fs = _registry_quota_fs(entry.get("quota_fs"), f"{where}.quota_fs")
+    floor = _registry_floor(entry.get("min_free_gb"), f"{where}.min_free_gb")
+    legacy = entry.get("storage_root")
+    listed = entry.get("storage_roots")
+    if legacy is not None and listed is not None:
+        raise RigSyncError(f"{where}: declare storage_roots or storage_root, not both")
+    if legacy is not None:
+        return (StorageRoot(_registry_root_path(legacy, f"{where}.storage_root"), quota_fs, floor),)
+    if listed is None:
+        return ()
+    if quota_fs is not None:
+        raise RigSyncError(
+            f"{where}.quota_fs is ambiguous next to storage_roots; "
+            "set quota_fs on the root whose filesystem it names"
+        )
+    if not isinstance(listed, list) or not listed:
+        raise RigSyncError(f"{where}.storage_roots must be a non-empty array")
+    roots: list[StorageRoot] = []
+    for index, item in enumerate(listed):
+        item_where = f"{where}.storage_roots[{index}]"
+        if isinstance(item, str):
+            item = {"path": item}
+        if not isinstance(item, dict):
+            raise RigSyncError(f"{item_where} must be a path string or a table")
+        unknown = sorted(set(item) - STORAGE_ROOT_KEYS)
+        if unknown:
+            raise RigSyncError(f"{item_where} has unknown key(s): {', '.join(unknown)}")
+        system_disk = item.get("system_disk", False)
+        if not isinstance(system_disk, bool):
+            raise RigSyncError(f"{item_where}.system_disk must be true or false")
+        root_floor = _registry_floor(item.get("min_free_gb"), f"{item_where}.min_free_gb")
+        roots.append(
+            StorageRoot(
+                _registry_root_path(item.get("path"), f"{item_where}.path"),
+                _registry_quota_fs(item.get("quota_fs"), f"{item_where}.quota_fs"),
+                floor if root_floor is None else root_floor,
+                system_disk,
+            )
+        )
+    for first in roots:
+        for second in roots:
+            if first is second:
+                continue
+            if first.path == second.path:
+                raise RigSyncError(f"{where}.storage_roots lists {first.path} twice")
+            if first.path in second.path.parents:
+                raise RigSyncError(
+                    f"{where}.storage_roots nests {second.path} inside {first.path}; "
+                    "declare only one of them"
+                )
+    return tuple(roots)
+
+
+def root_for(
+    roots: tuple[StorageRoot, ...],
+    path: PurePosixPath,
+    real_roots: list[PurePosixPath] | None = None,
+) -> StorageRoot | None:
+    """The storage root containing `path`, or None.
+
+    This is the one place a project's volume is decided, so every consumer agrees on it.
+    `real_roots`, parallel to `roots`, compares against resolved root paths instead of the
+    declared ones; the deepest match wins should two resolved roots nest.
+    """
+    candidates = real_roots if real_roots is not None else [root.path for root in roots]
+    best: tuple[int, StorageRoot] | None = None
+    for root, candidate in zip(roots, candidates):
+        if path == candidate or candidate in path.parents:
+            depth = len(candidate.parts)
+            if best is None or depth > best[0]:
+                best = (depth, root)
+    return best[1] if best else None
+
+
 def load_config(root: Path, config_path: Path, registry_path: Path) -> Config:
     project = _load_toml(config_path)
     registry = _load_toml(registry_path)
@@ -125,31 +255,7 @@ def load_config(root: Path, config_path: Path, registry_path: Path) -> Config:
         repo_path = Path(raw_repo)
         if not repo_path.is_absolute():
             raise RigSyncError(f"{config_path}: machines.{name}.repo_path must be absolute")
-        raw_storage = registry_entry.get("storage_root")
-        if raw_storage is not None and (not isinstance(raw_storage, str) or not raw_storage):
-            raise RigSyncError(
-                f"{registry_path}: machines.{name}.storage_root must be a non-empty string"
-            )
-        storage_root = Path(raw_storage) if raw_storage is not None else None
-        if storage_root is not None and not storage_root.is_absolute():
-            raise RigSyncError(
-                f"{registry_path}: machines.{name}.storage_root must be absolute"
-            )
-        quota_fs = registry_entry.get("quota_fs")
-        if quota_fs is not None and (not isinstance(quota_fs, str) or not quota_fs):
-            raise RigSyncError(
-                f"{registry_path}: machines.{name}.quota_fs must be a non-empty string"
-            )
-        min_free_gb = registry_entry.get("min_free_gb")
-        if min_free_gb is not None:
-            if isinstance(min_free_gb, bool) or not isinstance(min_free_gb, (int, float)):
-                raise RigSyncError(
-                    f"{registry_path}: machines.{name}.min_free_gb must be a number"
-                )
-            if min_free_gb < 0:
-                raise RigSyncError(
-                    f"{registry_path}: machines.{name}.min_free_gb must not be negative"
-                )
+        storage_roots = _parse_storage_roots(registry_entry, f"{registry_path}: machines.{name}")
         raw_gpus = registry_entry.get("gpus", "ssh")
         if raw_gpus not in GPU_ACCESS_VALUES:
             raise RigSyncError(
@@ -186,9 +292,7 @@ def load_config(root: Path, config_path: Path, registry_path: Path) -> Config:
             hostname,
             repo_path,
             local,
-            storage_root,
-            quota_fs,
-            float(min_free_gb) if min_free_gb is not None else None,
+            storage_roots,
             tuple(sorted(caches)),
             raw_gpus == "job",
             transfer_ssh,
@@ -1341,18 +1445,24 @@ def _parse_quota(text: str, quota_fs: str) -> tuple[int, int] | None:
     return None
 
 
+def _df_rows(text: str) -> list[tuple[str, int, int, str]]:
+    """Return (filesystem, total_kib, free_kib, mount_point) per `df -P` row; [] if unparseable."""
+    rows = []
+    for line in [line for line in text.splitlines() if line.strip()][1:]:
+        fields = line.split()
+        if len(fields) < 6:
+            return []
+        try:
+            rows.append((fields[0], int(fields[1]), int(fields[3]), " ".join(fields[5:])))
+        except ValueError:
+            return []
+    return rows
+
+
 def _parse_df(text: str) -> tuple[int, int] | None:
-    """Return (free_kib, total_kib) from `df -P` output, or None if unparseable."""
-    lines = [line for line in text.splitlines() if line.strip()]
-    if len(lines) < 2:
-        return None
-    fields = lines[-1].split()
-    if len(fields) < 4:
-        return None
-    try:
-        return int(fields[3]), int(fields[1])
-    except ValueError:
-        return None
+    """Return (free_kib, total_kib) of the first `df -P` row, or None if unparseable."""
+    rows = _df_rows(text)
+    return (rows[0][2], rows[0][1]) if rows else None
 
 
 def _remote_stdout(machine: Machine, argv: list[str]) -> str | None:
@@ -1362,46 +1472,79 @@ def _remote_stdout(machine: Machine, argv: list[str]) -> str | None:
     return result.stdout.decode(errors="replace")
 
 
-def check_storage(machine: Machine) -> tuple[int, list[str]]:
-    """Verify repo_path sits on the declared volume and that headroom remains.
+def _resolve_remote_paths(machine: Machine, paths: list[PurePosixPath]) -> list[PurePosixPath] | None:
+    """`readlink -f` every path on the machine in one call; None unless all of them resolve."""
+    script = " && ".join(f"readlink -f {shlex.quote(str(path))}" for path in paths)
+    resolved = _remote_stdout(machine, ["sh", "-c", script])
+    lines = [line.strip() for line in resolved.splitlines() if line.strip()] if resolved else []
+    if len(lines) != len(paths):
+        return None
+    return [PurePosixPath(line) for line in lines]
 
-    Returns (failure_count, lines_to_print). A machine with no storage_root fails
+
+def _declared_roots(machine: Machine) -> str:
+    return ", ".join(str(root.path) for root in machine.storage_roots)
+
+
+def check_storage(machine: Machine) -> tuple[int, list[str]]:
+    """Verify repo_path sits on a declared, mounted volume and that its headroom remains.
+
+    Returns (failure_count, lines_to_print). A machine with no storage roots fails
     rather than being measured against an invented default: silence here reads as
     a pass, and the fallback on a quota'd rig is $HOME -- the small volume.
     """
-    if machine.storage_root is None:
+    if not machine.storage_roots:
         return 1, [
-            f"FAIL {machine.name} storage: no storage_root declared in the registry; "
-            f"nothing to measure repo_path against"
+            f"FAIL {machine.name} storage: no storage root declared in the registry "
+            f"(storage_roots); nothing to measure repo_path against"
         ]
 
     failures = 0
     lines: list[str] = []
 
-    # Resolve both sides: a convenience symlink in $HOME can point at the large
+    # Resolve every side: a convenience symlink in $HOME can point at the large
     # volume, so comparing the declared strings would pass while the declaration
     # is still wrong -- and would break the day that symlink becomes a real dir.
-    resolved = _remote_stdout(
-        machine,
-        [
-            "sh",
-            "-c",
-            f"readlink -f {shlex.quote(str(machine.repo_path))}; "
-            f"readlink -f {shlex.quote(str(machine.storage_root))}",
-        ],
+    resolved = _resolve_remote_paths(
+        machine, [PurePosixPath(machine.repo_path), *(root.path for root in machine.storage_roots)]
     )
-    resolved_lines = resolved.split() if resolved else []
-    if len(resolved_lines) != 2:
-        lines.append(f"FAIL {machine.name} storage: cannot resolve repo_path or storage_root")
+    if resolved is None:
+        lines.append(f"FAIL {machine.name} storage: cannot resolve repo_path or a storage root")
         return failures + 1, lines
-    real_repo, real_root = PurePosixPath(resolved_lines[0]), PurePosixPath(resolved_lines[1])
-    inside = real_repo == real_root or real_root in real_repo.parents
-    if inside:
-        lines.append(f"OK {machine.name} storage root: {real_repo}")
-    else:
+    real_repo, real_roots = resolved[0], resolved[1:]
+    root = root_for(machine.storage_roots, real_repo, real_roots)
+    if root is None:
         lines.append(
             f"FAIL {machine.name} storage root: repo_path resolves to {real_repo}, "
-            f"outside declared storage_root {real_root}"
+            f"outside every declared storage root ({_declared_roots(machine)})"
+        )
+        return failures + 1, lines
+    # Naming the root makes a checkout that moved to another declared volume visible.
+    lines.append(f"OK {machine.name} storage root: {real_repo} on {root.path}")
+
+    # One df answers three questions: which filesystem backs the root, whether that
+    # is the system filesystem, and -- absent a quota -- how much room is left.
+    df_rows = _df_rows(_remote_stdout(machine, ["df", "-P", str(root.path), "/"]) or "")
+    if len(df_rows) != 2:
+        lines.append(f"FAIL {machine.name} storage: cannot read the filesystem of {root.path}")
+        return failures + 1, lines
+    (root_source, root_total, root_free, root_mount), (system_source, *_, system_mount) = df_rows
+
+    # An unmounted disk leaves its mount point behind as an empty directory on the
+    # system disk, where every path check still passes.
+    if (root_source, root_mount) == (system_source, system_mount) and not root.system_disk:
+        lines.append(
+            f"FAIL {machine.name} storage volume: {root.path} is on the system filesystem "
+            f"({root_source} at {root_mount}) -- is its volume mounted?"
+        )
+        failures += 1
+    else:
+        lines.append(f"OK {machine.name} storage volume: {root.path} on {root_source} at {root_mount}")
+
+    if root.quota_fs is not None and root_source != root.quota_fs:
+        lines.append(
+            f"FAIL {machine.name} storage quota_fs: {root.path} is backed by {root_source}, "
+            f"not the declared quota_fs {root.quota_fs}"
         )
         failures += 1
 
@@ -1409,29 +1552,22 @@ def check_storage(machine: Machine) -> tuple[int, list[str]]:
     # allowance, and can show terabytes free where the next write fails with
     # "Disk quota exceeded". Ask the quota system first when one is declared.
     measure, source = None, ""
-    if machine.quota_fs is not None:
+    if root.quota_fs is not None:
         quota_text = _remote_stdout(machine, ["quota", "-w"])
         if quota_text is not None:
-            measure = _parse_quota(quota_text, machine.quota_fs)
-            source = f"quota({machine.quota_fs})"
+            measure = _parse_quota(quota_text, root.quota_fs)
+            source = f"quota({root.quota_fs})"
         if measure is None:
             lines.append(
-                f"WARN {machine.name} storage: no quota reading for {machine.quota_fs}, "
+                f"WARN {machine.name} storage: no quota reading for {root.quota_fs}, "
                 "falling back to df"
             )
     if measure is None:
-        df_text = _remote_stdout(machine, ["df", "-P", str(machine.storage_root)])
-        if df_text is not None:
-            measure = _parse_df(df_text)
-            source = f"df({machine.storage_root})"
-
-    if measure is None:
-        lines.append(f"FAIL {machine.name} storage: cannot determine free space")
-        return failures + 1, lines
+        measure, source = (root_free, root_total), f"df({root.path})"
 
     free_kib, total_kib = measure
     free_gb, total_gb = free_kib / KIB_PER_GB, total_kib / KIB_PER_GB
-    floor_gb = machine.min_free_gb if machine.min_free_gb is not None else DEFAULT_MIN_FREE_GB
+    floor_gb = root.floor_gb
     headroom_ok = free_gb >= floor_gb
     status = "OK" if headroom_ok else "FAIL"
     lines.append(
@@ -1451,8 +1587,8 @@ def check_paths(config: Config, config_path: Path, registry_path: Path) -> None:
     it. This runs the same comparison before anything remote happens, which is
     what a scaffold needs: absoluteness and the presence of a registry entry are
     enforced when the config loads, so what remains is whether each declared
-    location actually sits on the volume that rig set aside for work -- and
-    whether the registry declares that volume at all, since an entry carrying
+    location actually sits on one of the volumes that rig set aside for work --
+    and whether the registry declares any volume at all, since an entry carrying
     only `ssh` would otherwise satisfy this gate vacuously.
 
     The comparison here is lexical. `doctor` resolves both sides with
@@ -1463,24 +1599,24 @@ def check_paths(config: Config, config_path: Path, registry_path: Path) -> None:
     registry_machines = _load_toml(registry_path).get("machines", {})
     failures = 0
     for machine in config.machines.values():
-        if machine.storage_root is None:
+        if not machine.storage_roots:
             # Not a pass. This is the only gate that catches a repo_path off the
-            # rig's large volume before anything is cloned into it, so a registry
+            # rig's large volumes before anything is cloned into it, so a registry
             # that cannot answer the question fails it.
             print(
-                f"FAIL {machine.name} path: no storage_root declared for {machine.name} "
-                f"in {registry_path}; the storage check cannot run"
+                f"FAIL {machine.name} path: no storage root declared for {machine.name} "
+                f"in {registry_path} (storage_roots); the storage check cannot run"
             )
             failures += 1
             continue
         repo = PurePosixPath(machine.repo_path)
-        root = PurePosixPath(machine.storage_root)
-        if repo == root or root in repo.parents:
-            print(f"OK {machine.name} path: {repo} under {root}")
+        root = root_for(machine.storage_roots, repo)
+        if root is not None:
+            print(f"OK {machine.name} path: {repo} under {root.path}")
             continue
         print(
-            f"FAIL {machine.name} path: repo_path {repo} is not under "
-            f"storage_root {root}"
+            f"FAIL {machine.name} path: repo_path {repo} is not under any declared "
+            f"storage root ({_declared_roots(machine)})"
         )
         failures += 1
     if isinstance(registry_machines, dict):
@@ -1495,6 +1631,28 @@ def print_repo_path(machine: Machine) -> None:
     print(machine.repo_path)
 
 
+def storage_root_of_project(machine: Machine) -> StorageRoot | None:
+    """The root this project's checkout lives on; None when the registry declares none.
+
+    A single root needs no probe. With several, the rules that apply are those of the root
+    containing the resolved repo_path, so resolve it on the machine rather than guess.
+    """
+    if len(machine.storage_roots) <= 1:
+        return machine.storage_roots[0] if machine.storage_roots else None
+    resolved = _resolve_remote_paths(
+        machine, [PurePosixPath(machine.repo_path), *(root.path for root in machine.storage_roots)]
+    )
+    if resolved is None:
+        raise RigSyncError(f"{machine.name}: cannot resolve repo_path or a storage root")
+    root = root_for(machine.storage_roots, resolved[0], resolved[1:])
+    if root is None:
+        raise RigSyncError(
+            f"{machine.name}: repo_path resolves to {resolved[0]}, outside every declared "
+            f"storage root ({_declared_roots(machine)}); run doctor"
+        )
+    return root
+
+
 def print_storage_env(machine: Machine) -> None:
     """Shell-assignable storage facts, straight from the registry.
 
@@ -1504,8 +1662,10 @@ def print_storage_env(machine: Machine) -> None:
     means nothing. `MIN_FREE_KIB` is the registry floor: a wave may raise it for
     its own checkpoint footprint, but must not sink below it.
     """
-    floor_gb = machine.min_free_gb if machine.min_free_gb is not None else DEFAULT_MIN_FREE_GB
-    print(f"QUOTA_FS={shlex.quote(machine.quota_fs or '')}")
+    root = storage_root_of_project(machine)
+    floor_gb = root.floor_gb if root is not None else DEFAULT_MIN_FREE_GB
+    quota_fs = root.quota_fs if root is not None else None
+    print(f"QUOTA_FS={shlex.quote(quota_fs or '')}")
     print(f"MIN_FREE_GB={floor_gb:g}")
     print(f"MIN_FREE_KIB={int(floor_gb * KIB_PER_GB)}")
 

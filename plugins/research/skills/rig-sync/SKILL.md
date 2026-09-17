@@ -42,9 +42,13 @@ by the approved envelope. New destinations and any destructive recovery remain p
   require self-SSH. Use bounded, noninteractive SSH for peers.
 - Treat a configured registry `hostname` as an identity assertion: `doctor` must compare it with
   the selected machine's observed hostname and fail on drift.
-- Treat the registry's `storage_root` and `caches` the same way: a rig's volumes and shared cache
-  paths are **declared, never inferred**, and never defaulted to `$HOME`/`~/.cache`. `doctor`
-  resolves `repo_path` before comparing, checks headroom against the quota rather than `df` alone,
+- Treat the registry's storage roots and `caches` the same way: a rig's volumes and shared cache
+  paths are **declared, never guessed**, and never defaulted to `$HOME`/`~/.cache`. A rig may
+  declare several roots (`storage_roots`; the single `storage_root` form still works). A project's
+  root is the declared root containing its resolved `repo_path`; never add a root to the registry
+  to make a path pass. `doctor` resolves `repo_path` before comparing, fails a root that sits on the
+  system filesystem (an unmounted volume), checks that root's headroom against its quota rather
+  than `df` alone,
   probes a **non-interactive** shell for the cache values, and fails a project `.env` that
   re-declares any of them.
 - `provision-env` edits shell startup files on the rig, so it is a protected write: show its
@@ -123,8 +127,8 @@ Artifact selectors are `<group>` or `<group>/<relative/path>`, where `<group>` i
 
 - Require project-local `sync.toml` and user-local `~/.config/rigsync/machines.toml`. The registry
   is written once per machine and shared by every project on it, so a rig with no entry cannot be
-  declared at all. Require `check-paths` to pass before `prepare`: it catches a `repo_path` off the
-  rig's `storage_root` while that is still a one-line edit rather than a misplaced clone.
+  declared at all. Require `check-paths` to pass before `prepare`: it catches a `repo_path` under
+  none of the rig's storage roots while that is still a one-line edit rather than a misplaced clone.
 - For a new destination, preview and authorize `prepare` under the active engineering mode; with
   `[git]` configured it clones the hub remote into an absent/empty path and refuses a non-empty
   non-Git directory. Follow it with `push-env`: `.env` is ignored by Git, so the fresh clone has

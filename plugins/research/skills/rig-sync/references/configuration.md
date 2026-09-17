@@ -44,7 +44,7 @@ repo_path = "/absolute/path/on/rig-3080-ti"
 repo_path = "/absolute/path/on/behemoth"
 ```
 
-`repo_path` must be absolute, and it must sit on that rig's declared `storage_root`. It is
+`repo_path` must be absolute, and it must sit under one of that rig's declared storage roots. It is
 supplied by hand — nothing derives it — so declare every rig the project will ever dispatch to
 at once and run `check-paths` before any remote step. Machine keys must match the canonical names
 used by dispatch.
@@ -71,7 +71,7 @@ fleet board declaration, a top-level `[board]` table read only by `rig-board` (`
 [machines.rig-4090]
 ssh = "rig-4090"
 hostname = "rig-4090"
-storage_root = "/absolute/large-volume/path"
+storage_roots = ["/absolute/large-volume/path", "/absolute/second-volume/path"]
 
 [machines.rig-3090-ti]
 ssh = "rig-3090-ti"
@@ -86,9 +86,9 @@ storage_root = "/absolute/large-volume/path"
 [machines.behemoth]
 ssh = "behemoth"
 hostname = "behemoth"
-storage_root = "/absolute/large-volume/path"
-quota_fs = "/dev/filesystem-backing-storage_root"
-min_free_gb = 50
+storage_roots = [
+  { path = "/absolute/large-volume/path", quota_fs = "/dev/filesystem-backing-that-path", min_free_gb = 50 },
+]
 
 [machines.behemoth.caches]
 HF_HOME = "/absolute/large-volume/path/cache/huggingface"
@@ -99,9 +99,9 @@ TMPDIR = "/absolute/large-volume/path/tmp"
 A Slurm cluster such as `leonardo` is declared the same way, with two deliberate omissions and
 two additions. Omitted: no `hostname`, because the alias lands on whichever login node is free,
 and no `quota_fs`, because `quota -w` prints nothing on its Lustre filesystems while
-`df -P <storage_root>` already reports the project quota, which is what the fallback measures.
-Added: `gpus = "job"` and `transfer_ssh` (see [Cluster fields](#cluster-fields)). Its
-`storage_root` is the project's absolute `$WORK` path, one entry per project account. The exact
+`df -P <root>` already reports the project quota, which is what the fallback measures.
+Added: `gpus = "job"` and `transfer_ssh` (see [Cluster fields](#cluster-fields)). Its single
+storage root is the project's absolute `$WORK` path, one entry per project account. The exact
 entry is in `sweep-dispatch/references/cineca-slurm.md`.
 
 The `ssh` value is an alias from `~/.ssh/config`; ports, users, and keys remain there. Preserve
@@ -115,24 +115,45 @@ These live in the **user registry**, not in a project's `sync.toml`, because whe
 large volume is a property of the machine and is the same for every project on it. Keeping them
 here also keeps machine-specific absolute paths out of committed project files.
 
-`storage_root` is the volume that project checkouts, artifacts, and caches belong on. It is
-required on every rig a project dispatches to: `doctor` resolves each project's `repo_path` with
-`readlink -f` and stops when the result falls outside the root, and both `doctor` and `check-paths`
-fail a rig that declares no root at all rather than reporting a pass they never performed.
-Resolving matters: a convenience symlink in `$HOME` can point at the large
-volume, so an unresolved string comparison passes while the declaration is still wrong — and stays
-wrong the day the symlink is replaced by a real directory.
+A **storage root** is a volume that project checkouts, artifacts, and caches belong on. A machine
+may have several — a workstation with more than one data disk, say — and each project lives on
+exactly one of them. At least one root is required on every rig a project dispatches to.
 
-`quota_fs` names the filesystem to interrogate when the machine enforces **per-user quotas**. It
-must be the filesystem **backing `storage_root`** — the volume the work actually lands on — as
-reported by `df -P <storage_root>`. Naming a different filesystem produces a headroom number for a
-disk nothing is being written to, which reads as reassuring and means nothing.
+- `storage_roots` lists them. Each entry is an absolute path, or a table
+  `{ path, quota_fs, min_free_gb, system_disk }` carrying that volume's own rules, since disks on
+  one machine differ: one may be quota'd, another may need a larger floor.
+- `storage_root = "..."` is the single-root form, still accepted. There, machine-level `quota_fs`
+  and `min_free_gb` are that root's rules. Declaring both forms is an error.
+- With `storage_roots`, a machine-level `min_free_gb` is the default floor for every root. A
+  machine-level `quota_fs` is refused: it cannot say which root it backs.
+- Roots must not repeat or nest, so a path belongs to at most one of them.
+
+A project never names its root. Its root is **the declared root containing its resolved
+`repo_path`**, so placing a checkout on a volume is the whole declaration. `doctor` resolves
+`repo_path` and every root with `readlink -f`, stops when the project sits under none of them, and
+names the root it found. `check-paths` makes the same choice lexically. Both fail a rig that
+declares no root at all rather than reporting a pass they never performed. Resolving matters: a
+convenience symlink in `$HOME` can point at the large volume, so an unresolved string comparison
+passes while the declaration is still wrong — and stays wrong the day the symlink is replaced by a
+real directory.
+
+`doctor` also fails a root whose filesystem is the one mounted at `/`. An unmounted disk leaves
+its mount point behind as an empty directory on the system disk, where every path check still
+passes and the work silently fills the wrong drive. Set `system_disk = true` on a root only when it
+genuinely lives on the system filesystem.
+
+`quota_fs` names the filesystem to interrogate when a root is bounded by **per-user quotas**. It
+must be the filesystem **backing that root** — the volume the work actually lands on — as
+reported by `df -P <root>`, and `doctor` fails when the two disagree. Naming a different
+filesystem produces a headroom number for a disk nothing is being written to, which reads as
+reassuring and means nothing.
 
 A quota is not free space, and `df` does not see it: `df` can report terabytes available on a
 volume where the user's next write fails with `Disk quota exceeded`. On one rig here the two
-differ by 8× on the same mount. When `quota_fs` is present, `doctor` reads the user's allowance
-for that filesystem and reports headroom against it; when it is absent, `doctor` falls back to
-`df -P <storage_root>`, which is correct on rigs with no quotas.
+differ by 8× on the same mount. When the project's root declares `quota_fs`, `doctor` reads the
+user's allowance for that filesystem and reports headroom against it; otherwise it uses
+`df -P <root>`, which is correct on volumes with no quotas, and on a cluster work area whose `df`
+already reports the project quota.
 
 `min_free_gb` is the hard floor below which `doctor` fails instead of warning. It defaults to a
 conservative value; raise it on rigs that run checkpoint-heavy waves. Sizing it is a judgement
@@ -226,8 +247,8 @@ CACHE_DIR=storage/cache
 OPENCLIP_CACHE_DIR=storage/openclip
 ```
 
-`doctor` already requires `repo_path` to resolve under the rig's `storage_root`, so a repo-relative
-path lands on the large volume on every rig, automatically and without anyone writing a mount point
+`doctor` already requires `repo_path` to resolve under one of the rig's storage roots, so a
+repo-relative path lands on the project's large volume on every rig, automatically and without anyone writing a mount point
 down. The consequence is that `.env` contains no rig-specific value at all: the same file is
 correct on `rig-4090`, on `behemoth`, and on a rig that does not exist yet, which is what makes
 `push-env` a copy rather than a per-rig rendering.
@@ -246,8 +267,8 @@ project root and leaves an absolute one alone.
 Four commands exist so that no path is ever typed twice. Every one of them reads the two files
 above and nothing else.
 
-- `check-paths` — offline, no SSH. Confirms each `repo_path` sits on that rig's `storage_root`,
-  fails any rig whose registry entry declares no `storage_root`, and lists registry rigs missing
+- `check-paths` — offline, no SSH. Confirms each `repo_path` sits under one of that rig's storage
+  roots and names it, fails any rig whose registry entry declares no root, and lists registry rigs missing
   from `sync.toml`. `doctor` makes the same comparison, but only
   after the repo exists on the rig, so a mistyped path is caught there only once something has
   been cloned into it. Run this **before** `prepare`. Its comparison is lexical; `doctor` still
@@ -256,8 +277,9 @@ above and nothing else.
 - `repo-path --machine <rig>` — prints that rig's declared project location. `sweep-dispatch`
   substitutes it into the dispatch, monitor, and recovery commands instead of spelling a path
   a second time.
-- `storage-env --machine <rig>` — prints `QUOTA_FS`, `MIN_FREE_GB`, and `MIN_FREE_KIB` for a wave
-  script's pre-flight guard. A wave may raise the floor for its own checkpoint footprint; it must
+- `storage-env --machine <rig>` — prints `QUOTA_FS`, `MIN_FREE_GB`, and `MIN_FREE_KIB` of the
+  project's storage root for a wave script's pre-flight guard. With several roots it resolves
+  `repo_path` on the rig to pick that root, and fails when none contains it. A wave may raise the floor for its own checkpoint footprint; it must
   not sink below the registry's.
 - `push-env --machine <rig> --dry-run|--confirm` — copies the hub's `.env` to a peer. `.env` is
   ignored by Git, so a freshly `prepare`d peer has none; nothing else puts one there. It is a

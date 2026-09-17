@@ -66,8 +66,8 @@ protected.
 1. Run `doctor` read-only on the intended rigs. Stop on missing contract files, incompatible
    OS/architecture, missing Git/SSH/curl/GPU tooling, or ambiguous machine identity. This doctor
    runs `rig-sync`'s first, so it also stops on the storage conditions described there: a
-   `repo_path` resolving outside the rig's declared `storage_root`, insufficient headroom against
-   the quota, machine cache variables a **non-interactive** shell cannot see, and a project `.env`
+   `repo_path` resolving outside every declared storage root of the rig, a root on the system
+   filesystem, insufficient headroom against the quota, machine cache variables a **non-interactive** shell cannot see, and a project `.env`
    that re-declares them. Provisioning onto a rig whose storage is misdeclared installs a
    multi-gigabyte environment on the wrong volume.
 2. Run `provision --dry-run` for the exact target and named rigs: `--wave <wave_id> --revision <sha>`
