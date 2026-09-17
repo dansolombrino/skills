@@ -6,33 +6,37 @@ invoked from the project root on the target rig. Layout and vocabulary (wave, la
 
 ## wave_<rig>_gpu<ids>.sh — one per (run, wave), self-contained and self-guarded
 
-Lives at `scripts/<NNN_exp>/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>.sh`. This is the
+Lives at `scripts/<NNN_exp>/<run_id folder>/wave_<wave_id>/wave_<rig>_gpu<ids>.sh` (the rendered
+`run_id_path` directories under `segments-v1`; `<run_id_flat>` under a legacy pin). This is the
 **only** script kind — it replaced the old `run.sh` + `launch_<rig>.sh` pair. The artifact guard
 that used to sit in the per-rig launcher now travels with each run, which is what keeps lane
 dispatch idempotent.
 
 ```bash
 #!/usr/bin/env bash
-# run: <flat run_id>   experiment: <NNN_exp>
+# run: <run_id_name>   experiment: <NNN_exp>
+# run_id_flat: <flat run_id>
 # wave: <wave_id>   rig: <rig>   gpu: <ids>
 set -uo pipefail
-cd "$(dirname "$0")/../../../.." || exit 1  # → project root; adjust for sub-experiments
+cd "$(dirname "$0")/../../../.." || exit 1  # → project root; one ../ per run-folder directory and sub-experiment level
 
 RUN_ID_FLAT="<flat run_id>"
-RUN_ID_PATH_LAYOUT="<nested | collapsed-v1 | hashed-v1, copied from the experiment record>"
+RUN_ID_NAME="<run_id_name: the rendered run_id under segments-v1; the flat run_id under a legacy pin>"
+RUN_ID_PATH_LAYOUT="<segments-v1, or a legacy nested | collapsed-v1 | hashed-v1, copied from the experiment record>"
+# RUN_ID_SEGMENTS: <segments-v1 only: the experiment's recorded spec, copied verbatim>
 CHECKPOINT_DIR="<exact checkpoint directory resolved by canonical run_id_path>"
 EVAL_DIR="<exact evaluation directory resolved by canonical run_id_path>"
 STATUS_PATH="$EVAL_DIR/.status.json"
-LOG_DIR="logs/<NNN_exp>/$RUN_ID_FLAT/wave_<wave_id>"     # logs/ mirrors scripts/
+LOG_DIR="logs/<NNN_exp>/<run_id folder>/wave_<wave_id>"   # logs/ mirrors scripts/
 ARTIFACT="<exact expected final artifact path under CHECKPOINT_DIR or EVAL_DIR>"
 export WAVE_ID="<wave_id>"
 
 # self-guard (idempotency): the expected final artifact is the only completion signal
 if [ -e "$ARTIFACT" ]; then
-  echo "[skip] $RUN_ID_FLAT already done (artifact present)"; exit 0
+  echo "[skip] $RUN_ID_NAME already done (artifact present)"; exit 0
 fi
 if grep -q '"state": "done"' "$STATUS_PATH" 2>/dev/null; then
-  echo "[warn] status says done but expected artifact is missing; re-executing $RUN_ID_FLAT" >&2
+  echo "[warn] status says done but expected artifact is missing; re-executing $RUN_ID_NAME" >&2
 fi
 
 # exact Git revision guard: source drift blocks this lane with reserved exit 86
@@ -157,15 +161,18 @@ Notes:
 - The overrides list is the FULL run_id (and any non-default fixed params) — explicit, so the
   script is meaningful standalone. Produce each array token with
   `code/common/run_id.py::hydra_override_arg`; never interpolate raw config values into shell.
-- Read the experiment's literal `RUN_ID_PATH_LAYOUT` (`nested`, `collapsed-v1`, or `hashed-v1`). Produce the
-  checkpoint and evaluation suffix once with canonical
-  `run_id_path(cfg, params, layout=RUN_ID_PATH_LAYOUT)`, and materialize the resulting exact
+- Read the experiment's literal `RUN_ID_PATH_LAYOUT` (`segments-v1` with its `RUN_ID_SEGMENTS`, or a
+  legacy `nested`, `collapsed-v1`, or `hashed-v1`). After `check_run_id_plan` passed for the whole
+  wave, produce the checkpoint and evaluation suffix once with canonical
+  `run_id_path(cfg, params, layout=RUN_ID_PATH_LAYOUT, segments=RUN_ID_SEGMENTS)`, and materialize the resulting exact
   `CHECKPOINT_DIR`, `EVAL_DIR`, `STATUS_PATH`, and `ARTIFACT` in the generated script. The
   checkpoint and evaluation directories must use the same selected layout. Never hand-compose a
   path, infer slash depth, or reconstruct a path from `RUN_ID_FLAT`. Plot outputs are the
   exception: they are not run-scoped, carry no run_id segments, and never go through the helper.
-- Produce `<flat run_id>` with canonical `run_id_flat` at generation time. Scripts, logs, and
-  wandb names remain flat and unchanged for both path layouts.
+- Produce `<flat run_id>` with canonical `run_id_flat` and `<run_id_name>` with canonical
+  `run_id_name` at generation time. Under `segments-v1` the run folder in `scripts/` and `logs/` is
+  the same suffix as `EVAL_DIR`, and wandb and Slurm names use `RUN_ID_NAME`; under a legacy pin
+  scripts, logs, and wandb names remain flat and unchanged.
 - The artifact guard runs **before** anything else, so re-issuing a lane's dispatch command after
   a crash re-executes only runs whose declared completion artifact is absent — resuming or
   restarting per the experiment's design-time resume decision. `.status.json` is inspected only
@@ -239,24 +246,25 @@ Why this wave: <the reason these runs are being launched now — first probe of 
 after a promising probe, re-launch of what failed in <earlier wave id>, re-run after a code fix,
 moving work to a freer rig, ...>
 
-This run: `model=mlp,lr=1e-3,seed=0` → rig-4090, gpu 0.
+This run: `model=mlp/optim_params=b4c2e09f6dbe6b4b,seed=0` → rig-4090, gpu 0.
+Full run_id: `model=mlp,lr=0.001,wd=0.01,beta1=0.9,seed=0`.
 
-Run path layout: `nested`.
+Run path layout: `segments-v1`, segments `[("model",), ({"optim_params": ("lr", "wd", "beta1")}, "seed")]`.
 
-Checkpoint directory: `checkpoints/000_grokking/model=mlp/lr=1e-3/seed=0`.
-Evaluation directory: `evaluations/000_grokking/model=mlp/lr=1e-3/seed=0`.
-Status path: `evaluations/000_grokking/model=mlp/lr=1e-3/seed=0/.status.json`.
-Expected final artifact: `evaluations/000_grokking/model=mlp/lr=1e-3/seed=0/result.json`.
+Checkpoint directory: `checkpoints/000_grokking/model=mlp/optim_params=b4c2e09f6dbe6b4b,seed=0`.
+Evaluation directory: `evaluations/000_grokking/model=mlp/optim_params=b4c2e09f6dbe6b4b,seed=0`.
+Status path: `evaluations/000_grokking/model=mlp/optim_params=b4c2e09f6dbe6b4b,seed=0/.status.json`.
+Expected final artifact: `evaluations/000_grokking/model=mlp/optim_params=b4c2e09f6dbe6b4b,seed=0/result.json`.
 
 Full wave: 4 runs — 3 on rig-4090 (gpu 0), 1 on behemoth (gpu 0).
 ```
 
 The four run-path fields above are concrete launch records, not templates. Generate all of them
-from the same selected `RUN_ID_PATH_LAYOUT`; for `collapsed-v1` and `hashed-v1` their concrete values will differ.
+from the same selected `RUN_ID_PATH_LAYOUT` and `RUN_ID_SEGMENTS`; for legacy `nested`, `collapsed-v1`, and `hashed-v1` pins their concrete values differ.
 Monitoring and recovery consume these recorded paths verbatim and never infer a layout from slash
 depth. `RUN_ID_PARAMS` may change only while no checkpoint or evaluation and no wave
-README or script exists. After the first such surface, any identity-schema change under `nested` or
-`collapsed-v1` requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the
+README or script exists. After the first such surface, any identity-schema or segment change under
+`segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1` requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the
 established tree. The experiment's layout is likewise immutable after that boundary. A mismatch or
 mixed tree blocks the wave and routes changed work to a new numbered sub-experiment; never move,
 rename, or rewrite the old README, script, log, or artifact paths.
@@ -316,7 +324,7 @@ the user how to watch: for a peer, `ssh <rig>` →
 Monitoring one run via the three signals (artifacts / `.status.json` / latest run log):
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "test -e <repo_path on rig>/<exact expected final artifact from wave record> && echo ARTIFACT=present || echo ARTIFACT=absent; cat <repo_path on rig>/<exact status path from wave record>; tail -n 30 \$(ls -t <repo_path on rig>/logs/<NNN_exp>/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-*.log | head -1)"
+ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> "test -e <repo_path on rig>/<exact expected final artifact from wave record> && echo ARTIFACT=present || echo ARTIFACT=absent; cat <repo_path on rig>/<exact status path from wave record>; tail -n 30 \$(ls -t <repo_path on rig>/logs/<NNN_exp>/<run_id folder>/wave_<wave_id>/wave_<rig>_gpu<ids>-*.log | head -1)"
 ```
 
 For the current local hub, run the quoted `cat ...; tail ...` portion directly from the project

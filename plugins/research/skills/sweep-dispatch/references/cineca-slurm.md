@@ -158,14 +158,14 @@ login node has internet, `git`, and the user-installed `uv` at `~/.local/bin/uv`
 ## The job script
 
 One sbatch script per (run, wave), at the same path and with the same name as a rig's wave script:
-`scripts/<NNN_exp>/<run_id_flat>/wave_<wave_id>/wave_leonardo_gpu1.sh`. The body is the
+`scripts/<NNN_exp>/<run_id folder>/wave_<wave_id>/wave_leonardo_gpu1.sh`. The body is the
 [standard wave script](templates.md) verbatim — artifact guard, Git guard, storage guard,
 environment guard and smoke, `tee` log, failed-status fallback — with this header in place of
 the bare shebang and without the `CUDA_VISIBLE_DEVICES` export (Slurm sets it):
 
 ```bash
 #!/usr/bin/env bash
-#SBATCH --job-name=<wave_id>__<run_id_flat>
+#SBATCH --job-name=<wave_id>__<run_id_name>
 #SBATCH --account=<account chosen for this wave>
 #SBATCH --partition=boost_usr_prod
 #SBATCH --qos=normal
@@ -175,8 +175,8 @@ the bare shebang and without the `CUDA_VISIBLE_DEVICES` export (Slurm sets it):
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=<HH:MM:SS: ETA × 1.5, rounded up to 15 min, capped at 24:00:00>
-#SBATCH --output=logs/<NNN_exp>/<run_id_flat>/wave_<wave_id>/slurm-%j.out
-#SBATCH --error=logs/<NNN_exp>/<run_id_flat>/wave_<wave_id>/slurm-%j.out
+#SBATCH --output=logs/<NNN_exp>/<run_id folder>/wave_<wave_id>/slurm-%j.out
+#SBATCH --error=logs/<NNN_exp>/<run_id folder>/wave_<wave_id>/slurm-%j.out
 #SBATCH --signal=B:USR1@600
 #SBATCH --no-requeue
 # run: <flat run_id>   experiment: <NNN_exp>
@@ -211,12 +211,14 @@ export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
 Per job, from the hub, after the all-rig Git deployment gate and `verify-revision` on `leonardo`:
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=20 leonardo "cd <repo_path on leonardo> && squeue --me --noheader --name=<wave_id>__<run_id_flat> --format=%i | grep -q . && echo ALREADY-QUEUED || sbatch --parsable scripts/<NNN_exp>/<run_id_flat>/wave_<wave_id>/wave_leonardo_gpu1.sh"
+ssh -o BatchMode=yes -o ConnectTimeout=20 leonardo "cd <repo_path on leonardo> && squeue --me --noheader --format=%j | grep -Fxq '<wave_id>__<run_id_name>' && echo ALREADY-QUEUED || sbatch --parsable scripts/<NNN_exp>/<run_id folder>/wave_<wave_id>/wave_leonardo_gpu1.sh"
 ```
 
-- The `squeue --name` check is the never-double-submit rule: the job name is unique per (run,
-  wave), so a queued or running job with that name means the run is already placed.
-- Append the printed job id to `scripts/<NNN_exp>/<run_id_flat>/wave_<wave_id>/leonardo.jobs`
+- The exact job-name check is the never-double-submit rule: the job name is unique per (run,
+  wave), so a queued or running job with that name means the run is already placed. Match names
+  with `grep -F`, never `squeue --name`/`sacct --name`: those split their argument on commas, and
+  run names contain commas.
+- Append the printed job id to `scripts/<NNN_exp>/<run_id folder>/wave_<wave_id>/leonardo.jobs`
   on the hub as `<ISO timestamp> <jobid> submitted` (one line per submission, history kept, never
   rewritten), commit nothing: this file is state, like EXPERIMENTS.md, and is gitignored by
   `research-project-init`. The EXPERIMENTS.md row for the run carries `rig=leonardo`, `gpu=1`, and
@@ -233,7 +235,7 @@ the standard probe in [templates.md](templates.md) (`leonardo` is a peer, never 
 a fourth, cheap signal that batches the whole slice in one call:
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=20 leonardo "squeue --me --noheader --format='%i|%j|%T|%M|%L|%S|%R' --name=<comma-separated job names>; sacct -X --noheader --parsable2 --format=JobID,JobName,State,Elapsed,ExitCode,End --starttime=<wave dispatch time> --name=<comma-separated job names>"
+ssh -o BatchMode=yes -o ConnectTimeout=20 leonardo "squeue --me --noheader --format='%i|%j|%T|%M|%L|%S|%R' | grep -F '|<wave_id>__'; sacct -X --noheader --parsable2 --format=JobID,JobName,State,Elapsed,ExitCode,End --starttime=<wave dispatch time> | grep -F '|<wave_id>__'"
 ```
 
 State mapping (`squeue` while queued or running, `sacct` once gone):
@@ -264,7 +266,7 @@ State mapping (`squeue` while queued or running, `sacct` once gone):
 ## Recover
 
 Resubmission is the entire recovery: the same script, same wave id, same job name, guarded by
-the `squeue --name` check above, so a job that Slurm already requeued or that is still queued is
+the exact job-name check above, so a job that Slurm already requeued or that is still queued is
 never doubled. Append the new job id to `leonardo.jobs` as `<timestamp> <jobid> resubmitted after
 <state>`. Recovery never edits the sbatch header: a different walltime, QOS, or resource line is a
 new wave with its own authorization.

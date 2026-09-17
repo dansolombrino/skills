@@ -17,13 +17,16 @@ in every engineering mode and does not require a narrative or scientific decisio
 - Ground truth is NOT the md — it is the three on-disk signals (hierarchy in `conventions.md`): the per-run status first proves the current wave's Git revision/tag and environment fingerprint; after that, the **expected final artifact** is golden for completion, followed by `.status.json` state/timing/progress and the latest run log. A missing `.status.json`/dir means the run never started (or its outputs were deleted ⇒ it is no longer done).
 - **One (run, wave) = one table row = one line.** A run re-launched in a later wave gets a **new row**, never an in-place update — the table itself carries the execution history. One line per row keeps parallel-session git merges clean.
 - A row's run identity is semantic: the ordered `RUN_ID_PARAMS` values, independent of whether
-  `RUN_ID_PATH_LAYOUT` is `nested`, `collapsed-v1`, or `hashed-v1`. Read the experiment's recorded selection
-  and consume the exact checkpoint, evaluation, status, and final-artifact paths materialized in
-  the generated wave record. Never derive identity from path segment count, reconstruct an
-  artifact path from the flat id, or treat the layouts as different runs. Scripts, logs, and
-  wandb remain keyed by the unchanged flat rendering. Under `hashed-v1`, resolve a hash through
-  the run's `.run_id.json` or the experiment's `evaluations/<experiment_path>/RUN_ID_MAP.json`;
-  never recompute or guess it.
+  `RUN_ID_PATH_LAYOUT` is `segments-v1` or a legacy `nested`, `collapsed-v1`, or `hashed-v1`. Read
+  the experiment's recorded selection and consume the exact checkpoint, evaluation, status, and
+  final-artifact paths materialized in the generated wave record. Never derive identity from path
+  segment count, reconstruct an artifact path from the flat id, or treat the layouts as different
+  runs. Under `segments-v1`, the row's `run_id` cell is the `run_id_name` rendering, identical to
+  the run's `scripts/`, `logs/`, `checkpoints/`, and `evaluations/` folders and its wandb run name;
+  under a legacy pin, scripts, logs, and wandb remain keyed by the unchanged flat rendering.
+  Resolve every hash (a `segments-v1` group hash or a `hashed-v1` `rid-`) through the run's
+  `.run_id.json` or the experiment's `evaluations/<experiment_path>/RUN_ID_MAP.json`; never
+  recompute or guess it.
 - **Every status report to the user opens with its message-written time** — obtain a local
   timezone-bearing timestamp immediately before sending (for example
   `date '+%Y-%m-%dT%H:%M:%S%:z'`) and lead exactly with
@@ -33,25 +36,30 @@ in every engineering mode and does not require a narrative or scientific decisio
 ## Format
 
 One section per `NNN_experiment`; its preamble restates both authoritative source decisions: the
-ordered `RUN_ID_PARAMS` and the literal `RUN_ID_PATH_LAYOUT` (`nested`, `collapsed-v1`, or
-`hashed-v1`). The table has **one column per run_id param** (dict form — never a single
-flat-string column), then placement, status, and timing. Under `hashed-v1` the preamble adds
-`run_id map: evaluations/<experiment_path>/RUN_ID_MAP.json` and the table adds a `hash` column
-right after the param columns, so params and hash are readable side by side. The layout line is durable experiment metadata, not a run-row
-identity field:
+ordered `RUN_ID_PARAMS` and the literal `RUN_ID_PATH_LAYOUT` (`segments-v1`, or a legacy
+`nested`, `collapsed-v1`, or `hashed-v1`). The table has **one column per run_id param** (dict
+form — never a single flat-string column replacing them), then placement, status, and timing.
+Under `segments-v1` the preamble adds the recorded `RUN_ID_SEGMENTS` and
+`run_id map: evaluations/<experiment_path>/RUN_ID_MAP.json`, and the table adds a `run_id` column
+(the rendered name) and one column per hash group right after the param columns, so params,
+rendered identity, and hashes are readable side by side. Under legacy `hashed-v1` the preamble
+adds the map line and the table adds a `hash` column after the param columns. The layout line is
+durable experiment metadata, not a run-row identity field:
 
 ```markdown
 ## 000_grokking
-run_id params: model, lr, seed   (mirrors RUN_ID_PARAMS in code/000_grokking/train.py)
-run_id path layout: nested   (mirrors RUN_ID_PATH_LAYOUT in code/000_grokking/train.py)
+run_id params: model, lr, wd, seed   (mirrors RUN_ID_PARAMS in code/000_grokking/train.py)
+run_id path layout: segments-v1   (mirrors RUN_ID_PATH_LAYOUT in code/000_grokking/train.py)
+run_id segments: [("model",), ({"optim_params": ("lr", "wd")}, "seed")]   (mirrors RUN_ID_SEGMENTS in code/000_grokking/train.py)
+run_id map: evaluations/000_grokking/RUN_ID_MAP.json
 smoke command: <environment.name>/bin/python code/000_grokking/train.py smoke=true steps=1 seed=smoke
 smoke pass: exit 0 and evaluations/000_grokking/smoke/result.json says one step completed
 
-| model | lr   | seed | wave            | rig                | gpu     | status | started     | progress   | eta         | ended       | elapsed | notes |
-|-------|------|------|-----------------|--------------------|---------|--------|-------------|------------|-------------|-------------|---------|-------|
-| mlp   | 1e-3 | 0    | 20260731-162043 | rig-4090           | 0       | failed | 07-31 16:20 | epoch 3/10 |             | 07-31 16:58 | 38m     | OOM   |
-| mlp   | 1e-3 | 0    | 20260805-081200 | behemoth           | 0       | inpr   | 08-05 08:12 | epoch 7/10 | 08-05 09:40 |             |         |       |
-| tr-xl | 1e-4 | 0    | 20260803-141000 | rig-3090-ti        | 0       | done   | 08-03 14:10 | 10/10      |             | 08-03 18:02 | 3h52m   |       |
+| model | lr   | wd   | seed | run_id                                         | optim_params     | wave            | rig         | gpu | status | started     | progress   | eta         | ended       | elapsed | notes |
+|-------|------|------|------|------------------------------------------------|------------------|-----------------|-------------|-----|--------|-------------|------------|-------------|-------------|---------|-------|
+| mlp   | 1e-3 | 0.01 | 0    | model=mlp/optim_params=4c5ffc9409ae4575,seed=0   | 4c5ffc9409ae4575 | 20260731-162043 | rig-4090    | 0   | failed | 07-31 16:20 | epoch 3/10 |             | 07-31 16:58 | 38m     | OOM   |
+| mlp   | 1e-3 | 0.01 | 0    | model=mlp/optim_params=4c5ffc9409ae4575,seed=0   | 4c5ffc9409ae4575 | 20260805-081200 | behemoth    | 0   | inpr   | 08-05 08:12 | epoch 7/10 | 08-05 09:40 |             |         |       |
+| tr-xl | 1e-4 | 0.01 | 0    | model=tr-xl/optim_params=6961a90e5ffca50c,seed=0 | 6961a90e5ffca50c | 20260803-141000 | rig-3090-ti | 0   | done   | 08-03 14:10 | 10/10      |             | 08-03 18:02 | 3h52m   |       |
 ```
 
 - `wave` — the dispatch this execution belonged to (`YYYYMMDD-HHMMSS`, canon), whose annotated
@@ -101,8 +109,8 @@ their `eta` table cells: lane/wave roll-ups belong in chat reports, while the ta
 an active-run field.
 
 `RUN_ID_PARAMS` may change only while no checkpoint, evaluation, or plot output and no wave README
-or script exists. After the first such surface, any identity-schema change under `nested`,
-`collapsed-v1`, or `hashed-v1` requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the
+or script exists. After the first such surface, any identity-schema or `RUN_ID_SEGMENTS` change under
+`segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1` requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the
 established tree. The recorded `RUN_ID_PATH_LAYOUT` is immutable after the same boundary, and exact
 wave paths remain authoritative. A layout mismatch or mixed checkpoint/evaluation tree blocks
 reconciliation and routes changed work to a new numbered sub-experiment; never move, rename, or

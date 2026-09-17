@@ -25,7 +25,9 @@ the user. Plot communication approval is always user-owned and overrides the mod
   producer hierarchy. `code/` stays purely experiment code.
 - Input: **`evaluations/` only**. Read the producer's recorded experiment-wide
   `RUN_ID_PATH_LAYOUT` and resolve inputs with
-  `run_id_path(..., layout=RUN_ID_PATH_LAYOUT)` from the canonical helper. Never infer layout from
+  `run_id_path(..., layout=RUN_ID_PATH_LAYOUT)` from the canonical helper, passing
+  `segments=RUN_ID_SEGMENTS` when the pin is `segments-v1`; a group hash is resolved to its params
+  through `RUN_ID_MAP.json`, never recomputed by hand. Never infer layout from
   slash depth or force `nested`. Viz never reads checkpoints or recomputes; if a quantity is absent
   from evaluations, the producer experiment must export it first.
 - Output: under `plots/<experiment_path>/<script_stem>/` — one subfolder per script (stem =
@@ -108,7 +110,7 @@ network, no server, and no sibling files:
 ## Design & execution
 
 - Before every creation or modification of plotting code, read the producer's authoritative
-  ordered `RUN_ID_PARAMS`, `RUN_ID_PATH_LAYOUT`, metric definitions, evaluation schema, and
+  ordered `RUN_ID_PARAMS`, `RUN_ID_PATH_LAYOUT`, `RUN_ID_SEGMENTS` (when pinned), metric definitions, evaluation schema, and
   scientific contract. Determine which RUN_ID params the figure covers and which of them the page
   lets the reader select.
 - Propose one exact communication specification per plot: the title, the visible in-figure metric

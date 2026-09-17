@@ -35,42 +35,57 @@ Integrity gates and protected choices never become delegable.
 1. List the experiment's config params and propose which subset (and order) uniquely identifies a run, with reasoning.
 2. In manual mode, iterate until the user approves. In auto mode, elect the smallest ordered subset
    that prevents collisions, record the reasoning in the handoff/decision register, and proceed.
-3. Construct and show the complete current canonical `nested` path templates first for
-   checkpoints and evaluations; `plots/` is not run-scoped. Immediately afterward, and separately,
-   show exactly one `collapsed-v1` alternative that collapses all eligible ordered
-   `RUN_ID_PARAMS` into one component using the exact existing percent-encoded `run_id_flat`
-   pairs. Do not construct or show an alternative when fewer than two params are eligible. When it
-   is eligible, showing exactly one alternative is mandatory. The
-   user must explicitly approve `collapsed-v1`; otherwise `nested` is the default regardless of
-   engineering mode. Preflight exact component and full-path limits and collisions; never silently
-   hash, truncate, drop params, fall back, or accept an ambiguous mapping.
-   Hashing is allowed only as the third layout `hashed-v1`, and only with explicit user consent:
-   when preflight shows that `nested` and `collapsed-v1` both overflow a component or full-path
-   limit, or when the user asks for it, show one `hashed-v1` alternative (one component
-   `rid-<16 hex>` = sha256 of the exact `collapsed-v1` string), state which limit it resolves,
-   and wait. Neither engineering mode may select `hashed-v1` on its own; no other hash, truncation,
-   or rewrite scheme exists. `hashed-v1` is never lossy: the helper writes the full mapping
-   `{hash, run_id_flat, run_id dict}` to `.run_id.json` inside every run directory and regenerates
-   the experiment-wide two-way map `evaluations/<experiment_path>/RUN_ID_MAP.json` from those
-   entries, so a hash can always be read back into its params at a glance and vice versa. That
-   map is a derived index, never the identity source; the EXPERIMENTS.md section header names its
-   path and every row keeps one column per param plus the `hash` column.
-   For any checkpoint or evaluation path with zero or one applicable fixed
-   param, `nested` and `collapsed-v1` are byte-identical: show the path once, not as a separate
-   alternative; label it as both layouts' rendering and state the experiment's selected or existing
-   pinned literal. That one path is approvable under the pin. This does not relax
-   the exactly-one alternative rule for any path with two or more applicable fixed params.
-4. Record `RUN_ID_PARAMS = [...]` and the one authoritative experiment-wide
-   `RUN_ID_PATH_LAYOUT = "nested"|"collapsed-v1"|"hashed-v1"` beside it in the experiment's `.py`; mirror
-   both in the experiment's EXPERIMENTS.md section header. Make ALL artifact paths go through
-   `code/common/run_id.py`: checkpoints and evaluations call
-   `run_id_path(..., layout=RUN_ID_PATH_LAYOUT)` with their applicable ordered params, while
-   scripts/logs/WandB and EXPERIMENTS.md row identity keep using `run_id_flat` unchanged. Never
-   mix layouts across the authoritative artifact surfaces.
-5. Wire `guard_run_config(cfg, RUN_ID_PARAMS, <eval run dir>, layout=RUN_ID_PATH_LAYOUT)` into every training/eval script,
-   **before the StatusWriter starts and before any artifact is written** — it snapshots the full
-   config to `.run_config.json` and hard-fails on run_id collisions (same run_id, different
-   config); under `hashed-v1` it also writes `.run_id.json` and regenerates `RUN_ID_MAP.json`.
+3. Elect the path rendering with the user at **every election**. New experiments always use the
+   `segments-v1` layout: an ordered list of segments, one directory each, whose items are joined
+   with `,`; an item is either one explicit param (`lr=0.001`) or a user-named **hash group** of
+   one or more params (`optim_params=<16 hex>`). Neither engineering mode may decide any step
+   below on its own, and none of them is skipped because the path happens to fit. Run the
+   dialogue in this order and wait for the user after each step:
+   1. **Full picture.** Show the complete all-explicit checkpoint and evaluation path templates
+      (one directory per param, in elected order), however long, with every component's byte
+      count and the full-path total from `preflight_run_id_path`, and flag each overflow. `plots/`
+      is not run-scoped.
+   2. **Hide.** Ask which params stay explicit and which are hashed. A hashed param starts as its
+      own one-param group, named after the param; the user may rename it.
+   3. **Group.** Propose merging the hashed params into named groups that follow the Hydra config
+      tree — for example every hashed param under `optim/` (batch size, grad accumulation, lr, wd,
+      betas) becomes one `optim_params` group. The proposal is a starting point, not a rule: the
+      user accepts, renames, splits, or regroups, heterogeneous groups included.
+   4. **Place and render.** Ask where each explicit param and group goes and which items share a
+      directory; there is no default placement. Show the resulting checkpoint and evaluation
+      paths for a representative run with the same byte report, and loop back to any step until
+      the user approves a rendering that overflows nothing.
+   Never silently hash, truncate, drop params, fall back, or accept an ambiguous mapping.
+   **Collision guarantee.** A group renders as the first 16 hex of sha256 over `segments-v1`, the
+   group name, and the group's ordered percent-encoded `key=value` pairs, so identical group values
+   hash identically in every run. A 64-bit truncation is never assumed collision-free: the helper
+   writes the full mapping `{layout, segments, path, run_id_flat, run_id dict, groups}` to
+   `.run_id.json` inside every run directory, hard-fails when a directory's record names a
+   different run, regenerates the experiment-wide two-way map
+   `evaluations/<experiment_path>/RUN_ID_MAP.json` and hard-fails when one group hash maps to two
+   different param sets, and `check_run_id_plan` repeats the path, hash, and limit checks for every
+   planned run before dispatch. A collision stops the work; it is never resolved by reusing,
+   renaming, or rewriting a directory. The map is a derived index, never the identity source, so a
+   hash can always be read back into its params at a glance and vice versa.
+4. Record `RUN_ID_PARAMS = [...]`, the one authoritative experiment-wide
+   `RUN_ID_PATH_LAYOUT = "segments-v1"`, and the approved `RUN_ID_SEGMENTS = [...]` beside them in
+   the experiment's `.py`; mirror all three and the `RUN_ID_MAP.json` path in the experiment's
+   EXPERIMENTS.md section header. Make ALL run-scoped paths and names go through
+   `code/common/run_id.py`: checkpoints, evaluations, and the `scripts/` and `logs/` run folders use
+   `run_id_path(..., layout=RUN_ID_PATH_LAYOUT, segments=RUN_ID_SEGMENTS)`, and the WandB run name
+   and the EXPERIMENTS.md `run_id` column use `run_id_name(...)`, so every surface shows the same
+   rendered identity; `run_id_flat` stays the complete identity string in `.run_id.json`, the map,
+   and the WandB config. Never mix layouts across run-scoped surfaces.
+5. Wire `guard_run_config(cfg, RUN_ID_PARAMS, <eval run dir>, layout=RUN_ID_PATH_LAYOUT,
+   segments=RUN_ID_SEGMENTS, experiment_root=<evaluations experiment dir>)` into every
+   training/eval script, **before the StatusWriter starts and before any artifact is written** — it
+   snapshots the full config to `.run_config.json`, hard-fails on run_id collisions (same run_id,
+   different config), writes `.run_id.json`, and regenerates `RUN_ID_MAP.json`.
+
+**Legacy pins.** `nested`, `collapsed-v1`, and `hashed-v1` remain valid `RUN_ID_PATH_LAYOUT`
+literals only for experiments that already recorded them; the helper keeps rendering them
+unchanged, with `run_id_flat` naming for scripts, logs, and WandB. Never offer them to a new
+experiment.
 
 ## 2b. run_id evolution — config changes to an EXISTING experiment
 
@@ -81,21 +96,21 @@ Any change that adds/removes/renames a behavior-affecting config param (integrat
    why it is non-identifying.
 2. Inspect checkpoints, evaluations, plots, and wave records for this experiment.
    If none exists, update `RUN_ID_PARAMS` and the EXPERIMENTS.md section header normally before the
-   first launch.
+   first launch, re-running the full section 2 rendering dialogue for `RUN_ID_SEGMENTS`.
 3. Once any checkpoint, evaluation, or plot output or wave README/script exists,
-   `RUN_ID_PARAMS` is immutable under every layout (`nested`, `collapsed-v1`, `hashed-v1`). Never change the identity
+   `RUN_ID_PARAMS` and `RUN_ID_SEGMENTS` are immutable under every layout (`segments-v1`, `nested`, `collapsed-v1`, `hashed-v1`). Never change the identity
    schema in place. Create a new numbered sub-experiment with the re-elected params and its own
-   pinned layout; leave the old experiment and all of its records untouched.
+   pinned layout and segments; leave the old experiment and all of its records untouched.
 
 ## 2c. layout immutability for an EXISTING experiment
 
-Inspect checkpoints, evaluations, plots, and wave records before offering a layout
-choice. If none exists, present `nested` then the eligible `collapsed-v1` alternative, and the
-`hashed-v1` alternative only on overflow or user request, under section 2 and record the chosen
-literal. Once any output or wave record exists, preserve the checked-in
-renderer and `RUN_ID_PATH_LAYOUT` forever. Never propose or perform an in-place layout change, even
-when zero/one-param renderings are byte-identical. To use another layout, create a new numbered
-sub-experiment and leave the old experiment untouched.
+Inspect checkpoints, evaluations, plots, and wave records before running the rendering dialogue.
+If none exists, run section 2 in full and record the approved `segments-v1` spec. Once any output
+or wave record exists, preserve the checked-in renderer, `RUN_ID_PATH_LAYOUT`, and
+`RUN_ID_SEGMENTS` forever. Never propose or perform an in-place layout change, including moving a
+legacy `nested`, `collapsed-v1`, or `hashed-v1` experiment to `segments-v1` or regrouping its
+segments. To use another rendering, create a new numbered sub-experiment and leave the old
+experiment untouched.
 
 ## 3. Config
 
@@ -133,7 +148,7 @@ Every training/eval script wraps its work in the **StatusWriter** pattern
 - calls `heartbeat(completed=<done>, total=<total>, unit=<label>)` after every completed
   epoch/major step. The helper supplies liveness between calls; experiment code supplies the
   facts needed for ETA. Do not write an ETA into `.status.json`;
-- prints start time, end time, and elapsed to stdout — the wave script tees all stdout+stderr to the mirror of its own path under `logs/` (`logs/NNN_exp/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-<timestamp>.log`), so scripts need no separate file logging, and the elapsed lands in EXPERIMENTS.md as the run's reference runtime.
+- prints start time, end time, and elapsed to stdout — the wave script tees all stdout+stderr to the mirror of its own path under `logs/` (`logs/NNN_exp/<run_id path>/wave_<wave_id>/wave_<rig>_gpu<ids>-<timestamp>.log`; `<run_id_flat>` for legacy pins), so scripts need no separate file logging, and the elapsed lands in EXPERIMENTS.md as the run's reference runtime.
 
 Before dispatching, require the canonical schema-v2 helper and numeric call sites. A legacy
 display-only status contract makes the repository unsupported; do not upgrade it in place.
@@ -160,7 +175,7 @@ display-only status contract makes the repository unsupported; do not upgrade it
    provenance is what lets you filter by tested commit, rig/GPU, and environment. Not a mode
    decision; no owner may narrow it.
 3. Resolve metrics and their names/keys with the applicable engineering-mode owner.
-4. Use project = research project, group = `NNN_experiment`, run name = flat run_id as the proposal.
+4. Use project = research project, group = `NNN_experiment`, run name = `run_id_name(...)` (the rendered run_id; flat run_id for legacy pins) as the proposal.
    Manual mode waits for approval; auto mode may adopt or safely refine it inside the envelope.
 5. Online mode on all rigs; `WANDB_API_KEY` from `.env`.
 6. wandb files go under `logs/` — `wandb.init(dir=<project_root>/"logs")` — never the project root.

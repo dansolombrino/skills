@@ -23,22 +23,28 @@ config param added/changed since this experiment's last runs, must be in `RUN_ID
 **halt** and route through `experiment-design` before generating anything — otherwise new runs
 collide with old artifacts: overwritten, or silently skipped as "done". `RUN_ID_PARAMS` may change
 only while no checkpoint, evaluation, or plot output and no wave README or script exists. After the
-first such surface, any identity-schema change under `nested`, `collapsed-v1`, or `hashed-v1`
-requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the established tree. The artifact
+first such surface, any identity-schema change under `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1`
+(including any change to `RUN_ID_SEGMENTS`) requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the established tree. The artifact
 guard is only sound under this gate: `guard_run_config` catches collisions after Python starts, but
 an artifact-skipped run never enters Python.
 1b. **helper safety check** — verify `code/common/run_id.py` provides the canonical percent-encoded
-`run_id_path(cfg, params, *, layout='nested')`/`run_id_flat` renderers (with `hashed-v1` support
-and the `.run_id.json`/`RUN_ID_MAP.json` writer when the experiment pins that layout), `hydra_override_arg`, and
+`run_id_path(cfg, params, *, layout='nested', segments=None)`/`run_id_name`/`run_id_flat`
+renderers with `segments-v1` support, `check_run_id_plan`, `preflight_run_id_path`, the
+`.run_id.json`/`RUN_ID_MAP.json` writer (plus legacy `hashed-v1` support when the experiment pins
+that layout), `hydra_override_arg`, and
 the single config resolver
 `resolved_config`/`wandb_config` (a wandb run whose config is anything less than the whole
 resolved config is unfixable after the fact). Any older helper makes the project
 unsupported; halt without upgrading it in place.
 1c. **run-path layout check** — read the experiment's literal `RUN_ID_PATH_LAYOUT`; it must be
-`nested`, `collapsed-v1`, or `hashed-v1`. Treat that record as pinned for the project, pass it to the canonical
+`segments-v1` (with the experiment's recorded `RUN_ID_SEGMENTS`) or a legacy `nested`,
+`collapsed-v1`, or `hashed-v1` pin. Treat that record as pinned for the project, pass it to the canonical
 `run_id_path` helper, and resolve the checkpoint and evaluation run directories before generating
-the wave. They must use the same selected layout. Plot paths use the same helper and recorded layout
-after their plot-specific prefix. Never infer the layout from directory depth, reconstruct it from a
+the wave. They must use the same selected layout. `plots/` is not run-scoped. Under `segments-v1`,
+run `check_run_id_plan(<planned cfgs>, RUN_ID_PARAMS, RUN_ID_SEGMENTS, <evaluations experiment dir>,
+path_roots=(<checkpoints experiment dir>, <scripts experiment dir>, <logs experiment dir>))` over
+the whole wave on the hub before generating anything; any overflow, duplicate, path collision, or
+group-hash collision blocks dispatch and routes back to `experiment-design`. Never infer the layout from directory depth, reconstruct it from a
 flat id, or silently adopt a different layout. A missing, unsupported, or mixed layout blocks
 dispatch. Once any checkpoint, evaluation, or plot output or any wave README/script exists, its
 recorded `RUN_ID_PATH_LAYOUT` is immutable. Any disagreement or mixed tree blocks dispatch and
@@ -99,7 +105,7 @@ One id for the whole dispatch, shared by every rig and lane. Never use a semanti
 One script kind. For each run in the wave, materialize:
 
 ```
-scripts/NNN_exp/<run_id_flat>/wave_<wave_id>/
+scripts/NNN_exp/<run_id folder>/wave_<wave_id>/
     README.md                     # what this wave is + this run's placement; written once, never updated
     wave_<rig>_gpu<ids>.sh        # this run's invocation in this wave
 ```
@@ -114,10 +120,12 @@ scripts/NNN_exp/<run_id_flat>/wave_<wave_id>/
   also checks storage headroom first, exiting `88` rather than dying mid-checkpoint and leaving a
   truncated artifact that looks real. It captures its own
   timestamped log under the mirror path in `logs/`.
-- Folder names come from `run_id_flat` (via `code/common/run_id.py`) — identical strings to the
-  semantic run identity represented by EXPERIMENTS.md rows and to wandb run names.
-  `ls scripts/NNN_exp/<run_id_flat>/` is that run's execution history. The selected
-  `RUN_ID_PATH_LAYOUT` never changes scripts, logs, or wandb naming: those remain flat.
+- The run folder comes from `code/common/run_id.py`. Under `segments-v1` it is the same
+  `run_id_path(..., segments=RUN_ID_SEGMENTS)` directories as `evaluations/`, and the wandb run
+  name, EXPERIMENTS.md `run_id` column, and Slurm job-name suffix are `run_id_name(...)`, so every
+  surface shows one identity. Under a legacy pin the selected `RUN_ID_PATH_LAYOUT` never changes
+  scripts, logs, or wandb naming: those remain flat `run_id_flat`.
+  `ls scripts/NNN_exp/<run_id folder>/` is that run's execution history.
 - **The filesystem encodes the assignment**: a run is on that rig and those GPUs precisely because
   `wave_<rig>_gpu<ids>.sh` exists in its wave folder. No separate assignment record may drift.
 - Only `scripts/` and `logs/` are wave-scoped. `checkpoints/` and `evaluations/` stay
@@ -191,7 +199,7 @@ five minutes so a scheduled chat update never depends on an arbitrarily old poll
    - **expected final artifact** on disk (final checkpoint / final eval output) ⇒ truly done;
    - **`.status.json`** (`schema_version`, `state`, `heartbeat`, display + numeric progress,
     timing, `wave_id`, `gpu`, source tag/SHA, environment fingerprint);
-   - tail of the latest **`logs/NNN_exp/<run_id_flat>/wave_<wave_id>/wave_<rig>_gpu<ids>-<timestamp>.log`** — tracebacks/errors ⇒ failed; stale heartbeat + silent log ⇒ first rule out a machine fault (below), then suspect a hang and say so.
+   - tail of the latest **`logs/NNN_exp/<run_id folder>/wave_<wave_id>/wave_<rig>_gpu<ids>-<timestamp>.log`** — tracebacks/errors ⇒ failed; stale heartbeat + silent log ⇒ first rule out a machine fault (below), then suspect a hang and say so.
    Within the five-minute freshness cap, match poll intervals to expected run length (reference
    `elapsed` values in EXPERIMENTS.md help here) — don't hammer ssh.
 3. **Reports back** snapshots with an observation timestamp and heartbeat age, per-run outcome

@@ -43,7 +43,7 @@ python3 scripts/board.py status [--json] [--reconcile] [--all]   # whole fleet; 
 python3 scripts/board.py free <rig> <gpu> [--reconcile]  # exit 0 free, 1 held/foreign, 2 unverifiable
 python3 scripts/board.py reconcile [--rig <rig|cluster>]...  # probe rigs, correct the board (repeatable)
 python3 scripts/board.py claim --rig <rig> --gpu <ids> --project <name> --experiment <NNN_exp> --wave <wave_id> --project-root <abs path> --runs-total <n> [--tmux-session <name>]
-python3 scripts/board.py refresh --rig <rig> --gpu <ids> --wave <wave_id> --active-run <run_id_flat> --progress "<display>" --eta <ISO|''> --eta-basis "<basis>" --runs-done <n> [--runs-total <n>]
+python3 scripts/board.py refresh --rig <rig> --gpu <ids> --wave <wave_id> --active-run <run_id_name> --progress "<display>" --eta <ISO|''> --eta-basis "<basis>" --runs-done <n> [--runs-total <n>]
 python3 scripts/board.py release --rig <rig> --gpu <ids> --reason "<why>"
 python3 scripts/board.py history [--hours 24] [--limit 500] [--refresh] [--json]   # what happened on the board
 python3 scripts/board.py serve [--port 8765] [--bind 0.0.0.0] [--reconcile-every 120]   # probe period: registry [board] reconcile_every, 0 disables, min 10

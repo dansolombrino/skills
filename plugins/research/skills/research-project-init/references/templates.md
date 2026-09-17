@@ -33,7 +33,8 @@ Experiments are named `NNN_experiment_name` and mirrored across the folders abov
 `tests/<root>/<path>/<stem>/test_*.py`, and are optional per script.
 Each run is identified by its **run_id**. The experiment's `.py` is authoritative for both its
 ordered identity params (`RUN_ID_PARAMS`) and its literal output-path layout pin
-(`RUN_ID_PATH_LAYOUT = "nested"|"collapsed-v1"|"hashed-v1"`).
+(`RUN_ID_PATH_LAYOUT = "segments-v1"` with its user-approved `RUN_ID_SEGMENTS`; legacy
+experiments keep `"nested"|"collapsed-v1"|"hashed-v1"`).
 
 ## Tracking
 
@@ -89,8 +90,9 @@ stated, ask rather than imitate. External source code enters only through
 - `program/00-execution-agreement.md` — authoritative manual/auto mode and approval envelope.
 - `README.md` — structure + setup.
 - Deepen further by reading `config/NNN_*/` and the experiment's `.py`: `RUN_ID_PARAMS` is the
-  authoritative ordered run identity and `RUN_ID_PATH_LAYOUT` is the authoritative literal
-  `nested` or `collapsed-v1` output-path pin.
+  authoritative ordered run identity, `RUN_ID_PATH_LAYOUT` is the authoritative literal
+  output-path pin (`segments-v1`; legacy `nested`, `collapsed-v1`, or `hashed-v1`), and
+  `RUN_ID_SEGMENTS` is the approved split into explicit params and named hash groups.
 
 ## Project-specific quirks
 
@@ -115,10 +117,12 @@ Project notes live in `AGENTS.md`. Read @AGENTS.md before doing anything.
 
 <!-- state only; the story lives in JOURNAL.md. One section per NNN_experiment; each section
      header mirrors the experiment .py's ordered RUN_ID_PARAMS and exact literal pin,
+     `RUN_ID_PATH_LAYOUT: segments-v1` (plus `RUN_ID_SEGMENTS` and
+     `run_id map: evaluations/<experiment_path>/RUN_ID_MAP.json`), or a legacy
      `RUN_ID_PATH_LAYOUT: nested`, `RUN_ID_PATH_LAYOUT: collapsed-v1`, or `RUN_ID_PATH_LAYOUT: hashed-v1`
-     (the last also names `run_id map: evaluations/<experiment_path>/RUN_ID_MAP.json`).
-     Run tables, one row per (run, wave):
-     | <run_id params...> | wave | rig | gpu | status | started | progress | eta | ended | elapsed | notes |
+     (the last also names the map).
+     Run tables, one row per (run, wave); segments-v1 adds `run_id` and one column per hash group:
+     | <run_id params...> | run_id | <group hashes...> | wave | rig | gpu | status | started | progress | eta | ended | elapsed | notes |
      (schema: experiments-tracking skill) -->
 ```
 
@@ -153,20 +157,18 @@ engineering_mode: <manual|auto — required>
 - Soft preferences:
 - Delegable fields:
 - Protected choices:
-  - Run-output path layout: at experiment design, first show the complete `nested` checkpoint and
-    evaluation templates through their leaf names; `plots/` is not run-scoped and is out of scope
-    for this choice. Immediately afterward,
-    when at least two ordered RUN_ID_PARAMS are eligible, show exactly one separately labeled
-    `collapsed-v1` alternative; show none otherwise. When an applicable fixed-param list has zero
-    or one item, show its byte-identical `nested`/`collapsed-v1` path once, not as a separate
-    alternative; label it as both layouts' rendering and state the experiment's pinned literal.
-    That path is approvable under the pin. Show a `hashed-v1` alternative only when both other
-    renderings overflow a filesystem limit or the user asks. Wait for explicit user layout selection;
-    neither automatic mode may select `collapsed-v1` or `hashed-v1`. Record one experiment-wide RUN_ID_PATH_LAYOUT and use it
-    for both artifact surfaces. Offer this choice only before any checkpoint, evaluation, or wave
-    README/script exists. After that boundary, preserve the checked-in
-    renderer and literal pin forever; never propose or perform an in-place layout change, including
-    a byte-identical zero/one-param change. Another layout requires a new numbered sub-experiment.
+  - Run-output path layout: at every run_id election, run the `segments-v1` rendering dialogue
+    with the user: show the complete all-explicit checkpoint and evaluation templates with byte
+    counts and overflows; ask which params are hashed; propose named hash groups following the
+    Hydra config tree for the user to accept, rename, or regroup; ask where every item goes and
+    which items share a directory; show the rendered paths and preflight them again. `plots/` is
+    not run-scoped and is out of scope for this choice. Neither automatic mode may decide any step.
+    Record one experiment-wide RUN_ID_PATH_LAYOUT plus RUN_ID_SEGMENTS and use them for every
+    run-scoped surface. Legacy `nested`, `collapsed-v1`, and `hashed-v1` pins are never offered.
+    Offer this choice only before any checkpoint, evaluation, or wave README/script exists. After
+    that boundary, preserve the checked-in renderer and literal pin forever, with its segment spec;
+    never propose or perform an in-place layout change, including a regrouping or a move from a
+    legacy pin. Another layout requires a new numbered sub-experiment.
   - Plot communication: approve each exact title, its arrangement across title lines, the visible
     metric explanation, its in-figure placement, the interaction affordances, and the complete
     project-relative `plots/` export path including its leaf filename before every plotting-code
@@ -473,7 +475,7 @@ sweep-dispatch skill, `references/templates.md`.
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/../../../.." || exit 1  # to project root (depth varies with nesting)
-LOGDIR="logs/NNN_experiment/<run_id_flat>/wave_<wave_id>"
+LOGDIR="logs/NNN_experiment/<run_id folder>/wave_<wave_id>"
 mkdir -p "$LOGDIR"
 HYDRA_ARGS=(<tokens produced by hydra_override_arg; one per override>)
 {{ENVIRONMENT_NAME}}/bin/python code/NNN_experiment/script.py "${HYDRA_ARGS[@]}" 2>&1 \
@@ -530,19 +532,31 @@ def storage_path(var: str, default: str) -> Path:
 """Shared run_id helpers.
 
 Each experiment declares, in its own .py, the authoritative ordered list of config
-params that uniquely identify a run and its approved experiment-wide path layout:
+params that uniquely identify a run, its experiment-wide path layout, and (for
+segments-v1, the only layout offered to new experiments) the user-approved
+segment spec:
 
-    RUN_ID_PARAMS = ["model", "lr", "seed"]
-    RUN_ID_PATH_LAYOUT = "nested"
+    RUN_ID_PARAMS = ["model", "lr", "wd", "beta1", "seed"]
+    RUN_ID_PATH_LAYOUT = "segments-v1"
+    RUN_ID_SEGMENTS = [                      # one tuple = one directory component
+        ("model",),
+        ({"optim_params": ("lr", "wd", "beta1")}, "seed"),
+    ]
 
-and uses these helpers for ALL artifact paths and run names. Never hand-build them.
+A segment item is either a param name (rendered explicitly as ``key=value``) or a
+one-key dict naming a hash group (rendered as ``name=<16 hex>``). That renders
+``model=mlp/optim_params=3f0c...,seed=0``. The legacy literals ``nested``,
+``collapsed-v1`` and ``hashed-v1`` stay supported for experiments already pinned
+to them and are never offered to new experiments.
+
+Use these helpers for ALL artifact paths and run names. Never hand-build them.
 
 Scripts must call guard_run_config() before writing ANY artifact (and before the
 StatusWriter starts): it hard-fails on run_id collisions — same run_id, different
 full config — which happen when a param was added to the config but not to
-RUN_ID_PARAMS (schema evolution rules: conventions.md). One guard at the
-evaluations/ run dir suffices: checkpoints/ shares the same run_id. plots/ is
-not run-scoped and needs no guard.
+RUN_ID_PARAMS (schema evolution rules: conventions.md), and on hash collisions.
+One guard at the evaluations/ run dir suffices: checkpoints/ shares the same
+run_id. plots/ is not run-scoped and needs no guard.
 
 Scripts that use wandb must call wandb.init(config=wandb_config(cfg)) — the whole
 resolved config, never a subset.
@@ -558,6 +572,8 @@ from urllib.parse import quote
 RUN_ID_HASH_PREFIX = "rid-"
 RUN_ID_HASH_HEX = 16
 RUN_ID_MAP_NAME = "RUN_ID_MAP.json"
+SEGMENTS_LAYOUT = "segments-v1"
+LEGACY_LAYOUTS = ("nested", "collapsed-v1", "hashed-v1")
 
 
 def _run_id_component(value) -> str:
@@ -577,26 +593,125 @@ def _run_id_pairs(cfg, params) -> list[str]:
     return [f"{_run_id_component(p)}={_run_id_component(cfg[p])}" for p in params]
 
 
-def run_id_path(cfg, params, *, layout="nested") -> Path:
+def _segment_items(segments):
+    """Normalize a segment spec to [[("param", p) | ("group", name, params)]]."""
+    normalized = []
+    for segment in segments:
+        items = []
+        for item in segment:
+            if isinstance(item, str):
+                items.append(("param", item))
+            elif isinstance(item, dict) and len(item) == 1:
+                (name, group_params), = item.items()
+                items.append(("group", name, tuple(group_params)))
+            else:
+                raise ValueError(
+                    f"invalid run_id segment item {item!r}; expected a param name or "
+                    "a one-key {group_name: (params, ...)} dict"
+                )
+        normalized.append(items)
+    return normalized
+
+
+def validate_run_id_segments(params, segments) -> None:
+    """Hard-fail unless the segment spec renders RUN_ID_PARAMS losslessly.
+
+    Every param appears exactly once, no unknown params, no empty segment or
+    group, group names unique, filesystem-safe as-is, and never a param name.
+    Order and placement are free: the user decides them at every election.
+    """
+    normalized = _segment_items(segments)
+    if not normalized:
+        raise ValueError("RUN_ID_SEGMENTS is empty")
+    seen, groups = [], set()
+    for items in normalized:
+        if not items:
+            raise ValueError("RUN_ID_SEGMENTS has an empty segment")
+        for item in items:
+            if item[0] == "param":
+                seen.append(item[1])
+                continue
+            _, name, group_params = item
+            if not group_params:
+                raise ValueError(f"hash group {name!r} is empty")
+            if name in groups or name in params:
+                raise ValueError(
+                    f"hash group name {name!r} is duplicated or shadows a param"
+                )
+            if not name or _run_id_component(name) != name:
+                raise ValueError(
+                    f"hash group name {name!r} must be non-empty and filesystem-safe"
+                )
+            groups.add(name)
+            seen.extend(group_params)
+    duplicated = sorted({p for p in seen if seen.count(p) > 1})
+    missing = [p for p in params if p not in seen]
+    unknown = sorted(set(seen) - set(params))
+    if duplicated or missing or unknown:
+        raise ValueError(
+            "RUN_ID_SEGMENTS must place every RUN_ID_PARAMS entry exactly once: "
+            f"duplicated={duplicated} missing={missing} unknown={unknown}"
+        )
+
+
+def run_id_group_hash(cfg, name, group_params) -> str:
+    """16 hex of sha256 over the scheme, the group name, and its ordered pairs.
+
+    Only the group's own params enter the hash, so the same group values give
+    the same hash in every run. Collisions are never assumed away: the
+    per-directory record, RUN_ID_MAP.json, and check_run_id_plan() fail hard.
+    """
+    canonical = "\0".join(
+        (SEGMENTS_LAYOUT, name, ",".join(_run_id_pairs(cfg, group_params)))
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:RUN_ID_HASH_HEX]
+
+
+def run_id_groups(cfg, segments) -> dict:
+    """{group_name: {"hash": ..., "params": {param: value}}} for one run."""
+    return {
+        item[1]: {
+            "hash": run_id_group_hash(cfg, item[1], item[2]),
+            "params": run_id_dict(cfg, item[2]),
+        }
+        for items in _segment_items(segments)
+        for item in items
+        if item[0] == "group"
+    }
+
+
+def run_id_path(cfg, params, *, layout="nested", segments=None) -> Path:
     """Run-output path in the experiment's authoritative layout.
 
-    ``nested`` renders ``model=mlp/lr=0.001/seed=0``. ``collapsed-v1`` renders
-    the exact same ordered, percent-encoded pairs in one component:
-    ``model=mlp,lr=0.001,seed=0``. ``hashed-v1`` renders one short component
-    ``rid-<16 hex>`` (sha256 of the collapsed-v1 string) for filesystems whose
-    limits the other two overflow; guard_run_config() then records the two-way
-    hash<->params map (.run_id.json per run, RUN_ID_MAP.json per experiment).
-    Both non-nested layouts are opt-in and must be recorded as the experiment's
-    RUN_ID_PATH_LAYOUT only after explicit user approval.
+    ``segments-v1`` (the only layout for new experiments) renders one directory
+    per segment; items inside a segment are joined with ``,``; a param renders as
+    its percent-encoded ``key=value`` and a hash group as ``name=<16 hex>``.
 
-    With zero or one pair the two layouts are byte-identical (``.`` or the one
-    ``key=value`` component). Presentation code shows that path once, labels it
-    as both layouts' rendering plus the pinned literal.
+    Legacy pins, kept only for experiments that already recorded them:
+    ``nested`` renders ``model=mlp/lr=0.001/seed=0``; ``collapsed-v1`` renders
+    the same pairs in one component ``model=mlp,lr=0.001,seed=0``; ``hashed-v1``
+    renders one component ``rid-<16 hex>`` (sha256 of the collapsed-v1 string).
 
     Use one layout consistently under checkpoints/ and evaluations/. plots/ does
-    not use run_id paths at all. Do not truncate, hash outside hashed-v1, or
-    otherwise rewrite pairs to evade a collision or filesystem limit.
+    not use run_id paths at all. Never truncate, hash outside the recorded spec,
+    or otherwise rewrite pairs to evade a collision or filesystem limit.
     """
+    if layout == SEGMENTS_LAYOUT:
+        if segments is None:
+            raise ValueError("segments-v1 requires the experiment's RUN_ID_SEGMENTS")
+        validate_run_id_segments(params, segments)
+        components = []
+        for items in _segment_items(segments):
+            rendered = []
+            for item in items:
+                if item[0] == "param":
+                    rendered.extend(_run_id_pairs(cfg, [item[1]]))
+                else:
+                    rendered.append(f"{item[1]}={run_id_group_hash(cfg, item[1], item[2])}")
+            components.append(",".join(rendered))
+        return Path(*components)
+    if segments is not None:
+        raise ValueError(f"RUN_ID_SEGMENTS only applies to segments-v1, not {layout!r}")
     pairs = _run_id_pairs(cfg, params)
     if layout == "nested":
         return Path(*pairs)
@@ -606,18 +721,47 @@ def run_id_path(cfg, params, *, layout="nested") -> Path:
         return Path(run_id_hash(cfg, params))
     raise ValueError(
         f"invalid run_id path layout {layout!r}; "
-        "expected 'nested', 'collapsed-v1', or 'hashed-v1'"
+        "expected 'segments-v1', 'nested', 'collapsed-v1', or 'hashed-v1'"
     )
 
 
+def run_id_name(cfg, params, *, layout="nested", segments=None) -> str:
+    """The one string identity of a run.
+
+    Under segments-v1 it is the rendered run_id path in POSIX form, used for the
+    wandb run name, the EXPERIMENTS.md ``run_id`` column, and the Slurm job-name
+    suffix, so every surface matches the directories on disk. Legacy layouts
+    keep ``run_id_flat``.
+    """
+    if layout == SEGMENTS_LAYOUT:
+        return run_id_path(cfg, params, layout=layout, segments=segments).as_posix()
+    return run_id_flat(cfg, params)
+
+
 def run_id_hash(cfg, params) -> str:
-    """The hashed-v1 component: ``rid-`` + first 16 hex of sha256(run_id_flat)."""
+    """The legacy hashed-v1 component: ``rid-`` + 16 hex of sha256(run_id_flat)."""
     digest = hashlib.sha256(run_id_flat(cfg, params).encode("utf-8")).hexdigest()
     return RUN_ID_HASH_PREFIX + digest[:RUN_ID_HASH_HEX]
 
 
-def run_id_record(cfg, params) -> dict:
+def _segments_json(segments):
+    return [
+        [item[1] if item[0] == "param" else {item[1]: list(item[2])} for item in items]
+        for items in _segment_items(segments)
+    ]
+
+
+def run_id_record(cfg, params, *, layout="hashed-v1", segments=None) -> dict:
     """The .run_id.json payload: the full two-way mapping for one run."""
+    if layout == SEGMENTS_LAYOUT:
+        return {
+            "layout": SEGMENTS_LAYOUT,
+            "segments": _segments_json(segments),
+            "path": run_id_name(cfg, params, layout=layout, segments=segments),
+            "run_id_flat": run_id_flat(cfg, params),
+            "run_id": run_id_dict(cfg, params),
+            "groups": run_id_groups(cfg, segments),
+        }
     return {
         "layout": "hashed-v1",
         "hash": run_id_hash(cfg, params),
@@ -626,32 +770,141 @@ def run_id_record(cfg, params) -> dict:
     }
 
 
-def write_run_id_map(experiment_root: Path) -> Path:
+def _merge_segment_record(index, record, where) -> None:
+    """Fold one segments-v1 record into a map index; raise on any collision."""
+    known_flat = index["by_path"].get(record["path"])
+    if known_flat is not None and known_flat != record["run_id_flat"]:
+        raise RuntimeError(
+            f"run_id path collision at {where}: {record['path']!r} maps to both "
+            f"{known_flat!r} and {record['run_id_flat']!r}"
+        )
+    index["by_path"][record["path"]] = record["run_id_flat"]
+    index["by_run_id_flat"][record["run_id_flat"]] = record["path"]
+    for name, group in record["groups"].items():
+        hashes = index["groups"].setdefault(name, {})
+        known = hashes.get(group["hash"])
+        if known is not None and known != group["params"]:
+            raise RuntimeError(
+                f"group hash collision at {where}: {name}={group['hash']} maps to both "
+                f"{known!r} and {group['params']!r}. Stop; never reuse or rename the "
+                "directory. Re-elect the segments in a new numbered sub-experiment."
+            )
+        hashes[group["hash"]] = group["params"]
+
+
+def _read_run_id_map(experiment_root: Path) -> dict:
+    map_file = experiment_root / RUN_ID_MAP_NAME
+    if map_file.exists():
+        payload = json.loads(map_file.read_text())
+        if payload.get("layout") == SEGMENTS_LAYOUT:
+            return payload
+    return {"layout": SEGMENTS_LAYOUT, "by_path": {}, "by_run_id_flat": {}, "groups": {}}
+
+
+def write_run_id_map(experiment_root: Path, *, layout="hashed-v1") -> Path:
     """Regenerate <experiment_root>/RUN_ID_MAP.json from every run's .run_id.json.
 
-    Derived index only, safe to regenerate on any rig: ``by_hash`` maps
-    hash -> {run_id_flat, run_id}; ``by_run_id_flat`` maps flat -> hash.
+    Derived index only, safe to regenerate on any rig. Legacy hashed-v1:
+    ``by_hash`` maps hash -> {run_id_flat, run_id}; ``by_run_id_flat`` maps
+    flat -> hash. segments-v1: ``by_path`` maps rendered path -> run_id_flat,
+    ``by_run_id_flat`` the reverse, and ``groups`` maps group -> hash -> params;
+    a hash or path claimed by two different identities raises.
     """
-    by_hash, by_flat = {}, {}
-    for record_file in sorted(experiment_root.glob("*/.run_id.json")):
-        record = json.loads(record_file.read_text())
-        by_hash[record["hash"]] = {
-            "run_id_flat": record["run_id_flat"],
-            "run_id": record["run_id"],
-        }
-        by_flat[record["run_id_flat"]] = record["hash"]
-    payload = {"layout": "hashed-v1", "by_hash": by_hash, "by_run_id_flat": by_flat}
+    if layout == SEGMENTS_LAYOUT:
+        payload = {"layout": SEGMENTS_LAYOUT, "by_path": {}, "by_run_id_flat": {}, "groups": {}}
+        for record_file in sorted(experiment_root.glob("**/.run_id.json")):
+            record = json.loads(record_file.read_text())
+            rel = record_file.parent.relative_to(experiment_root).as_posix()
+            if record.get("layout") != SEGMENTS_LAYOUT or record["path"] != rel:
+                raise RuntimeError(
+                    f"{record_file} does not match segments-v1 path {rel!r}; mixed or "
+                    "moved run directories block the map"
+                )
+            _merge_segment_record(payload, record, record_file)
+    else:
+        by_hash, by_flat = {}, {}
+        for record_file in sorted(experiment_root.glob("*/.run_id.json")):
+            record = json.loads(record_file.read_text())
+            by_hash[record["hash"]] = {
+                "run_id_flat": record["run_id_flat"],
+                "run_id": record["run_id"],
+            }
+            by_flat[record["run_id_flat"]] = record["hash"]
+        payload = {"layout": "hashed-v1", "by_hash": by_hash, "by_run_id_flat": by_flat}
     map_file = experiment_root / RUN_ID_MAP_NAME
-    tmp = map_file.with_suffix(".json.tmp")
+    tmp = map_file.with_suffix(f".json.tmp.{os.getpid()}")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True))
     os.replace(tmp, map_file)
     return map_file
 
 
+def _path_limit(root: Path, name: str, fallback: int) -> int:
+    probe = Path(root).absolute()
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    try:
+        return os.pathconf(probe, name)
+    except (OSError, ValueError, AttributeError):
+        return fallback
+
+
+def preflight_run_id_path(root: Path, rel_path: Path) -> dict:
+    """Byte report for <root>/<rel_path>; raise if any filesystem limit overflows.
+
+    Returns {"components": [(component, bytes), ...], "total_bytes": n,
+    "name_max": ..., "path_max": ...}. The election shows this report for the
+    all-explicit path first and again for every proposed rendering.
+    """
+    name_max = _path_limit(root, "PC_NAME_MAX", 255)
+    path_max = _path_limit(root, "PC_PATH_MAX", 4096)
+    components = [(part, len(part.encode("utf-8"))) for part in Path(rel_path).parts]
+    total = len(str(Path(root).absolute() / rel_path).encode("utf-8"))
+    report = {
+        "components": components,
+        "total_bytes": total,
+        "name_max": name_max,
+        "path_max": path_max,
+    }
+    over = [part for part, size in components if size > name_max]
+    if over or total >= path_max:
+        raise ValueError(
+            f"run_id path overflows under {root}: components over {name_max} bytes: "
+            f"{over}; full path {total} bytes (limit {path_max}). Re-elect the segments."
+        )
+    return report
+
+
+def check_run_id_plan(cfgs, params, segments, experiment_root: Path, *, path_roots=()) -> list[Path]:
+    """Pre-dispatch gate for a segments-v1 wave; returns the planned run paths.
+
+    Preflights every planned path under experiment_root and each extra root
+    (e.g. the experiment's checkpoints/ dir), and fails on any group-hash or
+    path collision within the plan or against the existing RUN_ID_MAP.json, and
+    on a run planned twice.
+    """
+    validate_run_id_segments(params, segments)
+    index = _read_run_id_map(experiment_root)
+    planned, paths = set(), []
+    for cfg in cfgs:
+        record = run_id_record(cfg, params, layout=SEGMENTS_LAYOUT, segments=segments)
+        if record["run_id_flat"] in planned:
+            raise RuntimeError(f"run {record['run_id_flat']!r} is planned twice")
+        planned.add(record["run_id_flat"])
+        _merge_segment_record(index, record, "the planned wave")
+        rel = Path(record["path"])
+        for root in (experiment_root, *path_roots):
+            preflight_run_id_path(root, rel)
+        paths.append(rel)
+    return paths
+
+
 def run_id_flat(cfg, params) -> str:
     """Flat form, e.g. 'model=mlp,lr=0.001,seed=0'.
 
-    Used for scripts/ and logs/ run-folder names, wandb run names, EXPERIMENTS.md rows.
+    The complete, lossless identity string: recorded in .run_id.json and
+    RUN_ID_MAP.json under every layout. Legacy layouts also use it for scripts/
+    and logs/ run-folder names, wandb run names, and EXPERIMENTS.md rows;
+    segments-v1 uses run_id_path()/run_id_name() there instead.
     """
     return ",".join(_run_id_pairs(cfg, params))
 
@@ -709,7 +962,9 @@ def wandb_config(cfg) -> dict:
     return resolved
 
 
-def guard_run_config(cfg, params, run_dir: Path, *, layout="nested") -> None:
+def guard_run_config(
+    cfg, params, run_dir: Path, *, layout="nested", segments=None, experiment_root=None
+) -> None:
     """Refuse to reuse a run dir whose config differs from the current one.
 
     Writes the full resolved config to <run_dir>/.run_config.json on first run.
@@ -717,12 +972,38 @@ def guard_run_config(cfg, params, run_dir: Path, *, layout="nested") -> None:
     a run_id collision: a param changed that is not in RUN_ID_PARAMS. Same-config
     reruns (resume/retry) pass. Call BEFORE writing any artifact.
 
-    Under ``hashed-v1`` it also writes <run_dir>/.run_id.json (hash <-> params),
-    hard-fails if an existing record maps the hash to a different run_id_flat,
-    and regenerates the experiment-wide RUN_ID_MAP.json next to the run dirs.
+    Under ``segments-v1`` (requires segments and experiment_root) it asserts that
+    run_dir is experiment_root / run_id_path(...), writes <run_dir>/.run_id.json,
+    hard-fails if an existing record there names a different run_id_flat, and
+    regenerates RUN_ID_MAP.json, which hard-fails on any group-hash collision.
+    Legacy ``hashed-v1`` keeps its record/map behavior next to the run dirs.
     """
     resolved = resolved_config(cfg)
-    if layout == "hashed-v1":
+    if layout == SEGMENTS_LAYOUT:
+        if experiment_root is None:
+            raise ValueError("segments-v1 guard requires experiment_root")
+        expected = Path(experiment_root) / run_id_path(
+            cfg, params, layout=layout, segments=segments
+        )
+        if Path(run_dir) != expected:
+            raise RuntimeError(f"run dir {run_dir} is not the segments-v1 path {expected}")
+        record = run_id_record(cfg, params, layout=layout, segments=segments)
+        record_file = expected / ".run_id.json"
+        if record_file.exists():
+            existing = json.loads(record_file.read_text())
+            if existing["run_id_flat"] != record["run_id_flat"]:
+                raise RuntimeError(
+                    f"segments-v1 hash collision at {run_dir}: {record['path']} already maps "
+                    f"to {existing['run_id_flat']!r}, not {record['run_id_flat']!r}. Stop and "
+                    "re-elect the segments in a new numbered sub-experiment."
+                )
+        else:
+            index = _read_run_id_map(Path(experiment_root))
+            _merge_segment_record(index, record, run_dir)
+            expected.mkdir(parents=True, exist_ok=True)
+            record_file.write_text(json.dumps(record, indent=2, sort_keys=True))
+        write_run_id_map(Path(experiment_root), layout=layout)
+    elif layout == "hashed-v1":
         record = run_id_record(cfg, params)
         record_file = run_dir / ".run_id.json"
         if record_file.exists():
