@@ -60,11 +60,13 @@ Integrity gates and protected choices never become delegable.
    group name, and the group's ordered percent-encoded `key=value` pairs, so identical group values
    hash identically in every run. A 64-bit truncation is never assumed collision-free: the helper
    writes the full mapping `{layout, segments, path, run_id_flat, run_id dict, groups}` to
-   `.run_id.json` inside every run directory, hard-fails when a directory's record names a
-   different run, regenerates the experiment-wide two-way map
-   `evaluations/<experiment_path>/RUN_ID_MAP.json` and hard-fails when one group hash maps to two
-   different param sets, and `check_run_id_plan` repeats the path, hash, and limit checks for every
-   planned run before dispatch. A collision stops the work; it is never resolved by reusing,
+   `.run_id.json` inside every run directory and hard-fails when a directory's record names a
+   different run. `check_run_id_plan` rescans every existing record and repeats the path, hash,
+   and limit checks for every planned run before dispatch, and `write_run_id_map` rebuilds the
+   experiment-wide two-way map `evaluations/<experiment_path>/RUN_ID_MAP.json` once per wave,
+   hard-failing when one group hash maps to two different param sets. The per-run guard never
+   scans other runs or writes the map: its I/O stays O(1) and atomic, so thousands of concurrent
+   runs on a shared filesystem neither slow down quadratically nor read a torn file. A collision stops the work; it is never resolved by reusing,
    renaming, or rewriting a directory. The map is a derived index, never the identity source, so a
    hash can always be read back into its params at a glance and vice versa.
 4. Record `RUN_ID_PARAMS = [...]`, the one authoritative experiment-wide
@@ -80,7 +82,8 @@ Integrity gates and protected choices never become delegable.
    segments=RUN_ID_SEGMENTS, experiment_root=<evaluations experiment dir>)` into every
    training/eval script, **before the StatusWriter starts and before any artifact is written** — it
    snapshots the full config to `.run_config.json`, hard-fails on run_id collisions (same run_id,
-   different config), writes `.run_id.json`, and regenerates `RUN_ID_MAP.json`.
+   different config), and atomically writes `.run_id.json`; it never touches `RUN_ID_MAP.json`,
+   which the wave's end rebuilds once.
 
 **Legacy pins.** `nested`, `collapsed-v1`, and `hashed-v1` remain valid `RUN_ID_PATH_LAYOUT`
 literals only for experiments that already recorded them; the helper keeps rendering them

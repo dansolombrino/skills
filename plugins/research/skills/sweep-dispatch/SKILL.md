@@ -31,7 +31,8 @@ an artifact-skipped run never enters Python.
 `run_id_path(cfg, params, *, layout='nested', segments=None)`/`run_id_name`/`run_id_flat`
 renderers with `segments-v1` support, `check_run_id_plan`, `preflight_run_id_path`, the
 `.run_id.json`/`RUN_ID_MAP.json` writer (plus legacy `hashed-v1` support when the experiment pins
-that layout), `hydra_override_arg`, and
+that layout) with atomic identity writes and a `guard_run_config` that never scans other runs or
+rewrites the map (a per-run map rebuild is quadratic in the wave and cannot finish at scale), `hydra_override_arg`, and
 the single config resolver
 `resolved_config`/`wandb_config` (a wandb run whose config is anything less than the whole
 resolved config is unfixable after the fact). Any older helper makes the project
@@ -297,7 +298,10 @@ the orchestrator reconciles EXPERIMENTS.md from the newest per-rig snapshots, ru
 `refresh` for each of its lanes (active run, progress, ETA and basis, runs done), and posts one
 compact aggregate update. A completion, failure, suspected hang, rig outage, or recovery is reported as
 soon as observed and does not reset `next_update`. When every run is terminal, `rig-board`
-`release` every lane of the wave, post the final summary immediately with the prune proposal
+`release` every lane of the wave, rebuild the run_id map once with
+`write_run_id_map(<evaluations experiment dir>, layout=RUN_ID_PATH_LAYOUT)` on each machine whose
+evaluations tree received the wave's runs (never per run; a collision it raises is a blocker in
+the summary), post the final summary immediately with the prune proposal
 (§ Pruning finished waves), and stop the schedule. A
 lane that stops early on a reserved exit (`86`/`87`/`88`) or is deliberately abandoned is
 released in the same turn with that reason.

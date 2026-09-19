@@ -70,7 +70,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "7.1.0")
+        self.assertEqual(manifest["version"], "7.1.1")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -341,6 +341,7 @@ class ResearchContractTests(unittest.TestCase):
         run_id_path = namespace["run_id_path"]
         run_id_flat = namespace["run_id_flat"]
         guard_run_config = namespace["guard_run_config"]
+        write_run_id_map = namespace["write_run_id_map"]
 
         cfg = {"model": "vit/base", "lr": 0.001, "seed": 3}
         params = ["model", "lr", "seed"]
@@ -357,6 +358,9 @@ class ResearchContractTests(unittest.TestCase):
             self.assertEqual(record["hash"], expected)
             self.assertEqual(record["run_id_flat"], flat)
             self.assertEqual(record["run_id"], {"model": "vit/base", "lr": 0.001, "seed": 3})
+            # the per-run guard never writes the map; the wave's end rebuilds it once
+            self.assertFalse((exp_root / "RUN_ID_MAP.json").exists())
+            write_run_id_map(exp_root)
             run_map = json.loads((exp_root / "RUN_ID_MAP.json").read_text())
             self.assertEqual(run_map["by_hash"][expected]["run_id"], record["run_id"])
             self.assertEqual(run_map["by_run_id_flat"][flat], expected)
@@ -1025,6 +1029,7 @@ class ResearchContractTests(unittest.TestCase):
         guard_run_config = namespace["guard_run_config"]
         check_run_id_plan = namespace["check_run_id_plan"]
         preflight = namespace["preflight_run_id_path"]
+        write_run_id_map = namespace["write_run_id_map"]
 
         params = ["model", "lr", "wd", "seed"]
         segments = [("model",), ({"optim_params": ("lr", "wd")}, "seed")]
@@ -1094,6 +1099,8 @@ class ResearchContractTests(unittest.TestCase):
             self.assertEqual(record["path"], path.as_posix())
             self.assertEqual(record["run_id_flat"], run_id_flat(cfg, params))
             self.assertEqual(record["groups"]["optim_params"], {"hash": digest, "params": {"lr": 0.001, "wd": 0.01}})
+            self.assertFalse((root / "RUN_ID_MAP.json").exists())
+            write_run_id_map(root, layout="segments-v1")
             run_map = json.loads((root / "RUN_ID_MAP.json").read_text())
             self.assertEqual(run_map["by_path"][path.as_posix()], run_id_flat(cfg, params))
             self.assertEqual(run_map["by_run_id_flat"][run_id_flat(cfg, params)], path.as_posix())
@@ -1122,13 +1129,14 @@ class ResearchContractTests(unittest.TestCase):
                     check_run_id_plan([{**clash, "seed": 7}], params, segments, root)
                 with self.assertRaisesRegex(RuntimeError, "run_id path collision"):
                     check_run_id_plan([clash], params, segments, root)
+                # The O(1) guard cannot see another run's groups; the once-per-wave
+                # map rebuild catches a clash that bypassed the plan check.
+                clash_dir = root / run_id_path({**clash, "seed": 6}, params, layout="segments-v1", segments=segments)
+                guard_run_config({**clash, "seed": 6}, params, clash_dir, **kwargs)
                 with self.assertRaisesRegex(RuntimeError, "group hash collision"):
-                    guard_run_config(
-                        {**clash, "seed": 6},
-                        params,
-                        root / run_id_path({**clash, "seed": 6}, params, layout="segments-v1", segments=segments),
-                        **kwargs,
-                    )
+                    write_run_id_map(root, layout="segments-v1")
+                (clash_dir / ".run_id.json").unlink()
+                (clash_dir / ".run_config.json").unlink()
                 # Same directory claimed by a different run is a hard error too.
                 with self.assertRaisesRegex(RuntimeError, "hash collision"):
                     guard_run_config(clash, params, run_dir, **kwargs)
@@ -1142,6 +1150,71 @@ class ResearchContractTests(unittest.TestCase):
                 preflight(root, Path("x" * 256))
             with self.assertRaisesRegex(ValueError, "overflows"):
                 check_run_id_plan([{**cfg, "model": "m" * 300}], params, segments, root)
+
+    def test_run_id_guard_is_o1_per_run_and_writes_atomically(self) -> None:
+        namespace: dict[str, object] = {}
+        exec(compile(run_id_template(), "run_id.py", "exec"), namespace)
+        run_id_path = namespace["run_id_path"]
+        guard_run_config = namespace["guard_run_config"]
+        check_run_id_plan = namespace["check_run_id_plan"]
+        write_run_id_map = namespace["write_run_id_map"]
+
+        params = ["model", "lr", "seed"]
+        segments = [("model",), ({"optim": ("lr",)}, "seed")]
+        cfg = {"model": "mlp", "lr": 0.1, "seed": 0}
+
+        def run_dir(root, c):
+            return root / run_id_path(c, params, layout="segments-v1", segments=segments)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "evaluations" / "001_scale"
+            kwargs = {"layout": "segments-v1", "segments": segments, "experiment_root": root}
+
+            # The guard never reads another run: a torn sibling record cannot crash it.
+            torn = run_dir(root, {**cfg, "seed": 99})
+            torn.mkdir(parents=True)
+            (torn / ".run_id.json").write_text('{"layout": "segm')
+            guard_run_config(cfg, params, run_dir(root, cfg), **kwargs)
+            self.assertFalse((root / "RUN_ID_MAP.json").exists())
+            # The once-per-wave rescans still see it and fail loudly.
+            with self.assertRaises(json.JSONDecodeError):
+                write_run_id_map(root, layout="segments-v1")
+            with self.assertRaises(json.JSONDecodeError):
+                check_run_id_plan([{**cfg, "seed": 1}], params, segments, root)
+            (torn / ".run_id.json").unlink()
+
+            # A stale map never hides a collision from the plan check: it rescans records.
+            write_run_id_map(root, layout="segments-v1")
+            guard_run_config({**cfg, "seed": 2}, params, run_dir(root, {**cfg, "seed": 2}), **kwargs)
+            real_hash = namespace["run_id_group_hash"]
+            existing = real_hash(cfg, "optim", ("lr",))
+            namespace["run_id_group_hash"] = lambda c, n, g: existing
+            try:
+                with self.assertRaisesRegex(RuntimeError, "run_id path collision"):
+                    check_run_id_plan([{**cfg, "lr": 0.5, "seed": 2}], params, segments, root)
+            finally:
+                namespace["run_id_group_hash"] = real_hash
+
+            write_run_id_map(root, layout="segments-v1")
+            leftovers = [p.name for p in root.rglob("*") if ".tmp." in p.name]
+            self.assertEqual(leftovers, [])
+
+        body = run_id_template()
+        guard = body.split("def guard_run_config(", 1)[1].split("\ndef ", 1)[0]
+        self.assertNotIn("write_run_id_map(", guard)
+        self.assertNotIn("build_run_id_index(", guard)
+        self.assertNotIn("RUN_ID_MAP_NAME", guard)
+        self.assertNotIn(".write_text(", guard)
+        self.assertIn("socket.gethostname()", body)
+
+        skills = ROOT / "plugins/research/skills"
+        dispatch = " ".join((skills / "sweep-dispatch/SKILL.md").read_text().split())
+        self.assertIn("write_run_id_map(<evaluations experiment dir>, layout=RUN_ID_PATH_LAYOUT)", dispatch)
+        self.assertIn("never per run", dispatch)
+        for rel in ("experiment-design/SKILL.md", "research-project-init/references/conventions.md"):
+            text = " ".join((skills / rel).read_text().split())
+            self.assertIn("once per wave", text)
+            self.assertIn("O(1)", text)
 
     def test_execution_agreement_plot_contract_matches_every_propagated_surface(self) -> None:
         skills = ROOT / "plugins/research/skills"

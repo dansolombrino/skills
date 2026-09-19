@@ -599,7 +599,10 @@ StatusWriter starts): it hard-fails on run_id collisions — same run_id, differ
 full config — which happen when a param was added to the config but not to
 RUN_ID_PARAMS (schema evolution rules: conventions.md), and on hash collisions.
 One guard at the evaluations/ run dir suffices: checkpoints/ shares the same
-run_id. plots/ is not run-scoped and needs no guard.
+run_id. plots/ is not run-scoped and needs no guard. The guard's I/O is O(1)
+per run: it never scans the experiment or writes RUN_ID_MAP.json. The map is
+rebuilt once per wave with write_run_id_map(), and check_run_id_plan() rescans
+every record before dispatch.
 
 Scripts that use wandb must call wandb.init(config=wandb_config(cfg)) — the whole
 resolved config, never a subset.
@@ -609,6 +612,8 @@ import hashlib
 import json
 import os
 import shlex
+import socket
+import uuid
 from pathlib import Path
 from urllib.parse import quote
 
@@ -835,24 +840,34 @@ def _merge_segment_record(index, record, where) -> None:
         hashes[group["hash"]] = group["params"]
 
 
-def _read_run_id_map(experiment_root: Path) -> dict:
-    map_file = experiment_root / RUN_ID_MAP_NAME
-    if map_file.exists():
-        payload = json.loads(map_file.read_text())
-        if payload.get("layout") == SEGMENTS_LAYOUT:
-            return payload
-    return {"layout": SEGMENTS_LAYOUT, "by_path": {}, "by_run_id_flat": {}, "groups": {}}
+def _write_json_atomic(path: Path, payload, **dumps_kwargs) -> None:
+    """Write JSON so concurrent readers see the old file or the new one, never a torn one.
 
-
-def write_run_id_map(experiment_root: Path, *, layout="hashed-v1") -> Path:
-    """Regenerate <experiment_root>/RUN_ID_MAP.json from every run's .run_id.json.
-
-    Derived index only, safe to regenerate on any rig. Legacy hashed-v1:
-    ``by_hash`` maps hash -> {run_id_flat, run_id}; ``by_run_id_flat`` maps
-    flat -> hash. segments-v1: ``by_path`` maps rendered path -> run_id_flat,
-    ``by_run_id_flat`` the reverse, and ``groups`` maps group -> hash -> params;
-    a hash or path claimed by two different identities raises.
+    The tmp name is hidden (never matches a ``.run_id.json`` glob) and unique
+    across hosts sharing one filesystem, not just across local pids.
     """
+    path = Path(path)
+    tmp = path.with_name(
+        f".{path.name}.tmp.{socket.gethostname()}.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    )
+    try:
+        tmp.write_text(json.dumps(payload, **dumps_kwargs))
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def build_run_id_index(experiment_root: Path, *, layout="hashed-v1") -> dict:
+    """Rebuild the RUN_ID_MAP payload from every run's .run_id.json, in memory.
+
+    O(runs) reads: call it once per wave (write_run_id_map, check_run_id_plan),
+    never once per run. Legacy hashed-v1: ``by_hash`` maps hash -> {run_id_flat,
+    run_id}; ``by_run_id_flat`` maps flat -> hash. segments-v1: ``by_path`` maps
+    rendered path -> run_id_flat, ``by_run_id_flat`` the reverse, and ``groups``
+    maps group -> hash -> params; a hash or path claimed by two different
+    identities raises.
+    """
+    experiment_root = Path(experiment_root)
     if layout == SEGMENTS_LAYOUT:
         payload = {"layout": SEGMENTS_LAYOUT, "by_path": {}, "by_run_id_flat": {}, "groups": {}}
         for record_file in sorted(experiment_root.glob("**/.run_id.json")):
@@ -874,10 +889,20 @@ def write_run_id_map(experiment_root: Path, *, layout="hashed-v1") -> Path:
             }
             by_flat[record["run_id_flat"]] = record["hash"]
         payload = {"layout": "hashed-v1", "by_hash": by_hash, "by_run_id_flat": by_flat}
-    map_file = experiment_root / RUN_ID_MAP_NAME
-    tmp = map_file.with_suffix(f".json.tmp.{os.getpid()}")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True))
-    os.replace(tmp, map_file)
+    return payload
+
+
+def write_run_id_map(experiment_root: Path, *, layout="hashed-v1") -> Path:
+    """Regenerate <experiment_root>/RUN_ID_MAP.json atomically, once per wave.
+
+    Derived index only, safe to regenerate on any rig; hard-fails on any
+    collision (build_run_id_index). Never call it per run: guard_run_config does
+    not, and the wave's end rebuilds it once.
+    """
+    map_file = Path(experiment_root) / RUN_ID_MAP_NAME
+    payload = build_run_id_index(experiment_root, layout=layout)
+    map_file.parent.mkdir(parents=True, exist_ok=True)
+    _write_json_atomic(map_file, payload, indent=2, sort_keys=True)
     return map_file
 
 
@@ -922,11 +947,12 @@ def check_run_id_plan(cfgs, params, segments, experiment_root: Path, *, path_roo
 
     Preflights every planned path under experiment_root and each extra root
     (e.g. the experiment's checkpoints/ dir), and fails on any group-hash or
-    path collision within the plan or against the existing RUN_ID_MAP.json, and
-    on a run planned twice.
+    path collision within the plan or against every existing run's .run_id.json
+    (rescanned here, so a stale RUN_ID_MAP.json never hides a collision), and on
+    a run planned twice.
     """
     validate_run_id_segments(params, segments)
-    index = _read_run_id_map(experiment_root)
+    index = build_run_id_index(experiment_root, layout=SEGMENTS_LAYOUT)
     planned, paths = set(), []
     for cfg in cfgs:
         record = run_id_record(cfg, params, layout=SEGMENTS_LAYOUT, segments=segments)
@@ -1016,10 +1042,17 @@ def guard_run_config(
     reruns (resume/retry) pass. Call BEFORE writing any artifact.
 
     Under ``segments-v1`` (requires segments and experiment_root) it asserts that
-    run_dir is experiment_root / run_id_path(...), writes <run_dir>/.run_id.json,
-    hard-fails if an existing record there names a different run_id_flat, and
-    regenerates RUN_ID_MAP.json, which hard-fails on any group-hash collision.
-    Legacy ``hashed-v1`` keeps its record/map behavior next to the run dirs.
+    run_dir is experiment_root / run_id_path(...), hard-fails if an existing
+    record there names a different run_id_flat, and writes
+    <run_dir>/.run_id.json. Legacy
+    ``hashed-v1`` keeps its per-directory record check.
+
+    Per-run I/O is O(1) and every write is atomic, so thousands of concurrent
+    runs on a shared filesystem stay cheap and never read a torn file. The guard
+    never reads or writes RUN_ID_MAP.json or scans other runs: cross-run
+    group-hash collisions are caught by check_run_id_plan before dispatch (a
+    rescan of every record) and by write_run_id_map, which rebuilds the map once
+    per wave.
     """
     resolved = resolved_config(cfg)
     if layout == SEGMENTS_LAYOUT:
@@ -1041,11 +1074,8 @@ def guard_run_config(
                     "re-elect the segments in a new numbered sub-experiment."
                 )
         else:
-            index = _read_run_id_map(Path(experiment_root))
-            _merge_segment_record(index, record, run_dir)
             expected.mkdir(parents=True, exist_ok=True)
-            record_file.write_text(json.dumps(record, indent=2, sort_keys=True))
-        write_run_id_map(Path(experiment_root), layout=layout)
+            _write_json_atomic(record_file, record, indent=2, sort_keys=True)
     elif layout == "hashed-v1":
         record = run_id_record(cfg, params)
         record_file = run_dir / ".run_id.json"
@@ -1059,8 +1089,7 @@ def guard_run_config(
                 )
         else:
             run_dir.mkdir(parents=True, exist_ok=True)
-            record_file.write_text(json.dumps(record, indent=2, sort_keys=True))
-        write_run_id_map(run_dir.parent)
+            _write_json_atomic(record_file, record, indent=2, sort_keys=True)
     snapshot_file = run_dir / ".run_config.json"
     if snapshot_file.exists():
         snapshot = json.loads(snapshot_file.read_text())
@@ -1084,7 +1113,7 @@ def guard_run_config(
             )
     else:
         run_dir.mkdir(parents=True, exist_ok=True)
-        snapshot_file.write_text(json.dumps(resolved, indent=2, sort_keys=True, default=str))
+        _write_json_atomic(snapshot_file, resolved, indent=2, sort_keys=True, default=str)
 ```
 
 ## code/common/environment_smoke.py

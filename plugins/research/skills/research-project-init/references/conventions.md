@@ -201,13 +201,15 @@ The per-experiment **ordered** set of config params that uniquely identifies a r
     `RUN_ID_MAP.json`, and the WandB config under every layout. Legacy pins also use it as the run
     folder and WandB run name. One run name ≡ one wandb run, 1:1; it maps to one EXPERIMENTS.md
     row **per wave** the run took part in (see below).
-- **Never lossy, never silently colliding.** Under `segments-v1`, `guard_run_config` writes
-  `.run_id.json` (`{layout, segments, path, run_id_flat, run_id, groups}`) into every run
-  directory, hard-fails when that directory already records a different run, and regenerates the
-  experiment-wide two-way map `evaluations/<experiment_path>/RUN_ID_MAP.json` (`by_path`,
-  `by_run_id_flat`, and `groups: name -> hash -> params`), hard-failing when one group hash maps to
-  two different param sets. `check_run_id_plan` repeats those checks plus the filesystem-limit
-  preflight for every planned run before dispatch. A 64-bit hash is never assumed collision-free;
+- **Never lossy, never silently colliding.** Under `segments-v1`, `guard_run_config` atomically
+  writes `.run_id.json` (`{layout, segments, path, run_id_flat, run_id, groups}`) into every run
+  directory and hard-fails when that directory already records a different run; its I/O is O(1)
+  per run and it never scans other runs or writes the map. `check_run_id_plan` rescans every
+  existing record and checks path and group-hash collisions plus the filesystem-limit preflight
+  for every planned run before dispatch. `write_run_id_map` rebuilds the experiment-wide two-way
+  map `evaluations/<experiment_path>/RUN_ID_MAP.json` (`by_path`, `by_run_id_flat`, and
+  `groups: name -> hash -> params`) once per wave, hard-failing when one group hash maps to two
+  different param sets; between rebuilds the map may lag a running wave. A 64-bit hash is never assumed collision-free;
   the checks make any collision stop the work instead of overwriting or skipping. The map is a
   derived index that any rig may regenerate; the run's `.run_id.json` and `.run_config.json` remain
   the identity record.
