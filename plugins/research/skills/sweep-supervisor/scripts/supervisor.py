@@ -141,6 +141,29 @@ def _string_list(value: object, where: str) -> tuple[str, ...]:
     return tuple(value)
 
 
+# Options a headless agent CLI declares variadic (Claude Code's `--allowedTools <tools...>` and
+# kin): each swallows every following bare argument, so a `{prompt}` placed after one is consumed
+# as a value and the agent starts with no prompt at all.
+VARIADIC_AGENT_OPTIONS = frozenset({
+    "--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools",
+    "--tools", "--add-dir", "--mcp-config", "--betas", "--plugin-dir", "--file",
+})
+
+
+def _prompt_swallowed_by(command: tuple[str, ...]) -> str | None:
+    """The variadic option that would consume the `{prompt}` argument, if any."""
+    swallowing = None
+    for part in command:
+        if part == "--":
+            return None
+        if part.startswith("-"):
+            name = part.split("=", 1)[0]
+            swallowing = name if name in VARIADIC_AGENT_OPTIONS else None
+        elif "{prompt}" in part:
+            return swallowing
+    return None
+
+
 def load_settings(registry_path: Path) -> Settings:
     """Read `[supervisor]` from the machine registry. The agent profile is never defaulted."""
     try:
@@ -164,6 +187,13 @@ def load_settings(registry_path: Path) -> Settings:
         command = _string_list(raw_agent.get("command"), f"{registry_path}: supervisor.agent.command")
         if not any("{prompt}" in part for part in command):
             raise SupervisorError(f"{registry_path}: supervisor.agent.command must contain a {{prompt}} placeholder")
+        swallowed_by = _prompt_swallowed_by(command)
+        if swallowed_by:
+            raise SupervisorError(
+                f"{registry_path}: supervisor.agent.command puts {{prompt}} after the variadic option "
+                f"{swallowed_by}, which would consume it as a value; place {{prompt}} before it "
+                '(e.g. right after "-p")'
+            )
         model = raw_agent.get("model")
         effort = raw_agent.get("effort")
         if not isinstance(model, str) or not model:

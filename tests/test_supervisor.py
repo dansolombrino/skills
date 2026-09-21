@@ -205,6 +205,20 @@ class SupervisorTests(unittest.TestCase):
         self.assertIn("[supervisor.agent]", err)
         self.assertFalse((self.hub / ".waves").exists())
 
+    def test_check_refuses_a_prompt_swallowed_by_a_variadic_option(self) -> None:
+        self.write_registry(agent=True)
+        text = self.registry.read_text()
+        swallowed = '["claude", "-p", "--model", "{model}", "--allowedTools", "Read,Bash", "{prompt}"]'
+        self.registry.write_text(text.replace('["sh", "-c", "echo model={model} effort={effort}; echo \\"$0\\"", "{prompt}"]', swallowed))
+        code, _out, err = self.cli("check")
+        self.assertEqual(code, 2)
+        self.assertIn("--allowedTools", err)
+        fixed = '["claude", "-p", "{prompt}", "--model", "{model}", "--allowedTools", "Read,Bash"]'
+        self.registry.write_text(text.replace('["sh", "-c", "echo model={model} effort={effort}; echo \\"$0\\"", "{prompt}"]', fixed))
+        self.assertEqual(supervisor.load_settings(self.registry).agent.command[2], "{prompt}")
+        self.assertIsNone(supervisor._prompt_swallowed_by(("x", "--allowedTools", "Read", "--", "{prompt}")))
+        self.assertIsNone(supervisor._prompt_swallowed_by(("x", "--allowedTools", "Read", "--model", "m", "{prompt}")))
+
     def test_register_needs_confirmation_and_is_single_shot(self) -> None:
         manifest = str(self.manifest())
         self.assertEqual(self.cli("register", "--wave", WAVE, "--manifest", manifest)[0], 2)

@@ -40,8 +40,12 @@ every agent):
 [supervisor.agent]
 model = "opus"
 effort = "high"
-command = ["claude", "-p", "--model", "{model}", "--effort", "{effort}", "--allowedTools", "Read,Edit,Write,Glob,Grep,Skill,Bash", "{prompt}"]
+command = ["claude", "-p", "{prompt}", "--model", "{model}", "--effort", "{effort}", "--allowedTools", "Read,Edit,Write,Glob,Grep,Skill,Bash"]
 ```
+
+`{prompt}` goes right after `-p`: `--allowedTools` is variadic and would consume a prompt placed
+after its value, leaving the tick with no prompt. The supervisor refuses that ordering whenever it
+loads the registry, so `check` fails on it.
 
 Codex, headless — fill in the executable's own flags for model and reasoning effort from its
 `--help`; the supervisor only requires the three placeholders it substitutes:
