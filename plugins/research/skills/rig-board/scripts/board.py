@@ -419,11 +419,24 @@ PROBE_SCRIPT = (
     "printf '%s|' \"$s\"; tmux capture-pane -p -t \"$s\" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -1 | cut -c1-400; echo; done; "
     "echo __STATUS__; tmux list-panes -a -F '#{session_name}|#{pane_current_path}' 2>/dev/null | grep -E '_[0-9]{8}-[0-9]{6}_[^|]*_gpu[0-9]' | cut -d'|' -f2- | sort -u | while IFS= read -r d; do "
     f"find \"$d/evaluations\" -name .status.json -mmin -{'{STATUS_RECENT_MIN}'} 2>/dev/null | head -{'{STATUS_MAX_FILES}'} | while IFS= read -r f; do printf '%s\t' \"$f\"; tr -d '\n' < \"$f\"; echo; done; done; "
+    "echo __NET__; {NET_SNAPSHOT}; sleep {NET_SAMPLE_S}; {NET_SNAPSHOT}; "
     "echo __BOOT__; uptime -s 2>/dev/null"
 )
 STATUS_RECENT_MIN = 30
 STATUS_MAX_FILES = 200
-PROBE_SCRIPT = PROBE_SCRIPT.replace("{STATUS_RECENT_MIN}", str(STATUS_RECENT_MIN)).replace("{STATUS_MAX_FILES}", str(STATUS_MAX_FILES))
+# physical NICs only (they have a backing device): loopback, bridges, veth, docker and VPN tunnels
+# would double-count traffic that also crosses the physical card
+NET_SNAPSHOT = (
+    'date +%s.%N; for n in /sys/class/net/*; do [ -e "$n/device" ] && '
+    'echo "${n##*/} $(cat "$n/statistics/rx_bytes" 2>/dev/null) $(cat "$n/statistics/tx_bytes" 2>/dev/null)"; done'
+)
+NET_SAMPLE_S = 1
+PROBE_SCRIPT = (
+    PROBE_SCRIPT.replace("{STATUS_RECENT_MIN}", str(STATUS_RECENT_MIN))
+    .replace("{STATUS_MAX_FILES}", str(STATUS_MAX_FILES))
+    .replace("{NET_SNAPSHOT}", NET_SNAPSHOT)
+    .replace("{NET_SAMPLE_S}", str(NET_SAMPLE_S))
+)
 HEARTBEAT_STALE_S = 180
 RUN_ETA_BASIS = "linear from the run's own progress and elapsed time"
 
@@ -470,7 +483,52 @@ def _section(output: str, marker: str, next_markers: tuple[str, ...]) -> str:
     return rest[:cut]
 
 
-PROBE_MARKERS = ("__GPUS__", "__APPS__", "__PS__", "__LOAD__", "__PANES__", "__TAIL__", "__STATUS__", "__BOOT__")
+PROBE_MARKERS = ("__GPUS__", "__APPS__", "__PS__", "__LOAD__", "__PANES__", "__TAIL__", "__STATUS__", "__NET__", "__BOOT__")
+BYTES_PER_MB = 1_000_000
+
+
+def parse_net(text: str) -> dict | None:
+    """Download (rx) and upload (tx) rates in MB/s from two counter snapshots taken inside the probe.
+
+    Each snapshot is a `date +%s.%N` line followed by `<iface> <rx_bytes> <tx_bytes>` lines. A
+    counter that went backwards (driver reset, interface re-created) is dropped rather than
+    reported as a negative rate."""
+    samples: list[tuple[float, dict[str, tuple[int, int]]]] = []
+    for line in text.splitlines():
+        cells = line.split()
+        if len(cells) == 1:
+            try:
+                samples.append((float(cells[0]), {}))
+            except ValueError:
+                continue
+        elif len(cells) == 3 and samples and cells[1].isdigit() and cells[2].isdigit():
+            samples[-1][1][cells[0]] = (int(cells[1]), int(cells[2]))
+    if len(samples) < 2:
+        return None
+    (t0, first), (t1, second) = samples[0], samples[-1]
+    dt = t1 - t0
+    if dt <= 0:
+        return None
+    interfaces = []
+    for name in sorted(first.keys() & second.keys()):
+        drx, dtx = second[name][0] - first[name][0], second[name][1] - first[name][1]
+        if drx < 0 or dtx < 0:
+            continue
+        interfaces.append({"name": name, "rx_mb_s": round(drx / dt / BYTES_PER_MB, 3), "tx_mb_s": round(dtx / dt / BYTES_PER_MB, 3)})
+    if not interfaces:
+        return None
+    return {
+        "interval_s": round(dt, 3),
+        "rx_mb_s": round(sum(i["rx_mb_s"] for i in interfaces), 3),
+        "tx_mb_s": round(sum(i["tx_mb_s"] for i in interfaces), 3),
+        "interfaces": interfaces,
+    }
+
+
+def describe_net(net: dict | None) -> str | None:
+    if not net:
+        return None
+    return f"net ↓ {net['rx_mb_s']:.2f} MB/s download · ↑ {net['tx_mb_s']:.2f} MB/s upload"
 
 
 def parse_gpu_line(line: str) -> tuple[dict, str | None] | None:
@@ -592,6 +650,7 @@ def parse_probe(rig: Rig, output: str) -> dict:
         "panes": panes,
         "tails": tails,
         "statuses": statuses,
+        "net": parse_net(_section(output, "__NET__", PROBE_MARKERS[8:])),
     }
 
 
@@ -659,6 +718,7 @@ def unreachable_probe(rig: Rig, previous: dict | None) -> dict:
         "gpu_probe_ok": (previous or {}).get("gpu_probe_ok"),
         "load": (previous or {}).get("load"),
         "cpus": (previous or {}).get("cpus"),
+        "net": None,  # a rate is only true at the moment it was sampled; never carry it forward
         "last_reachable_at": (previous or {}).get("at") if (previous or {}).get("reachable") else (previous or {}).get("last_reachable_at"),
     }
 
@@ -1487,7 +1547,8 @@ def status(config: BoardConfig, args: argparse.Namespace) -> int:
         )
     for rig in data["rigs"]:
         reach = "unreachable" if rig["reachable"] is False else ("never probed" if rig["reachable"] is None else f"probed {age(rig['at'])} ago")
-        print(f"\n{rig['rig']}  [{reach}]" + ("  shared" if rig.get("shared") else ""))
+        net = describe_net(rig.get("net")) if rig["reachable"] else None
+        print(f"\n{rig['rig']}  [{reach}]" + ("  shared" if rig.get("shared") else "") + (f"  {net}" if net else ""))
         if rig["reachable"] and rig.get("gpu_probe_ok") is False:
             print("  nvidia-smi failed on the rig: GPU state unknown")
         gpus = {g["index"]: g for g in rig.get("gpus", [])}

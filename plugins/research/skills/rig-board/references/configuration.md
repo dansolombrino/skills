@@ -35,7 +35,7 @@ reconcile_every = 120                                # seconds between rig probe
 ```
 <root>/
   lanes/<rig>/gpu<ids>.json   # one held lane; absent = free
-  rigs/<rig>.json             # last probe: reachable, boot_at, sessions, gpus, foreign
+  rigs/<rig>.json             # last probe: reachable, boot_at, sessions, gpus, foreign, net
   history.jsonl               # claim / reclaim / refresh / release / adopt / interrupted / reconcile
   .lock                       # advisory lock shared by chats and the viewer
 ```
@@ -69,7 +69,11 @@ pid, memory, executable) joined with `ps` for the owning user and process age; `
 and `nproc`; for every lane-looking tmux session (wave id and `gpu<ids>` suffix) its pane's
 working directory, the last visible line of the pane (`tmux capture-pane`), and every
 `.status.json` under `<working directory>/evaluations/` heartbeaten in the last 30 minutes (at
-most 200); `uptime -s`. A rig whose `nvidia-smi` fails is stored with `gpu_probe_ok = false`
+most 200); the byte counters of every physical NIC (`/sys/class/net/*` with a backing device, so
+loopback, bridges, veth, docker and VPN tunnels never double-count) read twice one second apart,
+stored as `net` with download (`rx_mb_s`) and upload (`tx_mb_s`) in MB/s (10^6 bytes), total and
+per interface; `uptime -s`. The rate is the probe-time sample, so an unreachable rig shows none
+rather than a stale one. Slurm clusters have no network row: they are never probed this way. A rig whose `nvidia-smi` fails is stored with `gpu_probe_ok = false`
 and an empty GPU list: its cards are unknown, never free. Rigs still answering the pre-5.8
 three-column GPU form parse unchanged.
 

@@ -104,7 +104,8 @@ Set `RIGSYNC_REGISTRY` or pass `--registry` to use another registry.
 
 `serve` is a stdlib HTTP server. `/` is the read-only page (`assets/viewer.html`): a fleet
 strip (free / held / foreign / issues / silent / Slurm counts, each a click-to-filter), the
-soonest lane ETA, probe age and next-probe countdown, then one card per rig with one row per
+soonest lane ETA, probe age and next-probe countdown, then one card per rig (headed by uptime,
+load, and the rig's download / upload rate in MB/s sampled at probe time) with one row per
 GPU (free with model, VRAM and utilization gauges; running / claimed / silent / interrupted /
 unreachable lanes with holder, wave, run, the run's live progress, heartbeat and linear run
 ETA read from its `.status.json` on the rig plus the last line of the tmux pane, the

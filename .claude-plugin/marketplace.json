@@ -11,7 +11,7 @@
       "name": "research",
       "source": "./plugins/research",
       "description": "Materialize reproducible experiments across verified GPU rigs: scaffold projects, provision exact environments, deploy tested revisions, dispatch GPU waves as a self-balancing pull queue, supervise them from the hub without an open chat, keep a fleet-wide GPU lane board, visualize results, and gate action behind confirmed intent and explicit greenlights.",
-      "version": "8.0.1",
+      "version": "8.1.0",
       "category": "Developer Tools"
     }
   ]

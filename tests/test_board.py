@@ -56,6 +56,13 @@ RICH_PROBE = (
     "__LOAD__\n"
     "0.52 0.58 0.59 1/661 2258164\n"
     "16\n"
+    "__NET__\n"
+    "1000.0\n"
+    "enp5s0 1000000000 500000000\n"
+    "wlp4s0 0 0\n"
+    "1002.0\n"
+    "enp5s0 1250000000 502000000\n"
+    "wlp4s0 0 0\n"
     "__BOOT__\n"
     "2026-08-11 13:25:49\n"
 )
@@ -503,6 +510,10 @@ class BoardTests(unittest.TestCase):
         self.assertTrue(probe["gpu_probe_ok"])
         self.assertEqual(probe["load"], [0.52, 0.58, 0.59])
         self.assertEqual(probe["cpus"], 16)
+        # 250 MB down and 2 MB up over two seconds, summed over the physical NICs
+        self.assertEqual((probe["net"]["rx_mb_s"], probe["net"]["tx_mb_s"], probe["net"]["interval_s"]), (125.0, 1.0, 2.0))
+        self.assertEqual([i["name"] for i in probe["net"]["interfaces"]], ["enp5s0", "wlp4s0"])
+        self.assertEqual(probe["gpus"][0]["index"], 0)
         g0, g1 = probe["gpus"]
         self.assertEqual((g0["name"], g0["memory_total_mib"], g0["memory_used_mib"], g0["utilization"], g0["temperature_c"], g0["power_w"]), ("NVIDIA GeForce RTX 4090", 24564, 13868, 0, 46, 19))
         self.assertIsNone(g1["power_w"])
@@ -512,6 +523,8 @@ class BoardTests(unittest.TestCase):
         legacy = board.parse_probe(self.config.rigs["rig-4090"], probe_output([], [(0, 2048, 50)], "2026-09-01 08:00:00"))
         self.assertEqual(legacy["gpus"], [{"index": 0, "memory_used_mib": 2048, "utilization": 50}])
         self.assertTrue(legacy["gpu_probe_ok"])
+        self.assertIsNone(legacy["net"])  # rigs without the net section report no rate, not zero
+        self.assertIsNone(board.parse_net("1000.0\neth0 10 10\n1001.0\neth0 5 10\n"))  # counter reset
         broken = board.parse_probe(self.config.rigs["rig-4090"], RICH_PROBE_NO_NVIDIA)
         self.assertFalse(broken["gpu_probe_ok"])
         self.assertEqual(broken["gpus"], [])
