@@ -70,7 +70,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "8.0.0")
+        self.assertEqual(manifest["version"], "8.0.1")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -2032,6 +2032,9 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("exact 600-second ticks", supervisor)
         self.assertIn("even if nothing changed", supervisor)
         self.assertIn("Status written <timestamp> —", supervisor)
+        self.assertIn("`YYYY-MM-DD at HH:MM`", supervisor)
+        for name in ("experiments-tracking/SKILL.md", "research-project-init/references/conventions.md"):
+            self.assertIn("`YYYY-MM-DD at HH:MM`", (skills / name).read_text(), name)
         self.assertIn("does not\n   reset `next_update`", supervisor)
         self.assertIn("**Never block while a wave is non-terminal.**", supervisor)
         self.assertIn("paste its output\n   verbatim", supervisor)

@@ -691,7 +691,8 @@ is missing, stop rather than promise supervision nobody will deliver.
   prose. Urgent completion, failure, hang, rig-down, and recovery messages never reset the fixed
   schedule. When the wave becomes terminal, report immediately and stop; do not wait for a tick.
 - Every message opens with `Status written <timestamp> —`, where `<timestamp>` is generated
-  immediately before sending as an ISO-compatible local timestamp with seconds and UTC offset.
+  immediately before sending in the legible local form `YYYY-MM-DD at HH:MM` (for example
+  `Status written 2026-09-21 at 09:10 —`); machine-readable ISO timestamps stay in the files.
   Report each status observation's heartbeat age too, so message time and data freshness cannot
   be confused.
 - Show done/running/queued/failed counts, every active run's progress and estimated completion,

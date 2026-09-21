@@ -312,7 +312,7 @@ class SupervisorTests(unittest.TestCase):
         code, out, err = self.cli("table", "--wave", WAVE, "--cycle")
         self.assertEqual(code, 0, err)
         lines = out.splitlines()
-        self.assertRegex(lines[0], r"^Status written \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2} — wave `" + WAVE)
+        self.assertRegex(lines[0], r"^Status written \d{4}-\d{2}-\d{2} at \d{2}:\d{2} — wave `" + WAVE)
         self.assertIn("(opus/high)", lines[0])
         self.assertIn("| rig | gpu | state | run | progress | hb | run ETA | next | done | lane free | basis |", out)
         rows = [line for line in lines if line.startswith("| hub ") or line.startswith("| peer ")]

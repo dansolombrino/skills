@@ -1283,7 +1283,8 @@ TABLE_COLUMNS = ("rig", "gpu", "state", "run", "progress", "hb", "run ETA", "nex
 
 
 def render_table(snapshot: dict, fmt: str) -> str:
-    """The status report. Its first words are the convention every status message opens with."""
+    """The status report. It opens the way every status message does: `Status written YYYY-MM-DD at HH:MM —`,
+    hub local time, written for a person glancing at it rather than for a parser."""
     at = now()
     written = parse_iso(snapshot["written_at"]) or at
     counts = snapshot["counts"]
@@ -1294,7 +1295,7 @@ def render_table(snapshot: dict, fmt: str) -> str:
     if snapshot.get("finished_at"):
         eta = f"finished {clock(snapshot['finished_at'], at)}"
     header = (
-        f"Status written {iso(at)} — wave `{snapshot['wave_id']}` · {snapshot['experiment']} · "
+        f"Status written {at.strftime('%Y-%m-%d at %H:%M')} — wave `{snapshot['wave_id']}` · {snapshot['experiment']} · "
         f"**done {counts['done']} · running {counts['running']} · queued {counts['queued'] + counts['assigned']} · "
         f"failed {counts['failed']}** of {snapshot['total']} · wave {eta} · "
         f"supervisor cycle {humanize((at - written).total_seconds())} ago · agent tick {tick_age} "

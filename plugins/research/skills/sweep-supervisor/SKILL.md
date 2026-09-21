@@ -55,7 +55,7 @@ run can still be re-routed. The hub reaches rigs; rigs never reach the hub.
    primitive, say so once: the table stays available from the command above, in
    `.waves/_state/<wave_id>/table.md`, and in the fleet viewer.
 3. At every tick, even if nothing changed, run `table --wave <wave_id>` and **paste its output
-   verbatim** — it already opens with `Status written <timestamp> —`, one row per GPU. Add at most
+   verbatim** — it already opens with `Status written <timestamp> —` (`YYYY-MM-DD at HH:MM`, hub local time), one row per GPU. Add at most
    two sentences of your own. Do not re-derive, re-poll, or restyle it, and never write a probe
    script of your own.
 4. A `Needs you` line is a supervisor question. When the user answers in chat, record it with

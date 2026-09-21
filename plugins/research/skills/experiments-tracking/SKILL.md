@@ -29,9 +29,10 @@ in every engineering mode and does not require a narrative or scientific decisio
   recompute or guess it. The map is rebuilt once per wave, so for a run of a wave still in flight
   read its `.run_id.json`.
 - **Every status report to the user opens with its message-written time** — obtain a local
-  timezone-bearing timestamp immediately before sending (for example
-  `date '+%Y-%m-%dT%H:%M:%S%:z'`) and lead exactly with
-  `Status written <timestamp> —`. Never substitute the status heartbeat/observation time; report
+  timestamp immediately before sending, in the legible form `YYYY-MM-DD at HH:MM`
+  (`date '+%Y-%m-%d at %H:%M'`), and lead exactly with
+  `Status written <timestamp> —`, for example `Status written 2026-09-21 at 09:10 —`. Never show
+  the user a raw ISO string there. Never substitute the status heartbeat/observation time; report
   heartbeat age separately.
 
 ## Format
