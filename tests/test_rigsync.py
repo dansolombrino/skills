@@ -1360,5 +1360,202 @@ class MachineEnvTests(unittest.TestCase):
         self.assertEqual(run_mock.call_args.args[0][-1], "cluster:/work/project/")
 
 
+WAVE = "20260921-093000"
+
+
+class OffloadTests(unittest.TestCase):
+    """The rig is a directory on this host: inventory, checksums and unlinks really run."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name)
+        self.hub_root = base / "hub" / "proj"
+        self.rig_root = base / "rig" / "proj"
+        self.hub_root.mkdir(parents=True)
+        self.rig_root.mkdir(parents=True)
+        write(
+            self.hub_root / "sync.toml",
+            f"""
+            [artifacts.checkpoints]
+            path = "checkpoints"
+            [artifacts.evaluations]
+            path = "evaluations"
+            [machines.hub]
+            repo_path = {str(self.hub_root)!r}
+            [machines.rig]
+            repo_path = {str(self.rig_root)!r}
+            """,
+        )
+        write(
+            base / "machines.toml",
+            f"""
+            [machines.hub]
+            ssh = "hub"
+            hostname = "hub-host"
+            storage_root = {str(base / "hub")!r}
+            [machines.rig]
+            ssh = "rig"
+            hostname = "rig-host"
+            storage_root = {str(base / "rig")!r}
+            [machines.rig.caches]
+            HF_HOME = {str(base / "rig-cache")!r}
+            [machines.hub.caches]
+            HF_HOME = {str(base / "hub-cache")!r}
+            """,
+        )
+        self.base = base
+        with mock.patch.object(rigsync.socket, "gethostname", return_value="hub-host"):
+            self.config = rigsync.load_config(self.hub_root, self.hub_root / "sync.toml", base / "machines.toml")
+        self.rig = self.config.machines["rig"]
+        patches = [
+            mock.patch.object(rigsync, "remote", side_effect=lambda machine, argv, check=True: rigsync.run(argv, check=check)),
+            mock.patch.object(rigsync, "rsync_remote", side_effect=lambda machine, path, alias=None: f"{path}/"),
+            mock.patch.object(rigsync, "rsync_flags", return_value=["rsync", "-a", "--itemize-changes"]),
+            mock.patch.object(rigsync, "check_storage", return_value=(0, [])),
+        ]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def add_run(self, name: str, state: str, wave: str = WAVE, checkpoints: tuple[str, ...] = ("step1.pt", "step2.pt")) -> dict:
+        import json as _json, os as _os, time as _time
+
+        run = {
+            "id": name,
+            "token": name.replace("=", ""),
+            "status_path": f"evaluations/000_exp/{name}/.status.json",
+            "artifact": f"evaluations/000_exp/{name}/result.json",
+            "checkpoint_dir": f"checkpoints/000_exp/{name}",
+            "eval_dir": f"evaluations/000_exp/{name}",
+        }
+        write(self.rig_root / run["status_path"], _json.dumps({"state": state, "wave_id": wave}))
+        write(self.rig_root / run["eval_dir"] / "result.json", "{}")
+        old = _time.time() - 1000
+        for offset, checkpoint in enumerate(checkpoints):
+            path = self.rig_root / run["checkpoint_dir"] / checkpoint
+            write(path, f"weights of {name} {checkpoint}")
+            _os.utime(path, (old + offset, old + offset))
+        for name in ("result.json", ".status.json"):
+            _os.utime(self.rig_root / run["eval_dir"] / name, (old, old))
+        return run
+
+    def register(self, runs: list[dict]) -> None:
+        import json as _json
+
+        write(self.hub_root / ".waves" / "_state" / WAVE / "queue.json", _json.dumps({"runs": runs}))
+
+    def offload(self, **kwargs) -> str:
+        out = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(out):
+            rigsync.offload(self.config, self.rig, WAVE, kwargs.get("dry_run", False), kwargs.get("confirmed", True))
+        return out.getvalue()
+
+    def test_offload_copies_everything_and_frees_only_what_the_predicate_allows(self) -> None:
+        import json as _json
+
+        done = self.add_run("model=done", "done")
+        live = self.add_run("model=live", "running")
+        self.register([done, live])
+        out = self.offload()
+        for run in (done, live):
+            self.assertTrue((self.hub_root / run["artifact"]).exists())
+            self.assertTrue((self.hub_root / run["checkpoint_dir"] / "step2.pt").exists())
+            self.assertTrue((self.rig_root / run["artifact"]).exists(), "evaluations always stay on the rig")
+        done_dir = self.rig_root / done["checkpoint_dir"]
+        self.assertEqual(sorted(p.name for p in done_dir.iterdir()), ["step1.pt.offloaded.json", "step2.pt.offloaded.json"])
+        receipt = _json.loads((done_dir / "step2.pt.offloaded.json").read_text())
+        self.assertEqual((receipt["wave_id"], receipt["rig"], receipt["size"]), (WAVE, "rig", len("weights of model=done step2.pt")))
+        self.assertEqual(receipt["hub_path"], str(self.hub_root / done["checkpoint_dir"] / "step2.pt"))
+        live_dir = self.rig_root / live["checkpoint_dir"]
+        self.assertEqual(sorted(p.name for p in live_dir.iterdir()), ["step1.pt.offloaded.json", "step2.pt"])
+        self.assertIn("[offload-summary] rig: copied 8", out)  # identity and status files travel too
+        self.assertIn("freed 3", out)
+        # a second pass finds nothing new to copy and nothing more to free
+        self.assertIn("copied 0 (0 MB), freed 0", self.offload())
+
+    def test_offload_never_deletes_what_this_wave_did_not_produce_or_may_still_be_written(self) -> None:
+        import os as _os
+
+        foreign = self.add_run("model=foreign", "done", wave="20250101-000000")
+        fresh = self.add_run("model=fresh", "done")
+        newest = self.rig_root / fresh["checkpoint_dir"] / "step2.pt"
+        _os.utime(newest, None)
+        self.register([foreign, fresh])
+        self.offload()
+        self.assertEqual(sorted(p.name for p in (self.rig_root / foreign["checkpoint_dir"]).iterdir()), ["step1.pt", "step2.pt"])
+        self.assertTrue(newest.exists())
+        self.assertFalse((self.hub_root / fresh["checkpoint_dir"] / "step2.pt").exists(), "a file that may still be open is not even copied")
+
+    def test_offload_keeps_a_file_whose_hub_copy_does_not_verify(self) -> None:
+        done = self.add_run("model=done", "done")
+        self.register([done])
+        with mock.patch.object(rigsync, "_sha256_local", return_value="0" * 64):
+            self.offload()
+        self.assertEqual(sorted(p.name for p in (self.rig_root / done["checkpoint_dir"]).iterdir()), ["step1.pt", "step2.pt"])
+
+    def test_offload_dry_run_and_a_full_hub_change_nothing(self) -> None:
+        done = self.add_run("model=done", "done")
+        self.register([done])
+        with self.assertRaisesRegex(rigsync.RigSyncError, "refusing write without --confirm"):
+            self.offload(confirmed=False)
+        out = self.offload(dry_run=True, confirmed=False)
+        self.assertIn("delete after verification checkpoints/000_exp/model=done/step1.pt", out)
+        self.assertFalse((self.hub_root / "checkpoints").exists())
+        with mock.patch.object(rigsync, "check_storage", return_value=(1, ["FAIL hub storage free"])):
+            with self.assertRaisesRegex(rigsync.RigSyncError, "hub storage is under its floor"):
+                self.offload()
+        self.assertEqual(len(list((self.rig_root / done["checkpoint_dir"]).iterdir())), 2)
+
+    def test_the_deletion_predicate_names_the_clause_that_protects_a_file(self) -> None:
+        run = {"checkpoint_dir": "checkpoints/000_exp/r"}
+        base = dict(
+            run=run, status={"wave_id": WAVE, "state": "done"}, wave=WAVE, rig_now=10_000.0,
+            newest_checkpoint="checkpoints/000_exp/r/b.pt", checkpoint_root=PurePosixPath("checkpoints"), verified=True,
+        )
+        file = {"kind": "C", "path": "checkpoints/000_exp/r/a.pt", "mtime": 1.0, "size": 1}
+        self.assertIsNone(rigsync.offload_deletable(file=file, **base))
+        cases = {
+            "only checkpoints": dict(file={**file, "kind": "E"}),
+            "outside the run's recorded": dict(file={**file, "path": "checkpoints/000_exp/other/a.pt"}),
+            "outside [artifacts.checkpoints]": dict(checkpoint_root=PurePosixPath("elsewhere")),
+            "not produced by this wave": dict(status={"wave_id": "20250101-000000", "state": "done"}),
+            "may still be open": dict(file={**file, "mtime": 9_990.0}),
+            "a resume needs it": dict(status={"wave_id": WAVE, "state": "failed"}, file={**file, "path": "checkpoints/000_exp/r/b.pt"}),
+            "not checksum-verified": dict(verified=False),
+        }
+        for expected, override in cases.items():
+            arguments = {**base, "file": file, **override}
+            self.assertIn(expected, rigsync.offload_deletable(**arguments) or "", expected)
+
+    def test_restore_pushes_hub_checkpoints_without_receipts(self) -> None:
+        done = self.add_run("model=done", "done")
+        self.register([done])
+        write(self.hub_root / done["checkpoint_dir"] / "step9.pt", "w")
+        with mock.patch.object(rigsync, "run_rsync_with_retry") as rsync:
+            with redirect_stdout(io.StringIO()):
+                rigsync.restore(self.config, self.rig, WAVE, "model=done", False, True)
+        command = rsync.call_args.args[0]
+        self.assertIn("--exclude=*.offloaded.json", command)
+        self.assertEqual(command[-2:], [str(self.hub_root / done["checkpoint_dir"]) + "/", str(self.rig_root / done["checkpoint_dir"]) + "/"])
+        with self.assertRaisesRegex(rigsync.RigSyncError, "no run"):
+            rigsync.restore(self.config, self.rig, WAVE, "model=absent", False, True)
+
+    def test_sync_cache_only_moves_declared_caches_and_never_two_at_once(self) -> None:
+        write(self.base / "hub-cache" / "datasets" / "imagenet" / "x.bin", "x")
+        with mock.patch.object(rigsync, "run_rsync_with_retry") as rsync, redirect_stdout(io.StringIO()):
+            rigsync.sync_cache(self.config, self.rig, "HF_HOME", "datasets/imagenet", False, True)
+        command = rsync.call_args.args[0]
+        self.assertTrue(any(part.startswith("--rsync-path=flock ") for part in command))
+        self.assertNotIn("--delete", command)
+        self.assertTrue(command[-1].endswith("rig-cache/datasets/imagenet/"))
+        with self.assertRaisesRegex(rigsync.RigSyncError, "declares no TORCH_HOME"):
+            rigsync.sync_cache(self.config, self.rig, "TORCH_HOME", "x", False, True)
+        with self.assertRaisesRegex(rigsync.RigSyncError, "unsafe path"):
+            rigsync.sync_cache(self.config, self.rig, "HF_HOME", "../escape", False, True)
+        with self.assertRaisesRegex(rigsync.RigSyncError, "not a machine-level cache variable"):
+            rigsync.sync_cache(self.config, self.rig, "PATH", "x", False, True)
+
+
 if __name__ == "__main__":
     unittest.main()

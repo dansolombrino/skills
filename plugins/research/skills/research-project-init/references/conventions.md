@@ -91,11 +91,12 @@ Run-log-producing tools must write into `logs/` — e.g. `wandb.init(dir=<projec
 never the project root.
 
 Every `scripts/` wave script captures its own stdout/stderr: the python invocation is piped
-through `tee` into the **mirror of its own path under `logs/`** — same tree, `logs/` as the
-leading folder, `-<YYYYmmdd-HHMMSS>` appended to the filename:
+through `tee` into the **mirror of its own folder under `logs/`** — same tree, `logs/` as the
+leading folder; the file is named after the lane that ran it, with `-<YYYYmmdd-HHMMSS>` appended,
+so the log folder of a run shows where every attempt of it executed:
 
 ```
-scripts/NNN_exp/<run_id folder>/wave_<wave_id>/wave_<rig>_gpu<ids>.sh
+scripts/NNN_exp/<run_id folder>/wave_<wave_id>/wave.sh
 logs/NNN_exp/<run_id folder>/wave_<wave_id>/wave_<rig>_gpu<ids>-<YYYYmmdd-HHMMSS>.log
 ```
 
@@ -349,9 +350,11 @@ worse, being skipped by an artifact-guarded wave script as "already done".
 
 ## Waves and GPU lanes
 
-A **wave** is one dispatch decision: the set of runs launched together, however it is split
-across machines. A **slice** is the portion of a wave assigned to one rig; a **lane** is the
-portion of that slice assigned to one GPU set. A run_id's grid is rarely launched in one go — you launch a subset now and
+A **wave** is one dispatch decision: the set of runs launched together, however it ends up split
+across machines. Its **pool** is the set of lanes (and cluster caps) it may use. A **lane** is one
+GPU set on one rig; a **slice** is whatever part of the wave one rig ends up running. A wave is
+**one ordered queue**: a run belongs to the lane that claims it, never to a lane chosen in advance,
+so a fast card takes more runs and a wrong estimate corrects itself. A run_id's grid is rarely launched in one go — you launch a subset now and
 more later, re-launch what failed, re-run after a code fix, move work to a freer rig — and each
 of those is its own wave. Waves are the unit of launch, of on-disk execution history, and of
 EXPERIMENTS.md rows.
@@ -366,15 +369,15 @@ EXPERIMENTS.md rows.
   EXPERIMENTS.md rows, tmux session names, annotated Git tag `wave--<wave_id>`, and one script
   path per run. Human meaning goes in the wave `README.md`, written once at generation.
 
-Two axes say where a run executed: the **rig** and the **GPU set** on it. A **lane** is the
-portion of a wave assigned to one GPU set on one rig.
+Two axes say where a run executed: the **rig** and the **GPU set** on it — together, the lane
+that claimed it.
 
 - The GPU field is **opaque identity, not semantics**: record which card(s) a run occupied,
   never reason about *why* it uses more than one (DDP, sharding, anything else is the
   experiment code's business).
 - Written `gpu<ids>` — `gpu0`, or `gpu0,1,2,3` for a multi-GPU lane (comma style as in
-  `run_id_flat`). **Always present, including on single-GPU rigs** (`wave_rig-4090_gpu0.sh`) —
-  one filename shape everywhere, uniform globs.
+  `run_id_flat`). **Always present, including on single-GPU rigs** (`rig-4090` `gpu0`) —
+  one shape everywhere: session names, log names, lane buffers.
 - Lanes on a rig run **in parallel** (one tmux session each); runs within a lane run
   **sequentially**. Within one (wave, rig) the GPU sets must be **disjoint** — overlapping lanes
   would fight over a card. A run occupying every GPU therefore makes that rig a single lane for
@@ -385,21 +388,28 @@ Canonical layout — one self-guarded script kind:
 ```
 scripts/NNN_exp/<run_id folder>/wave_<wave_id>/
     README.md                     # what this wave is; written once at launch, never updated
-    wave_<rig>_gpu<ids>.sh        # this run's invocation in this wave
+    wave.sh                       # this run's invocation in this wave; names no rig and no GPU
+scripts/NNN_exp/_lanes/wave_<wave_id>/
+    lane.sh                       # the loop every lane of this wave runs
 ```
 
 `ls scripts/NNN_exp/<run_id folder>/` is that run's execution history — which waves it took part
-in, on which rig, on which cards. **The filesystem encodes the assignment**: a run is on
-rig-4090 GPU 0 in this wave precisely because `wave_rig-4090_gpu0.sh` exists in its wave folder,
-so there is no separate manifest to drift. Only `scripts/` and `logs/` are wave-scoped;
+in. **Placement is recorded where it happens, not planned into a file name**: the claiming lane
+passes `LANE_RIG` and `LANE_GPUS` to the script, the run's log is named
+`wave_<rig>_gpu<ids>-<timestamp>.log` after it, the wave's ledger on the hub
+(`.waves/_state/<wave_id>/ledger.jsonl`) records every claim, move, and outcome, and the
+EXPERIMENTS.md row gets its `rig` and `gpu` at claim time. `.waves/_state/` is supervisor state:
+ignored with the rest of `.waves/`, never a wave id, never edited by hand. A wave whose scripts
+are named `wave_<rig>_gpu<ids>.sh` predates the queue: it is readable history that may be
+reconciled, never relaunched. Only `scripts/` and `logs/` are wave-scoped;
 `checkpoints/` and `evaluations/` stay **run-scoped in path form** (`plots/` is not run-scoped) —
 artifacts must keep a stable per-run path or both the launcher's artifact guard and `guard_run_config` break.
 
 tmux session name: `<project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>` — e.g.
 `grokmod_000_grokking_20260731-162043_behemoth_gpu0`. The project prefix matters
 because tmux sessions are global per rig across projects; the wave id lets successive waves
-coexist; the GPU field keeps parallel lanes apart. Generation, dispatch and recovery protocol:
-`sweep-dispatch`.
+coexist; the GPU field keeps parallel lanes apart. Generation and launch: `sweep-dispatch`.
+Feeding, rebalancing, recovery, and reporting of a running wave: `sweep-supervisor`.
 
 ### Wave isolation
 
@@ -582,6 +592,14 @@ Three consequences worth stating explicitly, because each one has bitten:
 Storage exhaustion is a **stop condition, not a warning**: a run that dies partway through leaves
 truncated checkpoints that look like real ones. Gate before launching, not after.
 
+Low disk is a reason to **offload, never a reason to leave a rig's GPU idle**. A wave lists such a
+rig under `offload`; `rig-sync offload` then keeps copying that wave's outputs to the hub and
+frees a rig's copy of a checkpoint only when it is provably this wave's, no longer being written,
+not the checkpoint a resume needs, and SHA-256-identical on the hub — leaving a
+`<file>.offloaded.json` receipt in its place. Evaluations are copied and kept. This is the one
+deletion that is authorized per wave rather than per action, because nothing is lost: wherever a
+final artifact is a completion signal, its receipt is one too.
+
 Passwordless ssh between all rigs. Git/GitHub distributes launch source; selected artifact
 movement is **`rig-sync`'s job**. Run its bundled doctor's checks before dispatch; if they fail,
 stop instead of inventing ad-hoc copying. The hub may be the current local host even when its SSH
@@ -641,33 +659,44 @@ A `.status.json` frozen at `running` has three readings: **healthy** (heartbeat 
 **process hang** (rig up, tmux session alive, heartbeat frozen — report, don't auto-kill), or
 **machine fault** (rig unreachable/rebooted — boot time via `uptime -s` postdates the
 heartbeat — or the lane's tmux session is gone). A machine-fault run is **interrupted**, not
-failed-by-code, and is safe to relaunch: every `wave_<rig>_gpu<ids>.sh` is **self-guarded**
-(it skips itself only if its final artifact is present), so
-re-issuing a lane's dispatch command never redoes finished work — interrupted runs re-execute,
+failed-by-code, and is safe to relaunch: every wave script is **self-guarded**
+(it skips itself only if its final artifact or that artifact's offload receipt is present), so
+restarting a lane never redoes finished work — interrupted runs re-execute,
 resuming or restarting per the experiment's design-time resume decision. Detection + recovery
-protocol: `sweep-dispatch`.
+protocol: `sweep-supervisor`.
 
-- **EXPERIMENTS.md is single-writer: only ever edited on rig-4090** — and within a launch
-  session, only by the orchestrator chat, never by monitoring subagents.
+- **EXPERIMENTS.md is single-writer: only ever edited on rig-4090** — and while a wave is
+  supervised, only by that wave's supervisor agent, never by a chat watching it.
 
-## Launch-chat reporting contract
+## Wave supervision and reporting contract
 
-The chat that launches a wave remains active until all of that wave's runs are terminal or the
-user explicitly asks it to stop monitoring. Before launch, require parallel background subagents plus a
-recurring wait/monitor capability; if either is unavailable, stop rather than promise updates
-the chat cannot deliver. Never implement the cadence with a blocking shell `sleep`.
+A running wave is never watched from inside a chat turn. A chat that blocks on a question, loses a
+host monitor, hits a usage limit, or is compacted stops acting, and everything it was doing stops
+with it. So a hub service (`sweep-supervisor`) owns what must keep happening — feeding lanes,
+relaunching after a fault, offload, the fleet board, the status table — and wakes a **fresh
+unattended agent** on a fixed tick and on every failure for what needs judgment. Before launch,
+require that service and a declared agent profile (model and effort, never defaulted); if either
+is missing, stop rather than promise supervision nobody will deliver.
 
-- Anchor a fixed ten-minute schedule to the confirmed launch time. At every tick, reconcile
-  EXPERIMENTS.md on rig-4090 and emit an update even when nothing changed. Urgent completion,
-  failure, hang, rig-down, and recovery messages happen immediately and never reset the fixed
+- **Nothing blocks while a wave is non-terminal.** The supervisor agent asks through its
+  non-blocking `ask`, states what stays in force meanwhile, and carries on; a chat never ends its
+  turn waiting on the user while runs are in flight. Silence is never consent.
+- **Standing authorization is per wave and bounded by its pool**: inside it the supervisor acts on
+  this wave's own runs, jobs, files, and lanes without asking; rigs, cards (a `behemoth` card
+  without a grant above all), budget, and other projects' or users' resources outside it always
+  return to the user. Every kill first proves the process is this wave's own.
+- The chat's part is a fixed ten-minute printout anchored to the confirmed launch time, emitted
+  even when nothing changed, using the host's scheduled wake-up — never a blocking shell `sleep`.
+  It pastes the supervisor's script-rendered table verbatim: one row per GPU, never free-form
+  prose. Urgent completion, failure, hang, rig-down, and recovery messages never reset the fixed
   schedule. When the wave becomes terminal, report immediately and stop; do not wait for a tick.
 - Every message opens with `Status written <timestamp> —`, where `<timestamp>` is generated
   immediately before sending as an ISO-compatible local timestamp with seconds and UTC offset.
   Report each status observation's heartbeat age too, so message time and data freshness cannot
   be confused.
 - Show done/running/queued/failed counts, every active run's progress and estimated completion,
-  each lane's queued count and estimated completion, and the estimated completion of the wave.
-  Label estimates and their basis; say `ETA unavailable` when no sound basis exists.
+  each lane's next run and the time it is expected to fall free, and the estimated completion of
+  the wave. Label estimates and their basis; say `ETA unavailable` when no sound basis exists.
 - Treat a schema-v2 heartbeat older than three minutes as stale. Diagnose rig/session/process
   health before trusting its ETA or declaring a hang. Legacy statuses remain readable, but a
   future launch must first upgrade target experiment code to schema-v2 structured telemetry.

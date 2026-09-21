@@ -1,0 +1,12 @@
+[Unit]
+Description=sweep-supervisor: feeds, recovers and reports every supervised research wave
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 __SUPERVISOR_PY__ serve
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

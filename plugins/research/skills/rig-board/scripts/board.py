@@ -1186,6 +1186,41 @@ def reconcile(config: BoardConfig, rigs: list[str] | None = None, quiet: bool = 
 # ───────────────────────────── status ─────────────────────────────
 
 
+def supervised_waves(config: BoardConfig) -> list[dict]:
+    """Waves the hub's sweep-supervisor service is driving, with how recently it and its agent acted.
+
+    Read-only: the supervisor registers a pointer under `<root>/supervisor/` and keeps its own state
+    in the project. A wave whose last cycle is old means the service is down, which is exactly what
+    a lane's held-but-silent state cannot say by itself.
+    """
+    waves = []
+    directory = config.root / "supervisor"
+    if not directory.is_dir():
+        return waves
+    for path in sorted(directory.glob("*.json")):
+        pointer = read_json(path)
+        if not pointer:
+            continue
+        state = Path(str(pointer.get("project_root"))) / ".waves" / "_state" / str(pointer.get("wave_id"))
+        runtime = read_json(state / "runtime.json") or {}
+        view = read_json(state / "snapshot.json") or {}
+        waves.append(
+            {
+                "project": view.get("project") or Path(str(pointer.get("project_root"))).name,
+                "wave_id": pointer.get("wave_id"),
+                "project_root": pointer.get("project_root"),
+                "counts": view.get("counts"),
+                "total": view.get("total"),
+                "wave_eta": view.get("wave_eta"),
+                "cycled_at": runtime.get("cycled_at"),
+                "agent_ticked_at": runtime.get("agent_ticked_at"),
+                "agent_last_result": runtime.get("agent_last_result"),
+                "open_questions": len(view.get("questions") or []),
+            }
+        )
+    return waves
+
+
 def snapshot(config: BoardConfig) -> dict:
     lanes = list_lanes(config)
     rigs = []
@@ -1238,6 +1273,7 @@ def snapshot(config: BoardConfig) -> dict:
         "board_root": str(config.root),
         "rigs": rigs,
         "slurm": slurm,
+        "supervised_waves": supervised_waves(config),
         "summary": summarize(rigs, slurm),
     }
 
@@ -1442,6 +1478,13 @@ def status(config: BoardConfig, args: argparse.Namespace) -> int:
     print(line)
     for alert in summary.get("budget_alerts", []):
         print(f"budget alert: {alert}")
+    for wave in data.get("supervised_waves", []):
+        counts = wave.get("counts") or {}
+        print(
+            f"supervised: {wave['project']} wave {wave['wave_id']} · done {counts.get('done', '?')}/{wave.get('total', '?')}"
+            f" · supervisor cycle {age(wave.get('cycled_at'))} ago · agent tick {age(wave.get('agent_ticked_at'))} ago"
+            + (f" · {wave['open_questions']} open question(s)" if wave.get("open_questions") else "")
+        )
     for rig in data["rigs"]:
         reach = "unreachable" if rig["reachable"] is False else ("never probed" if rig["reachable"] is None else f"probed {age(rig['at'])} ago")
         print(f"\n{rig['rig']}  [{reach}]" + ("  shared" if rig.get("shared") else ""))

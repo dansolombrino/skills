@@ -1,4 +1,4 @@
 interface:
   display_name: "Rig Sync"
-  short_description: "Deploy wave worktrees, prune, and sync artifacts"
-  default_prompt: "Use $rig-sync to validate declared rig paths, deploy an authorized Research 2.0 wave as its own worktree, list active waves, propose an approved prune, or synchronize selected artifacts, paired with $environment-sync."
+  short_description: "Deploy wave worktrees, prune, sync and offload artifacts"
+  default_prompt: "Use $rig-sync to validate declared rig paths, deploy an authorized Research 2.0 wave as its own worktree, list active waves, propose an approved prune, synchronize selected artifacts, offload a disk-constrained rig to the hub, restore a run's checkpoints, or copy a declared cache subtree to a rig, paired with $environment-sync."

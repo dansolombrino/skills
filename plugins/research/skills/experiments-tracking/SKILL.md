@@ -13,8 +13,8 @@ in every engineering mode and does not require a narrative or scientific decisio
 
 ## Hard rules
 
-- **Single-writer: EXPERIMENTS.md is only ever edited on rig-4090.** On any other rig, report statuses verbally but never edit the file. During a launch session, only the orchestrator chat writes it — monitoring subagents never do.
-- Ground truth is NOT the md — it is the three on-disk signals (hierarchy in `conventions.md`): the per-run status first proves the current wave's Git revision/tag and environment fingerprint; after that, the **expected final artifact** is golden for completion, followed by `.status.json` state/timing/progress and the latest run log. A missing `.status.json`/dir means the run never started (or its outputs were deleted ⇒ it is no longer done).
+- **Single-writer: EXPERIMENTS.md is only ever edited on rig-4090.** On any other rig, report statuses verbally but never edit the file. While a wave is supervised, only that wave's `sweep-supervisor` agent writes its rows — a chat watching the wave never does; it pastes the supervisor's table.
+- Ground truth is NOT the md — it is the three on-disk signals (hierarchy in `conventions.md`): the per-run status first proves the current wave's Git revision/tag and environment fingerprint; after that, the **expected final artifact** is golden for completion — or, on a rig with offload, the `<artifact>.offloaded.json` receipt `rig-sync` left in its place, which names the checksum-verified hub copy — followed by `.status.json` state/timing/progress and the latest run log. A missing `.status.json`/dir means the run never started (or its outputs were deleted ⇒ it is no longer done).
 - **One (run, wave) = one table row = one line.** A run re-launched in a later wave gets a **new row**, never an in-place update — the table itself carries the execution history. One line per row keeps parallel-session git merges clean.
 - A row's run identity is semantic: the ordered `RUN_ID_PARAMS` values, independent of whether
   `RUN_ID_PATH_LAYOUT` is `segments-v1` or a legacy `nested`, `collapsed-v1`, or `hashed-v1`. Read
@@ -64,8 +64,11 @@ smoke pass: exit 0 and evaluations/000_grokking/smoke/result.json says one step 
 ```
 
 - `wave` — the dispatch this execution belonged to (`YYYYMMDD-HHMMSS`, canon), whose annotated
-  Git tag is `wave--<wave>`. `gpu` — the GPU set it occupied, opaque identity. Both are read from
-  `.status.json`; before the run starts they come from the generated script's path. A run executed
+  Git tag is `wave--<wave>`. `rig` and `gpu` — the lane that **claimed** the run, opaque identity.
+  They are blank on a `todo` row, because a run belongs to no lane until one takes it from the
+  wave's queue; fill them from the supervisor ledger's `run-assigned` event (and `.status.json`
+  once the run starts). A run the supervisor moved keeps one row: the row names the lane that
+  finally ran it, and `notes` says it was moved. A run executed
 as a Slurm job on `leonardo` has `rig=leonardo`, `gpu=1` (the count requested, since the card index
 is Slurm's), and its job id(s) in `notes`.
 - Statuses: `todo` → `inpr` → `done` | `failed`, plus terminal `superseded` for a placement the
@@ -87,7 +90,10 @@ Use this deterministic hierarchy:
    `remaining_s = elapsed_s * (progress_total - progress_completed) / progress_completed`.
    Its estimated completion is the observation time plus `remaining_s`; label the basis
    `structured progress`.
-2. At zero/missing structured progress, estimate from `done` rows in **rig-independent cost
+2. At zero/missing structured progress, prefer what **this wave** has measured: the median
+   `elapsed_s / cost` of its own `done` runs on that rig, basis `measured this wave`. It replaces
+   the fixed weights as soon as one run has finished there, which is what lets a wrong prior stop
+   mattering. Before that, estimate from `done` rows in **rig-independent cost
    units**: `cost = elapsed_s × weight(rig)`, using the fixed per-GPU speed weights in
    `../research-project-init/references/conventions.md` § Rig fleet, and predict on the target rig
    as `elapsed_pred = median(cost) / weight(target rig)`. Prefer prior `done` rows with the same
@@ -101,9 +107,12 @@ Use this deterministic hierarchy:
 3. A schema-v2 heartbeat older than three minutes, invalid numeric bounds, integrity mismatch,
    or unreachable rig makes the active ETA unavailable until resolved. State the reason.
 
-For a lane, add its active run's remaining estimate to the estimated full runtimes of queued runs
-in deterministic script/glob order, predicting every term for **that lane's own rig** with the
-hierarchy above.
+For a lane, add its active run's remaining estimate to the estimated full runtimes of the runs
+already in its buffer, predicting every term for **that lane's own rig** with the
+hierarchy above; that is when the lane falls free. Runs still in the wave's queue belong to no
+lane: the wave ETA simulates the feeder over them (each to the eligible lane predicted free
+first). `sweep-supervisor` computes exactly this for its table; use its numbers rather than a
+second calculation.
 If any required term lacks a basis, report that lane ETA as unavailable. The wave ETA is the
 latest available lane completion only when every nonterminal lane is estimable; otherwise report
 the wave ETA as unavailable and name the blocking lane(s). Do not put queued-run estimates into
@@ -131,10 +140,10 @@ here: a lane on the board is not evidence that a run is done, failed, or even st
 
 ## Who writes what (same turn as the action)
 
-- Wave generation ⇒ append `todo` rows (one per generated run), pre-filled with `wave`, `rig`, `gpu` from the generated script paths.
-- Launching ⇒ flip those rows to `inpr`, fill `started` (from `.status.json` once the run actually starts).
-- Observing progress ⇒ refresh `progress` and recompute `eta`; during a launch chat do this before
-  every fixed ten-minute report as well as on urgent transitions.
+- Wave generation ⇒ append `todo` rows (one per generated run), pre-filled with `wave`; `rig` and `gpu` stay blank.
+- A lane claims the run ⇒ fill `rig` and `gpu`, flip the row to `inpr`, fill `started` (from `.status.json` once the run actually starts).
+- Observing progress ⇒ refresh `progress` and recompute `eta`; the supervisor agent does this at
+  every tick as well as on urgent transitions.
 - Observing completion ⇒ flip to `done`/`failed` per the signals, fill `ended` + `elapsed`, clear `eta`.
 - An approved supersede ⇒ flip the replaced rows to `superseded`, clear `eta`, and name the new
   wave in `notes`.

@@ -125,7 +125,7 @@ class BehavioralRegressionTests(unittest.TestCase):
     def test_bundled_scripts_resolve_against_the_skill_not_the_project(self) -> None:
         # A project's own scripts/ holds shell wave scripts only, so a bare "scripts/envsync.py"
         # sends the agent to a path that cannot exist.
-        for name, script in (("environment-sync", "envsync"), ("rig-sync", "rigsync")):
+        for name, script in (("environment-sync", "envsync"), ("rig-sync", "rigsync"), ("sweep-supervisor", "supervisor")):
             skill = (SKILLS / name / "SKILL.md").read_text()
             self.assertIn("Resolving this skill's own files", skill, name)
             self.assertIn("holding the SKILL.md you are reading", skill, name)

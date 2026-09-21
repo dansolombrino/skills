@@ -14,8 +14,11 @@ stale — partitions, QOS limits, and cleanup policies change without notice.
 - **job** — one Slurm allocation. On Leonardo a job hosts **exactly one run** by default. Never
   pack several runs into one job and never request more than one GPU unless the run itself needs
   several and the user says so for that wave.
-- A **slice** on `leonardo` is the set of jobs a wave submits there. There are no lanes and no
-  tmux sessions: Slurm is the queue, and every job is independent.
+- A **slice** on `leonardo` is the set of jobs a wave ends up submitting there. There are no lanes
+  and no tmux sessions: Slurm is the queue, and every job is independent. In the wave's pool the
+  cluster is one entry with a **job cap** and a **core-hour cap**; `sweep-supervisor` keeps at
+  most that many of this wave's jobs submitted, taking runs from the **tail** of the wave's queue
+  while the rig lanes take from its head, and never commits more core-hours than the cap.
 
 ## Driver host and access
 
@@ -158,12 +161,13 @@ login node has internet, `git`, and the user-installed `uv` at `~/.local/bin/uv`
 
 ## The job script
 
-One sbatch script per (run, wave), at the same path and with the same name as a rig's wave script:
-`scripts/<NNN_exp>/<run_id folder>/wave_<wave_id>/wave_leonardo_gpu1.sh`, submitted from the
-wave worktree as `.waves/<wave_id>/scripts/...`. The body is the
+The job script **is** the run's wave script — one file per (run, wave),
+`scripts/<NNN_exp>/<run_id folder>/wave_<wave_id>/wave.sh`, submitted from the
+wave worktree as `.waves/<wave_id>/scripts/...`. A rig lane runs it with `bash` (the header is
+comments there); the cluster runs it through `sbatch`. The body is the
 [standard wave script](templates.md) verbatim — artifact guard, Git guard, storage guard,
 environment guard and smoke, `tee` log, failed-status fallback — with this header in place of
-the bare shebang and without the `CUDA_VISIBLE_DEVICES` export (Slurm sets it):
+the bare shebang; inside a job the script leaves `CUDA_VISIBLE_DEVICES` to Slurm:
 
 ```bash
 #!/usr/bin/env bash
@@ -198,16 +202,21 @@ export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
 - Resources are fixed: **one GPU, 8 cores, 128 GB** — a quarter of a Booster node, matching how
   the site bills a GPU. Change them only for a run that needs several GPUs, and then only with the
   user's explicit statement recorded in the wave README the way a behemoth grant is.
-- `--time` comes from the `experiments-tracking` ETA hierarchy with a 50% margin. With no history
-  the wave uses the user-approved bound from the gate-3 preview; never submit with a guessed
-  24 h "to be safe", because walltime shapes priority and the per-GPU budget estimate. A run whose
+- `--time` in the header is only the fallback. The supervisor passes the real value on the
+  `sbatch` command line, which overrides the header: the `experiments-tracking` ETA hierarchy with
+  a 50% margin — **measured in this wave as soon as any run has finished**, the prior before that
+  — rounded up to 15 minutes. With no basis at all it uses the user-approved `default_walltime_s`
+  from the gate-3 preview; never submit with a guessed
+  24 h "to be safe", because walltime shapes priority and the per-GPU budget estimate. A per-step
+  cost that differs by dataset (a tiny dataset that validates every few steps) is exactly what a
+  flat guess gets wrong. A run whose
   estimate exceeds 24 h routes to the user with `boost_qos_lprod` as the proposal.
 - `--signal=B:USR1@600` delivers `SIGUSR1` to the batch shell ten minutes before the walltime.
   The script does not trap it; it exists so a project that checkpoints on that signal can do so
   without changing the header. Whether a resubmitted run resumes or restarts was fixed at
   experiment design time, never here.
-- `--no-requeue`: Slurm must not resubmit on its own. Recovery is the agent's explicit decision
-  (below) so that it is reported and recorded.
+- `--no-requeue`: Slurm must not resubmit on its own. Recovery is the supervisor's explicit action
+  (below) so that it is recorded in the wave's ledger and reported.
 - The `tee` log path is unchanged; the extra `slurm-%j.out` beside it captures what Slurm itself
   writes (prolog, OOM kill, walltime message) and is the first thing to read on a failure.
 - The wave README records, in addition to the standard fields: account, partition, QOS, the
@@ -216,11 +225,11 @@ export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
 
 ## Submit
 
-Per job, from the hub, after the all-rig Git deployment gate (`deploy-revision` created
-`.waves/<wave_id>` on `leonardo`) and `verify-revision` on `leonardo`:
+Per job, by the supervisor service from the hub, after the all-rig Git deployment gate
+(`deploy-revision` created `.waves/<wave_id>` on `leonardo`) and `verify-revision` on `leonardo`:
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=20 leonardo "cd <repo_path on leonardo> && squeue --me --noheader --format=%j | grep -Fxq '<wave_id>__<run_id_name>' && echo ALREADY-QUEUED || sbatch --parsable .waves/<wave_id>/scripts/<NNN_exp>/<run_id folder>/wave_<wave_id>/wave_leonardo_gpu1.sh"
+ssh -o BatchMode=yes -o ConnectTimeout=20 leonardo "cd <repo_path on leonardo> && squeue --me --noheader --format=%j | grep -Fxq '<wave_id>__<run_id_name>' && echo ALREADY-QUEUED || sbatch --parsable --time=<HH:MM:SS> --export=ALL,LANE_RIG=leonardo,LANE_GPUS=1 .waves/<wave_id>/scripts/<NNN_exp>/<run_id folder>/wave_<wave_id>/wave.sh"
 ```
 
 - The exact job-name check is the never-double-submit rule: the job name is unique per (run,
@@ -235,7 +244,10 @@ ssh -o BatchMode=yes -o ConnectTimeout=20 leonardo "cd <repo_path on leonardo> &
 - Before the first submission of a wave, run `saldo -b` and refuse any account whose consumed
   hours are at or above its total or whose end date has passed; show the remaining hours and the
   wave's estimate in the gate-3 preview.
-- Submit every job of the slice at once. Slurm orders them; the agent does not throttle.
+- The supervisor keeps up to the pool's job cap submitted and tops it up as jobs end; it stops at
+  the core-hour cap and asks the user without blocking. A job still `PENDING` costs nothing, so
+  when a rig lane goes idle with nothing left in the queue the supervisor `scancel`s one pending
+  job **by id** and gives that run to the lane.
 
 ## Monitor
 
@@ -256,7 +268,7 @@ State mapping (`squeue` while queued or running, `sacct` once gone):
 | `COMPLETED` + artifact present | `done` | none |
 | `COMPLETED` + artifact absent | `failed` with reason "exit 0 without artifact" | report; never resubmit blindly |
 | `FAILED`, `OUT_OF_MEMORY` | `failed` (code) | report with the tail of `slurm-%j.out`; no automatic resubmit |
-| `TIMEOUT` | `interrupted` (walltime) | resubmit **only if the run resumes from checkpoint**; a restart-from-scratch design makes a resubmit futile, so propose a longer `--time` to the user instead |
+| `TIMEOUT` | `interrupted` (walltime) | resubmit with a walltime resized from the run's measured progress; a restart-from-scratch run that cannot fit the 24 h cap goes to the user |
 | `NODE_FAIL`, `PREEMPTED`, `CANCELLED` not by the user, `BOOT_FAIL` | `interrupted` (machine fault) | resubmit the same script, same wave id |
 | `CANCELLED` by the user for a supersede | `superseded` | none; the row names the superseding wave (SKILL.md § Supersede) |
 | exit code `86`/`87`/`88` in `sacct` | drift or storage, never a run failure | stop the slice, report, do not resubmit |
@@ -266,11 +278,12 @@ State mapping (`squeue` while queued or running, `sacct` once gone):
   from structured progress as usual, bounded by the job's remaining walltime (`%L`), and a run
   whose progress-based ETA exceeds its remaining walltime is reported as "will time out" before it
   does.
-- Freshness: one bounded ssh per poll for the whole slice, at least every five minutes while any
-  job is running, every ten while everything is pending. Never poll from inside a job.
+- Freshness: one bounded ssh per supervisor cycle for the whole slice (queue, accounting, and the
+  status files of its live runs). Never poll from inside a job.
 - A stale heartbeat with `RUNNING` in `squeue` is a hang, not a machine fault: report it, and
-  never `scancel` without the user's approval (the cost is already spent and is not refunded).
-  The only other `scancel` is a user-approved supersede, and it names exact job ids.
+  never `scancel` a **running** job without the user's approval (the cost is already spent and is
+  not refunded). The other `scancel`s are a user-approved supersede and the supervisor's
+  pending-job move above; both name exact job ids, never a user, partition, or pattern.
 - The certificate check from the precondition section is rerun on every ssh failure before the
   site is called unreachable.
 
@@ -281,11 +294,15 @@ the worktree, or recreates it if it was pruned): the same script, same wave id, 
 guarded by
 the exact job-name check above, so a job that Slurm already requeued or that is still queued is
 never doubled. Append the new job id to `leonardo.jobs` as `<timestamp> <jobid> resubmitted after
-<state>`. Recovery never edits the sbatch header: a different walltime, QOS, or resource line is a
-new wave with its own authorization.
+<state>`. Recovery never edits the sbatch header: a different QOS or resource line is a
+new wave with its own authorization. Walltime is the exception, because it is a command-line
+value sized from measurement: after a `TIMEOUT` the supervisor resubmits with the larger of twice
+the old walltime and `measured seconds per step × total steps × 1.5`, capped at 24 h. A run that
+restarts from scratch and cannot fit 24 h goes to the user.
 
-Autonomous, not silent: resubmitting an interrupted job needs no permission, but the report says
-which jobs were resubmitted, why, and whether each resumes or restarts.
+Autonomous, not silent: resubmitting an interrupted job needs no permission, but the ledger, the
+table, and the agent's decisions say which jobs were resubmitted, why, with what walltime, and
+whether each resumes or restarts.
 
 ## Fetch results and sync wandb
 

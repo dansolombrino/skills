@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
+import json
 import os
 import re
 import shlex
@@ -14,6 +16,7 @@ import subprocess
 import sys
 import tomllib
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 
@@ -1724,6 +1727,295 @@ def push_env(
     run(flags + [str(source), destination], show=True)
 
 
+# ───────────────────────────── offload ─────────────────────────────
+#
+# A rig with little disk still has a GPU worth using. `offload` is one pass of a continuous
+# hub-ward copy of a wave's outputs, followed by the only deletion this script performs besides
+# `prune`: a checkpoint is removed from the rig when, and only when, every clause of
+# `offload_deletable` holds, and a receipt is written next to it first. Evaluations are copied and
+# always kept: they are small, and they are what reconciliation and the run's self-guard read.
+
+STATE_DIR = "_state"
+OFFLOAD_RECEIPT_SUFFIX = ".offloaded.json"
+OFFLOAD_MIN_AGE_S = 120
+OFFLOAD_BATCH = 100
+
+
+def wave_queue(config: Config, wave: str) -> dict:
+    validate_wave(wave)
+    path = config.root / WAVES_DIR / STATE_DIR / wave / "queue.json"
+    try:
+        queue = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RigSyncError(f"wave {wave} is not registered with the supervisor on this hub: {path}") from exc
+    if not isinstance(queue, dict) or not isinstance(queue.get("runs"), list):
+        raise RigSyncError(f"{path}: not a supervisor queue")
+    return queue
+
+
+def checkpoints_root(config: Config) -> PurePosixPath:
+    group = config.artifacts.get("checkpoints")
+    if not isinstance(group, dict) or not group.get("path"):
+        raise RigSyncError("sync.toml declares no [artifacts.checkpoints]; offload has nothing it may delete")
+    return PurePosixPath(str(group["path"]))
+
+
+def _safe_relative(value: object, where: str) -> PurePosixPath:
+    path = PurePosixPath(str(value))
+    if not value or path.is_absolute() or ".." in path.parts:
+        raise RigSyncError(f"unsafe path in {where}: {value!r}")
+    return path
+
+
+def offload_inventory_script(runs: list[dict]) -> str:
+    parts = ['cd "$1" || exit 3; echo "__NOW__ $(date +%s)"; ']
+    for run in runs:
+        parts.append(f"echo __RUN__ {shlex.quote(run['token'])}; tr -d '\\n' < {shlex.quote(run['status_path'])} 2>/dev/null; echo; ")
+        for label, key in (("C", "checkpoint_dir"), ("E", "eval_dir")):
+            directory = shlex.quote(run[key])
+            parts.append(
+                f"[ -d {directory} ] && find {directory} -type f ! -name '*{OFFLOAD_RECEIPT_SUFFIX}' ! -name '*.tmp' ! -name '*.tmp.*' "
+                f"-printf '{label}\\t%s\\t%T@\\t%p\\n'; "
+            )
+    parts.append("echo __END__")
+    return "".join(parts)
+
+
+def parse_offload_inventory(text: str) -> tuple[float, dict[str, dict]]:
+    if "__END__" not in text:
+        raise RigSyncError("offload inventory was cut short; nothing is copied or deleted from a partial listing")
+    rig_now = 0.0
+    runs: dict[str, dict] = {}
+    current: dict | None = None
+    expect_status = False
+    for line in text.splitlines():
+        if line.startswith("__NOW__ "):
+            rig_now = float(line.split()[1])
+        elif line.startswith("__RUN__ "):
+            current = runs.setdefault(line.split(" ", 1)[1].strip(), {"status": {}, "files": []})
+            expect_status = True
+        elif line == "__END__":
+            break
+        elif expect_status and current is not None:
+            expect_status = False
+            with contextlib.suppress(json.JSONDecodeError):
+                payload = json.loads(line) if line.strip() else {}
+                current["status"] = payload if isinstance(payload, dict) else {}
+        elif current is not None and line[:2] in ("C\t", "E\t"):
+            kind, size, mtime, path = line.split("\t", 3)
+            current["files"].append({"kind": kind, "size": int(size), "mtime": float(mtime), "path": path})
+    return rig_now, runs
+
+
+def offload_deletable(
+    *,
+    file: dict,
+    run: dict,
+    status: dict,
+    wave: str,
+    rig_now: float,
+    newest_checkpoint: str | None,
+    checkpoint_root: PurePosixPath,
+    verified: bool,
+) -> str | None:
+    """Return None when the rig copy may be deleted, else the clause that protects it."""
+    path = PurePosixPath(file["path"])
+    directory = PurePosixPath(run["checkpoint_dir"])
+    if file["kind"] != "C":
+        return "only checkpoints are ever deleted; evaluations stay on the rig"
+    if ".." in path.parts or path.is_absolute() or directory not in path.parents:
+        return "outside the run's recorded checkpoint directory"
+    if checkpoint_root != directory and checkpoint_root not in directory.parents:
+        return "the run's checkpoint directory is outside [artifacts.checkpoints]"
+    if status.get("wave_id") != wave:
+        return "the run's status does not carry this wave id: not produced by this wave"
+    if rig_now - file["mtime"] < OFFLOAD_MIN_AGE_S:
+        return f"written less than {OFFLOAD_MIN_AGE_S}s ago: may still be open"
+    if status.get("state") != "done" and file["path"] == newest_checkpoint:
+        return "newest checkpoint of a run that is not done: a resume needs it"
+    if not verified:
+        return "hub copy is not checksum-verified"
+    return None
+
+
+def _sha256_local(path: Path) -> str | None:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for block in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(block)
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def _sha256_remote(machine: Machine, paths: list[str]) -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    for start in range(0, len(paths), OFFLOAD_BATCH):
+        batch = paths[start : start + OFFLOAD_BATCH]
+        result = remote(machine, ["sh", "-c", 'cd "$1" && shift && sha256sum -- "$@"', "rigsync", str(machine.repo_path), *batch], check=False)
+        for line in result.stdout.decode(errors="replace").splitlines():
+            digest, _, name = line.partition("  ")
+            if len(digest) == 64 and name:
+                hashes[name] = digest
+    return hashes
+
+
+def hub_machine(config: Config) -> Machine:
+    hubs = [machine for machine in config.machines.values() if machine.local]
+    if len(hubs) != 1:
+        raise RigSyncError("offload runs on the hub: exactly one configured machine must be this host")
+    return hubs[0]
+
+
+def offload(config: Config, machine: Machine, wave: str, dry_run: bool, confirmed: bool) -> None:
+    require_confirmation(dry_run, confirmed)
+    queue = wave_queue(config, wave)
+    checkpoint_root = checkpoints_root(config)
+    hub = hub_machine(config)
+    if machine.local:
+        print(f"[local] {machine.name} is the hub; there is nothing to offload")
+        return
+    failures, lines = check_storage(hub)
+    if failures:
+        raise RigSyncError("hub storage is under its floor; offload would only move the problem:\n" + "\n".join(lines))
+    runs = []
+    for entry in queue["runs"]:
+        for key in ("status_path", "checkpoint_dir", "eval_dir"):
+            _safe_relative(entry.get(key), f"queue run {entry.get('id')!r}.{key}")
+        runs.append(entry)
+    result = remote(machine, ["sh", "-c", offload_inventory_script(runs), "rigsync", str(machine.repo_path)], check=False)
+    if result.returncode != 0:
+        raise RigSyncError(f"{machine.name}: offload inventory failed ({result.returncode})")
+    rig_now, inventory = parse_offload_inventory(result.stdout.decode(errors="replace"))
+    label = "dry-run" if dry_run else "offload"
+    by_token = {entry["token"]: entry for entry in runs}
+    to_copy: list[dict] = []
+    candidates: list[tuple[dict, dict, dict, str | None]] = []
+    for token, found in inventory.items():
+        entry = by_token[token]
+        checkpoints = [f for f in found["files"] if f["kind"] == "C"]
+        newest = max(checkpoints, key=lambda f: f["mtime"])["path"] if checkpoints else None
+        for file in found["files"]:
+            _safe_relative(file["path"], f"{machine.name} inventory")
+            if rig_now - file["mtime"] < OFFLOAD_MIN_AGE_S:
+                continue
+            local = config.root / file["path"]
+            if not local.is_file() or local.stat().st_size != file["size"] or int(local.stat().st_mtime) != int(file["mtime"]):
+                to_copy.append(file)
+            if file["kind"] == "C":
+                candidates.append((file, entry, found["status"], newest))
+    copied_bytes = sum(f["size"] for f in to_copy)
+    if to_copy:
+        alias = transfer_alias(machine)
+        command = rsync_flags(machine) + ["--partial", "--from0", "--files-from=-"]
+        if dry_run:
+            command.append("--dry-run")
+        command += [rsync_remote(machine, machine.repo_path, alias=alias), str(config.root) + "/"]
+        print(f"[{label}] {machine.name}: copy {len(to_copy)} file(s), {copied_bytes / 1e6:.1f} MB, to the hub")
+        payload = b"\0".join(f["path"].encode() for f in to_copy) + b"\0"
+        for attempt in range(1, RSYNC_ATTEMPTS + 1):
+            copy = run(command, input_bytes=payload, check=False)
+            if copy.returncode == 0 or copy.returncode not in RSYNC_RETRY_CODES or attempt == RSYNC_ATTEMPTS:
+                break
+        if copy.returncode != 0:
+            raise RigSyncError(f"offload copy failed ({copy.returncode}): {copy.stderr.decode(errors='replace').strip()[-400:]}")
+    if dry_run:
+        for file, entry, status, newest in candidates:
+            reason = offload_deletable(file=file, run=entry, status=status, wave=wave, rig_now=rig_now, newest_checkpoint=newest, checkpoint_root=checkpoint_root, verified=True)
+            print(f"[dry-run] {machine.name}: {'delete after verification' if reason is None else 'keep'} {file['path']}" + (f" ({reason})" if reason else ""))
+        print(f"[offload-summary] {machine.name}: would copy {len(to_copy)}, {len(candidates)} checkpoint file(s) examined")
+        return
+    unverified = [c for c in candidates if offload_deletable(file=c[0], run=c[1], status=c[2], wave=wave, rig_now=rig_now, newest_checkpoint=c[3], checkpoint_root=checkpoint_root, verified=True) is None]
+    remote_hashes = _sha256_remote(machine, [c[0]["path"] for c in unverified])
+    deleted = 0
+    deleted_bytes = 0
+    doomed: list[tuple[str, str]] = []
+    for file, entry, status, newest in unverified:
+        local_hash = _sha256_local(config.root / file["path"])
+        verified = local_hash is not None and remote_hashes.get(file["path"]) == local_hash
+        if offload_deletable(file=file, run=entry, status=status, wave=wave, rig_now=rig_now, newest_checkpoint=newest, checkpoint_root=checkpoint_root, verified=verified) is not None:
+            continue
+        receipt = json.dumps(
+            {
+                "path": file["path"], "size": file["size"], "sha256": local_hash, "wave_id": wave, "rig": machine.name,
+                "hub": hub.name, "hub_path": str(config.root / file["path"]), "offloaded_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            },
+            sort_keys=True,
+        )
+        doomed.append((file["path"], receipt))
+        deleted += 1
+        deleted_bytes += file["size"]
+    # receipt first, atomically, then the unlink; a pass cut short leaves a file or a receipt, never neither
+    unlink = 'cd "$1" || exit 3; shift; while [ "$#" -gt 1 ]; do f=$1; r=$2; shift 2; printf %s "$r" > "$f' + OFFLOAD_RECEIPT_SUFFIX + '.tmp" && mv "$f' + OFFLOAD_RECEIPT_SUFFIX + '.tmp" "$f' + OFFLOAD_RECEIPT_SUFFIX + '" && rm -f -- "$f" || exit 4; done'
+    for start in range(0, len(doomed), OFFLOAD_BATCH):
+        flat = [item for pair in doomed[start : start + OFFLOAD_BATCH] for item in pair]
+        remote(machine, ["sh", "-c", unlink, "rigsync", str(machine.repo_path), *flat])
+        for path, _receipt in doomed[start : start + OFFLOAD_BATCH]:
+            print(f"[offload] {machine.name}: receipt written, removed {path}")
+    pending = len(candidates) - deleted
+    print(f"[offload-summary] {machine.name}: copied {len(to_copy)} ({copied_bytes / 1e6:.0f} MB), freed {deleted} ({deleted_bytes / 1e6:.0f} MB), {pending} checkpoint file(s) kept")
+
+
+def restore(config: Config, machine: Machine, wave: str, run_id: str, dry_run: bool, confirmed: bool) -> None:
+    """Hub -> rig copy of one run's checkpoints, for a run that resumes on a rig that never had them."""
+    require_confirmation(dry_run, confirmed)
+    queue = wave_queue(config, wave)
+    run_entry = next((r for r in queue["runs"] if r.get("id") == run_id or r.get("token") == run_id), None)
+    if run_entry is None:
+        raise RigSyncError(f"no run {run_id!r} in wave {wave}")
+    relative = _safe_relative(run_entry["checkpoint_dir"], "queue checkpoint_dir")
+    source = config.root / relative
+    if not source.is_dir():
+        raise RigSyncError(f"the hub holds no checkpoints for {run_id}: {source}")
+    if machine.local:
+        print(f"[local] {relative} already resides on {machine.name}")
+        return
+    destination = machine.repo_path / relative
+    command = rsync_flags(machine) + ["--partial", f"--exclude=*{OFFLOAD_RECEIPT_SUFFIX}"]
+    if dry_run:
+        command.append("--dry-run")
+    else:
+        remote(machine, ["mkdir", "-p", str(destination)])
+    command += [str(source) + "/", rsync_remote(machine, destination, alias=transfer_alias(machine))]
+    print(f"[{'dry-run' if dry_run else 'restore'}] {relative} to {machine.name}")
+    print(f"[rsync] {shlex.join(command)}")
+    run_rsync_with_retry(command)
+
+
+def sync_cache(config: Config, machine: Machine, variable: str, subpath: str, dry_run: bool, confirmed: bool) -> None:
+    """Hub -> rig copy of one subtree of a declared shared cache. Never deletes, and never two at once."""
+    require_confirmation(dry_run, confirmed)
+    if variable not in MACHINE_ENV_VARS:
+        raise RigSyncError(f"{variable} is not a machine-level cache variable")
+    hub = hub_machine(config)
+    relative = _safe_relative(subpath, "--subpath")
+    roots = {}
+    for side in (hub, machine):
+        declared = dict(side.caches).get(variable)
+        if not declared:
+            raise RigSyncError(f"{side.name} declares no {variable} in the registry; a cache path is never guessed")
+        roots[side.name] = Path(declared)
+    source = roots[hub.name] / relative
+    if not source.exists():
+        raise RigSyncError(f"the hub cache holds no {relative} under {variable}")
+    if machine.local:
+        print(f"[local] {variable}/{relative} already resides on {machine.name}")
+        return
+    destination = roots[machine.name] / relative
+    lock = shlex.quote(str(roots[machine.name] / ".rigsync-cache.lock"))
+    command = rsync_flags(machine) + ["--partial", f"--rsync-path=flock {lock} rsync"]
+    if dry_run:
+        command.append("--dry-run")
+    else:
+        remote(machine, ["mkdir", "-p", str(destination.parent if source.is_file() else destination)])
+    tail = "" if source.is_file() else "/"
+    command += [str(source) + tail, f"{transfer_alias(machine)}:{shlex.quote(str(destination))}{tail}"]
+    print(f"[{'dry-run' if dry_run else 'sync-cache'}] {variable}/{relative} to {machine.name}")
+    print(f"[rsync] {shlex.join(command)}")
+    run_rsync_with_retry(command)
+
+
 MIN_GIT = (2, 17)
 
 
@@ -1872,6 +2164,23 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_p.add_argument("--machine", required=True)
     prepare_p.add_argument("--dry-run", action="store_true")
     prepare_p.add_argument("--confirm", action="store_true")
+    offload_p = sub.add_parser("offload")
+    offload_p.add_argument("--machine", required=True)
+    offload_p.add_argument("--wave", required=True)
+    offload_p.add_argument("--dry-run", action="store_true")
+    offload_p.add_argument("--confirm", action="store_true")
+    restore_p = sub.add_parser("restore")
+    restore_p.add_argument("--machine", required=True)
+    restore_p.add_argument("--wave", required=True)
+    restore_p.add_argument("--run", required=True)
+    restore_p.add_argument("--dry-run", action="store_true")
+    restore_p.add_argument("--confirm", action="store_true")
+    cache_p = sub.add_parser("sync-cache")
+    cache_p.add_argument("--to", dest="machine", required=True)
+    cache_p.add_argument("--var", required=True)
+    cache_p.add_argument("--subpath", required=True)
+    cache_p.add_argument("--dry-run", action="store_true")
+    cache_p.add_argument("--confirm", action="store_true")
     for name in ("push", "pull"):
         transfer_p = sub.add_parser(name)
         transfer_p.add_argument("selector")
@@ -1944,6 +2253,16 @@ def main(argv: list[str] | None = None) -> int:
                 args.dry_run,
                 args.confirm,
             )
+        elif args.command in {"offload", "restore", "sync-cache"}:
+            if args.machine not in config.machines:
+                raise RigSyncError(f"unknown machine: {args.machine}")
+            machine = config.machines[args.machine]
+            if args.command == "offload":
+                offload(config, machine, args.wave, args.dry_run, args.confirm)
+            elif args.command == "restore":
+                restore(config, machine, args.wave, args.run, args.dry_run, args.confirm)
+            else:
+                sync_cache(config, machine, args.var, args.subpath, args.dry_run, args.confirm)
         elif args.command == "prepare":
             if args.machine not in config.machines:
                 raise RigSyncError(f"unknown machine: {args.machine}")

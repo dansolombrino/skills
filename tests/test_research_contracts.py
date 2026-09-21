@@ -70,7 +70,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "7.1.1")
+        self.assertEqual(manifest["version"], "8.0.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -95,7 +95,7 @@ class ResearchContractTests(unittest.TestCase):
             path.parent.name
             for path in (ROOT / "plugins/research/skills").glob("*/SKILL.md")
         }
-        self.assertEqual(len(skill_names), 13)
+        self.assertEqual(len(skill_names), 14)
         self.assertEqual(
             skill_names,
             {
@@ -111,6 +111,7 @@ class ResearchContractTests(unittest.TestCase):
                 "rig-board",
                 "rig-sync",
                 "sweep-dispatch",
+                "sweep-supervisor",
                 "visualizations",
             },
         )
@@ -1305,18 +1306,21 @@ class ResearchContractTests(unittest.TestCase):
         # A plot existing no longer freezes the run identity schema.
         self.assertNotIn("no checkpoint, evaluation, or plot output", templates)
 
-    def test_every_launch_and_recovery_loop_stops_on_reserved_exits(self) -> None:
+    def test_the_lane_loop_is_the_only_launcher_and_stops_on_reserved_exits(self) -> None:
         templates = (
             ROOT / "plugins/research/skills/sweep-dispatch/references/templates.md"
         ).read_text()
-        lane_loops = [line for line in templates.splitlines() if "for s in .waves/<wave_id>/scripts/" in line]
-
-        self.assertEqual(len(lane_loops), 3)
-        for index, loop in enumerate(lane_loops):
-            with self.subTest(loop=index):
-                handled = {int(code) for code in re.findall(r"-eq\\?\s+(8[678])", loop)}
-                self.assertEqual(handled, {86, 87, 88})
-                self.assertIn("exit", loop)
+        # the static per-lane glob is gone: a run is placed when a lane claims it, never by its file name
+        self.assertNotIn("for s in .waves/<wave_id>/scripts/", templates)
+        self.assertNotIn("wave_<rig>_gpu<ids>.sh", templates)
+        stops = [line for line in self.render_lane_script("20260801-000000").splitlines() if "exit \"$rc\"" in line]
+        self.assertEqual(len(stops), 1)
+        handled = {int(code) for code in re.findall(r"-eq\s+(8[678])", stops[0])}
+        self.assertEqual(handled, {86, 87, 88})
+        launch = [line for line in templates.splitlines() if "tmux new-session -d -s" in line]
+        self.assertEqual(len(launch), 1)
+        self.assertIn("tmux has-session -t", launch[0])
+        self.assertIn("_lanes/wave_<wave_id>/lane.sh", launch[0])
 
     def test_tests_tree_mirrors_source_root_then_experiment_hierarchy(self) -> None:
         skills = ROOT / "plugins/research/skills"
@@ -1649,7 +1653,7 @@ class ResearchContractTests(unittest.TestCase):
         guard = templates.index("git rev-parse --git-common-dir")
         python = templates.index('"$WAVE_TREE/code/<NNN_exp>/<script>.py"')
         self.assertLess(guard, python)
-        self.assertIn("sbatch --parsable .waves/<wave_id>/scripts/", slurm)
+        self.assertIn("LANE_GPUS=1 .waves/<wave_id>/scripts/", slurm)
         self.assertNotIn('cd "$SLURM_SUBMIT_DIR"', slurm)
         # Ignores, editor excludes, and the paths helper.
         for entry in (".waves/", ".envs/"):
@@ -1674,13 +1678,12 @@ class ResearchContractTests(unittest.TestCase):
         templates = (
             ROOT / "plugins/research/skills/sweep-dispatch/references/templates.md"
         ).read_text()
-        start = templates.index("## wave_<rig>_gpu<ids>.sh")
+        start = templates.index("## wave.sh")
         body = templates[templates.index("```bash\n", start) + len("```bash\n"):]
         body = body[: body.index("\n```\n")]
-        # Drop the behemoth-only block, as generation does on every other rig.
-        head, _, rest = body.partition("# ---- behemoth lanes ONLY")
-        body = head + rest.partition("# ---- end behemoth block\n")[2]
+        self.assertIn("# ---- behemoth in the pool ONLY", body)
         values = {
+            '"<0 | the granted set>"': '"0"',
             '"<wave_id>"': f'"{wave}"',
             '"<flat run_id>"': '"seed=0"',
             '"<run_id_name: the rendered run_id under segments-v1; the flat run_id under a legacy pin>"': '"seed=0"',
@@ -1689,22 +1692,81 @@ class ResearchContractTests(unittest.TestCase):
             '"<exact evaluation directory resolved by canonical run_id_path>"': f'"evaluations/000_x/{wave}"',
             '"logs/<NNN_exp>/<run_id folder>/wave_<wave_id>"': f'"logs/000_x/seed=0/wave_{wave}"',
             '"<exact expected final artifact path under CHECKPOINT_DIR or EVAL_DIR>"': f'"evaluations/000_x/{wave}/result.json"',
-            '"<ids>"': '"0"',
-            "<MIN_FREE_KIB from storage-env, raised to this wave's checkpoint footprint>": "0",
-            '"<QUOTA_FS from storage-env; empty means the rig has no quota and df is used>"': '""',
+            "<this run's retained checkpoint footprint in KiB, from experiment-design>": "0",
             '"<ENVIRONMENT_DIR printed by environment-sync verify: .envs/<env_key>>"': f'"{env_dir}"',
             '"<64-char fingerprint verified on every assigned rig>"': '"' + "f" * 64 + '"',
             '("$WAVE_TREE/<gpu_smoke script>" <shell-quoted remaining gpu_smoke tokens>)': '("$WAVE_TREE/code/common/environment_smoke.py")',
             "(<tokens produced by hydra_override_arg; one per override>)": "(seed=0)",
             "code/<NNN_exp>/<script>.py": "code/000_x/train.py",
-            "wave_<rig>_gpu<ids>-": "wave_rig_gpu0-",
         }
         for placeholder, value in values.items():
             self.assertIn(placeholder, body)
             body = body.replace(placeholder, value)
         code = "\n".join(line for line in body.splitlines() if not line.lstrip().startswith("#"))
         self.assertNotRegex(code, r"<[a-z_]+>")
+        # placement is an input, never baked in: no rig and no card is spelled in the script
+        self.assertNotRegex(code, r'CUDA_VISIBLE_DEVICES="\d')
         return body
+
+    def render_lane_script(self, wave: str) -> str:
+        templates = (
+            ROOT / "plugins/research/skills/sweep-dispatch/references/templates.md"
+        ).read_text()
+        start = templates.index("## lane.sh")
+        body = templates[templates.index("```bash\n", start) + len("```bash\n"):]
+        body = body[: body.index("\n```\n")]
+        self.assertIn('WAVE_ID="<wave_id>"', body)
+        body = body.replace("<wave_id>", wave)
+        code = "\n".join(line for line in body.splitlines() if not line.lstrip().startswith("#"))
+        self.assertNotRegex(code, r"<[a-z_]+>")
+        return body
+
+    def test_rendered_lane_loop_claims_retracts_waits_and_stops(self) -> None:
+        wave = "20260801-000000"
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            tree = root / ".waves" / wave
+            tree.mkdir(parents=True)
+            (root / "lane.sh").write_text(self.render_lane_script(wave))
+            lane = root / ".waves/_state" / wave / "lanes/gpu0"
+            for name in ("queue", "running", "finished"):
+                (lane / name).mkdir(parents=True)
+            (tree / "ok.sh").write_text('echo "$LANE_RIG/$LANE_GPUS/$MIN_FREE_KIB" >> "$PWD/ran"; exit 0\n')
+            (tree / "fail.sh").write_text("exit 3\n")
+            (tree / "drift.sh").write_text("exit 87\n")
+            (tree / "full.sh").write_text('[ -e "$PWD/room" ] && exit 0; : > "$PWD/room"; exit 88\n')
+            env = {
+                **os.environ, "LANE_RIG": "rig", "LANE_GPUS": "0", "MIN_FREE_KIB": "5",
+                "LANE_IDLE_POLL_S": "0", "LANE_STORAGE_WAIT_S": "0",
+            }
+
+            def run_lane() -> int:
+                return subprocess.run(["bash", "lane.sh"], cwd=root, env=env, capture_output=True, text=True, timeout=30).returncode
+
+            # an entry interrupted by a machine fault goes back to the buffer; an ordinary failure falls through
+            (lane / "running/000001__a").write_text("ok.sh")
+            (lane / "running/000001__a.pid").write_text("1")
+            (lane / "queue/000002__b").write_text("fail.sh")
+            (lane / "queue/000003__c").write_text("ok.sh")
+            (lane / "drain").write_text("")
+            self.assertEqual(run_lane(), 0)
+            self.assertEqual(sorted(p.name for p in (lane / "finished").iterdir()), ["000001__a.rc0", "000002__b.rc3", "000003__c.rc0"])
+            self.assertEqual((root / "ran").read_text().splitlines(), ["rig/0/5", "rig/0/5"])
+            self.assertEqual(list((lane / "running").iterdir()), [])
+            # insufficient storage waits for offload when it is on, and costs the lane when it is not
+            (lane / "queue/000004__d").write_text("full.sh")
+            (root / ".waves/_state" / wave / "offload").write_text("")
+            self.assertEqual(run_lane(), 0)
+            self.assertTrue((lane / "finished/000004__d.rc0").exists())
+            (root / "room").unlink()
+            (root / ".waves/_state" / wave / "offload").unlink()
+            (lane / "queue/000005__e").write_text("full.sh")
+            self.assertEqual(run_lane(), 88)
+            # environment drift stops the lane and leaves the rest of the buffer untouched
+            (lane / "queue/000006__f").write_text("drift.sh")
+            (lane / "queue/000007__g").write_text("ok.sh")
+            self.assertEqual(run_lane(), 87)
+            self.assertTrue((lane / "queue/000007__g").exists())
 
     def test_rendered_wave_scripts_of_two_revisions_run_side_by_side(self) -> None:
         def git(*args: str, cwd: Path) -> str:
@@ -1728,7 +1790,7 @@ class ResearchContractTests(unittest.TestCase):
             env_dir = ".envs/0123456789abcdef"
             for wave, version in waves.items():
                 (root / "code/000_x/train.py").write_text(f"VERSION={version}\n")
-                script = root / "scripts/000_x/seed=0" / f"wave_{wave}" / "wave_rig_gpu0.sh"
+                script = root / "scripts/000_x/seed=0" / f"wave_{wave}" / "wave.sh"
                 script.parent.mkdir(parents=True, exist_ok=True)
                 script.write_text(self.render_wave_script(wave, env_dir))
                 git("add", ".", cwd=root)
@@ -1753,10 +1815,11 @@ class ResearchContractTests(unittest.TestCase):
 
             def run_wave(wave: str) -> subprocess.CompletedProcess:
                 artifact = root / "evaluations/000_x" / wave / "result.json"
-                env = {**os.environ, "ARTIFACT_UNDER_TEST": str(artifact)}
+                env = {**os.environ, "ARTIFACT_UNDER_TEST": str(artifact), "LANE_RIG": "rig", "LANE_GPUS": "0"}
+                env.pop("SLURM_JOB_ID", None)
                 env.pop("SLURM_SUBMIT_DIR", None)
                 env.pop("RESEARCH_PROJECT_ROOT", None)
-                script = f".waves/{wave}/scripts/000_x/seed=0/wave_{wave}/wave_rig_gpu0.sh"
+                script = f".waves/{wave}/scripts/000_x/seed=0/wave_{wave}/wave.sh"
                 return subprocess.run(["bash", script], cwd=root, env=env, capture_output=True, text=True)
 
             for wave, version in waves.items():
@@ -1765,20 +1828,34 @@ class ResearchContractTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     artifact = root / "evaluations/000_x" / wave / "result.json"
                     self.assertEqual(artifact.read_text().strip(), f"VERSION={version}")
-                    self.assertTrue(list((root / f"logs/000_x/seed=0/wave_{wave}").glob("*.log")))
-            # Tampering with a wave's worktree is source drift.
+                    self.assertTrue(list((root / f"logs/000_x/seed=0/wave_{wave}").glob("wave_rig_gpu0-*.log")))
+            # An offloaded artifact leaves a receipt, and the receipt alone makes the run skip.
             first = "20260801-000000"
-            (root / "evaluations/000_x" / first / "result.json").unlink()
+            artifact = root / "evaluations/000_x" / first / "result.json"
+            artifact.rename(artifact.with_name("result.json.offloaded.json"))
+            skipped = run_wave(first)
+            self.assertEqual(skipped.returncode, 0, skipped.stderr)
+            self.assertIn("artifact offloaded to the hub", skipped.stdout)
+            self.assertFalse(artifact.exists())
+            artifact.with_name("result.json.offloaded.json").unlink()
+            # A wave script is never started bare: placement comes from the lane.
+            bare = subprocess.run(
+                ["bash", f".waves/{first}/scripts/000_x/seed=0/wave_{first}/wave.sh"], cwd=root, capture_output=True, text=True,
+                env={k: v for k, v in os.environ.items() if k not in ("LANE_RIG", "LANE_GPUS", "SLURM_SUBMIT_DIR")},
+            )
+            self.assertNotEqual(bare.returncode, 0)
+            self.assertIn("LANE_RIG", bare.stderr)
+            # Tampering with a wave's worktree is source drift.
             (root / ".waves" / first / "code/000_x/train.py").write_text("VERSION=tampered\n")
             self.assertEqual(run_wave(first).returncode, 86)
             # A missing (pruned) worktree is source drift, not a crash.
             second = "20260802-000000"
             (root / "evaluations/000_x" / second / "result.json").unlink()
-            relative = f"scripts/000_x/seed=0/wave_{second}/wave_rig_gpu0.sh"
+            relative = f"scripts/000_x/seed=0/wave_{second}/wave.sh"
             copy = Path(raw) / "copy.sh"
             copy.write_text((root / ".waves" / second / relative).read_text())
             git("worktree", "remove", str(root / ".waves" / second), cwd=root)
-            missing = subprocess.run(["bash", str(copy)], cwd=root, capture_output=True, text=True)
+            missing = subprocess.run(["bash", str(copy)], cwd=root, capture_output=True, text=True, env={**os.environ, "LANE_RIG": "rig", "LANE_GPUS": "0"})
             self.assertEqual(missing.returncode, 86, missing.stderr)
             self.assertIn("missing wave worktree", missing.stderr)
 
@@ -1936,18 +2013,37 @@ class ResearchContractTests(unittest.TestCase):
             text = contract if text_name == "contract" else bodies[text_name]
             self.assertIn("every later directive", text, text_name)
 
-    def test_dispatch_guarantees_fixed_timestamped_status_updates(self) -> None:
-        skill_root = ROOT / "plugins/research/skills/sweep-dispatch"
-        skill = (skill_root / "SKILL.md").read_text()
-        metadata = (skill_root / "agents/openai.yaml").read_text()
+    def test_supervision_never_depends_on_an_open_chat(self) -> None:
+        """A chat that blocked on a question at 02:12 once left a fleet unwatched for five hours."""
+        skills = ROOT / "plugins/research/skills"
+        dispatch = (skills / "sweep-dispatch/SKILL.md").read_text()
+        metadata = (skills / "sweep-dispatch/agents/openai.yaml").read_text()
+        supervisor = (skills / "sweep-supervisor/SKILL.md").read_text()
+        tick = (skills / "sweep-supervisor/references/tick.md").read_text()
+        setup = (skills / "sweep-supervisor/references/setup.md").read_text()
 
-        self.assertIn("exact 600-second increments", skill)
-        self.assertIn("even if nothing changed", skill)
-        self.assertIn("Status written <timestamp> —", skill)
-        self.assertIn("does not reset `next_update`", skill)
-        self.assertIn("must not send its final response", skill)
-        self.assertIn("recurring wait/monitor primitive", skill)
+        # dispatch launches nothing unsupervised and no longer monitors from a chat
+        self.assertIn("1i. **supervisor check**", dispatch)
+        self.assertIn("a wave nobody supervises is not launched", dispatch)
+        self.assertNotIn("one background subagent per", dispatch)
+        self.assertNotIn("must not send its final response", dispatch)
         self.assertIn("ten-minute status and ETA updates", metadata)
+        # the printout: fixed cadence, script-rendered, never blocking
+        self.assertIn("exact 600-second ticks", supervisor)
+        self.assertIn("even if nothing changed", supervisor)
+        self.assertIn("Status written <timestamp> —", supervisor)
+        self.assertIn("does not\n   reset `next_update`", supervisor)
+        self.assertIn("**Never block while a wave is non-terminal.**", supervisor)
+        self.assertIn("paste its output\n   verbatim", supervisor)
+        self.assertIn("Never implement the cadence with shell `sleep`", supervisor)
+        # the agent is a fresh process with a declared profile, and it asks without waiting
+        self.assertIn("Every tick is a **fresh**", setup)
+        self.assertIn("Nothing here is\ndefaulted", setup)
+        self.assertIn("Never wait, never retry the question", tick)
+        self.assertIn("never treat silence as consent", tick)
+        self.assertIn("Never bypass a refusal", tick)
+        # low disk never costs a rig its place in the pool
+        self.assertRegex(dispatch, r"short on disk is \*\*never\*\* left out")
 
     def test_tracking_defines_run_lane_and_wave_eta_contracts(self) -> None:
         tracking = (
@@ -2141,7 +2237,7 @@ class ResearchContractTests(unittest.TestCase):
         for state in ("PENDING", "RUNNING", "COMPLETED", "FAILED", "OUT_OF_MEMORY",
                       "TIMEOUT", "NODE_FAIL", "PREEMPTED"):
             self.assertIn(f"`{state}`", reference, state)
-        self.assertIn("never `scancel` without the user's approval", reference)
+        self.assertIn("never `scancel` a **running** job without the user's approval", reference)
 
         # site facts are cited, never from memory
         self.assertGreaterEqual(reference.count("https://docs.hpc.cineca.it/"), 10)

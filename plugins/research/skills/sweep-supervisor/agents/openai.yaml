@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sweep Supervisor"
+  short_description: "Hub-side wave supervision, per-GPU table, rebalancing"
+  default_prompt: "Use $sweep-supervisor to show the per-GPU status and ETA table of a running wave, relay an answer to the unattended supervisor, rebalance or steal runs across GPUs, recover after a rig fault, or run one unattended supervisor tick for a wave launched by $sweep-dispatch."

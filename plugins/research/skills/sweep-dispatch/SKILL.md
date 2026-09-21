@@ -1,11 +1,13 @@
 ---
 name: sweep-dispatch
-description: Generate, launch, and continuously monitor experiment runs/sweeps across the GPU rigs (rig-4090, rig-3090-ti, rig-3080-ti, behemoth — also "4090", "3080 ti", "pro 6000", "bw", "blackwell", "server-pro-6000-bw") and the CINECA Leonardo Slurm cluster ("leonardo", "cineca", "slurm", "sbatch", "HPC"). Use when the user asks to run, launch, sweep, dispatch, or submit experiments or Slurm jobs, receive timestamped ten-minute status/ETA updates, monitor or babysit running experiments or queued jobs, split runs across machines, GPUs, or the cluster, rerun failed runs, supersede in-flight runs with a newer wave, run several waves of one project at once, resubmit jobs, fetch results from the cluster, or recover/resume a wave after a rig crash, reboot, or job interruption.
+description: Generate, authorize, and launch experiment runs/sweeps across the GPU rigs (rig-4090, rig-3090-ti, rig-3080-ti, behemoth — also "4090", "3080 ti", "pro 6000", "bw", "blackwell", "server-pro-6000-bw") and the CINECA Leonardo Slurm cluster ("leonardo", "cineca", "slurm", "sbatch", "HPC") as one pull queue over a pool of GPU lanes, then hand the wave to sweep-supervisor. Use when the user asks to run, launch, sweep, dispatch, or submit experiments or Slurm jobs, split runs across machines, GPUs, or the cluster, use a rig that is short on disk, rerun failed runs, supersede in-flight runs with a newer wave, run several waves of one project at once, or fetch results from the cluster. Monitoring, ten-minute status/ETA updates, rebalancing, and recovery after a rig crash or job interruption belong to sweep-supervisor.
 ---
 
 # sweep-dispatch
 
-Launch machinery for runs and sweeps. Canon: `../research-project-init/references/conventions.md`. Templates: [references/templates.md](references/templates.md). CINECA Leonardo is one more target: when a wave assigns any run to `leonardo`, read [references/cineca-slurm.md](references/cineca-slurm.md) before gate 2 and follow it wherever it differs from this file; do not load it otherwise. Dispatch always happens **from rig-4090** (the hub). GitHub distributes one tested, tagged commit through `rig-sync`, which materializes it as the wave's own detached worktree `.waves/<wave_id>/` on every assigned machine; `environment-sync` establishes runtime parity in the wave's lock-keyed environment `.envs/<env_key>/`; rsync is only for artifacts. If either gate fails, stop. Because every wave executes from its own worktree and environment, waves of different revisions may run on the same machine at the same time; GPU exclusivity stays `rig-board`'s job.
+Launch machinery for runs and sweeps: gates, generation, one tested revision, launch. Once lanes
+are running the wave belongs to `sweep-supervisor`, a hub service plus an unattended agent that
+feed, rebalance, recover, offload, and report it; this skill never polls a rig. Canon: `../research-project-init/references/conventions.md`. Templates: [references/templates.md](references/templates.md). CINECA Leonardo is one more target: when a wave assigns any run to `leonardo`, read [references/cineca-slurm.md](references/cineca-slurm.md) before gate 2 and follow it wherever it differs from this file; do not load it otherwise. Dispatch always happens **from rig-4090** (the hub). GitHub distributes one tested, tagged commit through `rig-sync`, which materializes it as the wave's own detached worktree `.waves/<wave_id>/` on every assigned machine; `environment-sync` establishes runtime parity in the wave's lock-keyed environment `.envs/<env_key>/`; rsync is only for artifacts. If either gate fails, stop. Because every wave executes from its own worktree and environment, waves of different revisions may run on the same machine at the same time; GPU exclusivity stays `rig-board`'s job.
 
 Read `program/00-execution-agreement.md` first and require the Research 2.0 surfaces. Stop on a
 legacy layout; do not offer migration or recover it as-is. In engineering-manual mode, preview and
@@ -14,7 +16,7 @@ inside the approved repo, branch, rigs/GPUs, compute/budget, and destination env
 `behemoth` cards beyond gpu0, new destinations, destructive actions, and envelope expansion remain
 protected in every mode.
 
-Vocabulary (canon): a **wave** is one dispatch decision, identified by `YYYYMMDD-HHMMSS`; a **slice** is the portion of a wave on one rig; a **lane** is the portion of a slice on one GPU set. Lanes run in parallel, runs within a lane run sequentially. A **run** is one experiment execution; a **job** is one Slurm allocation on `leonardo`, which hosts exactly one run — the cluster has jobs, not lanes. Use both words strictly and never call a job a run or a lane.
+Vocabulary (canon): a **wave** is one dispatch decision, identified by `YYYYMMDD-HHMMSS`; its **pool** is the set of lanes and cluster caps it may use; a **lane** is one GPU set on one rig; a **slice** is whatever part of the wave a rig ends up running. Lanes run in parallel, runs within a lane run sequentially, and a run belongs to the lane that claims it from the wave's queue — never to a lane chosen in advance. A **run** is one experiment execution; a **job** is one Slurm allocation on `leonardo`, which hosts exactly one run — the cluster has jobs, not lanes. Use both words strictly and never call a job a run or a lane.
 
 ## Before anything launches — mandatory gates
 
@@ -71,8 +73,8 @@ status and artifact paths. Never silently drop or duplicate the run: offer the u
 leave it out of this wave or to supersede the old placement (§ Supersede).
 1e. **rig declaration check** — resolve each assigned rig's project path with
 `rig-sync repo-path --machine <rig>` and its storage floor with
-`rig-sync storage-env --machine <rig>`, and substitute those values into the wave scripts and the
-dispatch, monitor, and recovery commands. Never type a project path or a quota filesystem by
+`rig-sync storage-env --machine <rig>`; the supervisor exports them to each lane, so they are
+never written into a wave script. Never type a project path or a quota filesystem by
 hand: both are declared once, and a second copy is what goes stale. A rig missing from `sync.toml`
 or the machine registry is not assignable — stop rather than guessing its layout.
 1f. **telemetry contract check** — require schema-v2 `code/common/status.py` from
@@ -81,6 +83,10 @@ The helper must provide timezone-aware timestamps, live elapsed time, and its au
 60-second heartbeat; entrypoints call
 `heartbeat(completed=<done>, total=<total>, unit=<label>)`. Display-only telemetry makes the
 project unsupported. Telemetry does not join `RUN_ID_PARAMS`.
+1i. **supervisor check** — run `sweep-supervisor` `check` and require its service to be active on
+the hub with a declared agent profile (model and effort are never defaulted). If it fails, stop
+before launch and say exactly what is missing: a wave nobody supervises is not launched, and no
+chat promises updates it cannot deliver.
 2. **Resolve usable rigs and GPUs.** First read the fleet board: `rig-board` `status --reconcile`
 shows every lane held by any project on the hub, foreign cards, and unreachable rigs. Held and
 foreign lanes are not free capacity in any mode. In manual mode, present the board and ask. In
@@ -92,64 +98,73 @@ grant regardless of mode and is never persisted. For `leonardo`, first pass the 
 precondition in `references/cineca-slurm.md` (print the login commands and wait when it fails),
 then require the project account for this wave and check its remaining budget with `saldo -b`;
 every job is one GPU, 8 cores, 128 GB unless the user states that a run needs more.
-3. **Build and authorize the assignment.** The objective is to **minimize wave completion by
-equalizing predicted lane finish times**, never to hand each lane an equal run count: a lane's
-capacity is `weight × free GPUs` and the fleet spans a fourfold spread, so an even split makes the
-slowest card the wave's tail while the fastest idles. Estimate each run's cost on its candidate rig
-with the `experiments-tracking` hierarchy, then assign runs **longest-first to the disjoint lane
-with the earliest predicted finish**. Per-run costs are what let a grid of unequal runs balance
-itself. In-lane order stays lexicographic — the glob is the manifest, and order never changes a
-lane's total, only which run is in flight at a snapshot. Present or record run → rig/GPU, **each
-lane's predicted finish plus the spread across lanes**, exact smoke command, staged files, journal
-entry, branch/remote, environment key and fingerprint, provisioning dry run, commit/tag/push,
-worktree deployment scope, and any supersede. A spread wider than 20% of the wave ETA is either rebalanced or justified in
-the same breath — normally indivisibility: fewer runs than weighted capacity, or one dominant run.
-Below that, run granularity is coarser than the gain. `leonardo` is outside the balancing: its
-queue wait is not predictable, so the user decides how many runs go there, each becomes one job,
-and its slice ETA is reported as scheduler estimate plus run estimate. Preview for that slice the
-account, partition/QOS, resource line, per-job walltime and its basis, and the budget estimate
-(`runs × walltime_h × 8` core-hours). Manual mode
-waits for approval; auto mode records that every item is within the envelope. Restate any shared-GPU
-grant verbatim.
+3. **Build and authorize the pool.** There is no static assignment: the wave is one ordered
+queue, and every lane in the pool takes the next run it is eligible for when it has room, so a
+fast card takes more runs and a wrong estimate corrects itself as real runtimes arrive. The
+objective stays to **minimize wave completion**, never to hand each lane an equal run count: a
+lane's capacity is `weight × free GPUs` and the fleet spans a fourfold spread. Estimate each run's
+cost with the `experiments-tracking` hierarchy and order the queue **longest-first** (math in
+[references/templates.md](references/templates.md)). A rig short on disk is **never** left out
+for that reason: list it under `offload`, and `rig-sync offload` keeps freeing it while its lane
+waits instead of stopping. Present or record: the pool (rig, GPU set, per lane), the queue order,
+**the simulated wave completion and each lane's expected share**, runs pinned to a rig by VRAM or
+data, offload rigs, exact smoke command, staged files, journal entry, branch/remote, environment
+key and fingerprint, provisioning dry run, commit/tag/push, worktree deployment scope, and any
+supersede. `leonardo` is outside the balancing: its queue wait is not predictable, so the user
+sets its job cap and core-hour cap, each run it takes becomes one job, and its ETA is reported as
+scheduler estimate plus run estimate. Preview for it the account, partition/QOS, resource line,
+walltime basis, and the budget ceiling (`runs × walltime_h × 8` core-hours per job). State the
+**standing authorization** this approval grants for the life of the wave: inside the pool,
+`sweep-supervisor` may start, move, requeue, and steal this wave's own runs, resubmit and cancel
+its own jobs, fetch data into declared caches, and free checksum-verified checkpoints on offload
+rigs, without asking again; everything outside the pool comes back to the user. Manual mode
+waits for approval; auto mode records that every item is within the envelope. Restate any
+shared-GPU grant verbatim; a granted `behemoth` card is part of the pool for this wave only.
 4. **Mint the wave id** when the assignment is authorized: `date '+%Y%m%d-%H%M%S'` on rig-4090.
 One id for the whole dispatch, shared by every rig and lane. Never use a semantic slug.
 
 ## Generate
 
-One script kind. For each run in the wave, materialize:
+For each run in the wave, materialize one placement-free script; once per wave, one lane loop:
 
 ```
 scripts/NNN_exp/<run_id folder>/wave_<wave_id>/
-    README.md                     # what this wave is + this run's placement; written once, never updated
-    wave_<rig>_gpu<ids>.sh        # this run's invocation in this wave
+    README.md      # what this wave is + the pool it may run in; written once, never updated
+    wave.sh        # this run's invocation in this wave
+scripts/NNN_exp/_lanes/wave_<wave_id>/
+    lane.sh        # the loop every lane of this wave runs
 ```
 
-- On `leonardo` the wave script is the same file with an `#SBATCH` header (`references/cineca-slurm.md`) and is submitted with `sbatch`; the guards below are unchanged and run inside the job.
-- The wave script is **self-contained** (full python command with explicit hydra overrides, each rendered through `hydra_override_arg`) and **self-guarded**: it exits early only if its expected final artifact is present. A `.status.json` that says `done` while the artifact is absent is inconsistent, so the script warns and re-executes. That guard is what makes lane dispatch idempotent — there is no launcher file holding it. Whether a re-execution resumes or restarts was fixed at experiment design time, never re-asked here.
-- It exports `CUDA_VISIBLE_DEVICES`, `WAVE_ID`, and the approved `ENVIRONMENT_FINGERPRINT`.
+- `wave.sh` names **no rig and no GPU**. The lane that claims it supplies `LANE_RIG`, `LANE_GPUS`,
+  and that rig's storage floor; on `leonardo` the same file carries an `#SBATCH` header
+  (`references/cineca-slurm.md`) and the supervisor passes `--time` and `LANE_RIG` to `sbatch`.
+- The wave script is **self-contained** (full python command with explicit hydra overrides, each rendered through `hydra_override_arg`) and **self-guarded**: it exits early only if its expected final artifact, or the offload receipt `rig-sync` leaves in its place, is present. A `.status.json` that says `done` while the artifact is absent is inconsistent, so the script warns and re-executes. That guard is what makes a lane relaunch idempotent. Whether a re-execution resumes or restarts was fixed at experiment design time, never re-asked here.
+- It exports `WAVE_ID` and the approved `ENVIRONMENT_FINGERPRINT`.
   Before experiment Python it recomputes the fingerprint with the configured environment's
   `bin/python`, compares it, and runs the bounded project GPU smoke without syncing.
   Drift/compatibility failure exits `87`.
-  On `behemoth` it retains the per-wave authorization guard before the smoke. On a quota'd rig it
-  also checks storage headroom first, exiting `88` rather than dying mid-checkpoint and leaving a
-  truncated artifact that looks real. It captures its own
-  timestamped log under the mirror path in `logs/`.
+  With `behemoth` in the pool it retains the per-wave authorization guard before the smoke. It
+  checks storage headroom first (the lane's floor plus the run's own checkpoint footprint), exiting
+  `88` rather than dying mid-checkpoint and leaving a truncated artifact that looks real. It
+  captures its own timestamped log under the mirror path in `logs/`, named after the lane that
+  ran it.
 - The run folder comes from `code/common/run_id.py`. Under `segments-v1` it is the same
   `run_id_path(..., segments=RUN_ID_SEGMENTS)` directories as `evaluations/`, and the wandb run
   name, EXPERIMENTS.md `run_id` column, and Slurm job-name suffix are `run_id_name(...)`, so every
   surface shows one identity. Under a legacy pin the selected `RUN_ID_PATH_LAYOUT` never changes
   scripts, logs, or wandb naming: those remain flat `run_id_flat`.
   `ls scripts/NNN_exp/<run_id folder>/` is that run's execution history.
-- **The filesystem encodes the assignment**: a run is on that rig and those GPUs precisely because
-  `wave_<rig>_gpu<ids>.sh` exists in its wave folder. No separate assignment record may drift.
+- **Placement is recorded where it happens**: the supervisor's ledger records which lane claimed
+  each run and when, the run's log file is named after that lane, and EXPERIMENTS.md gets `rig`
+  and `gpu` at claim time. No file name pre-assigns a run.
 - Only `scripts/` and `logs/` are wave-scoped. `checkpoints/` and `evaluations/` stay
   run-scoped at paths produced by the canonical helper for the experiment's recorded layout;
   `plots/` is not run-scoped and never uses the helper.
   Materialize the exact checkpoint directory, evaluation directory, status path, and expected
-  final artifact path into each generated wave script; never leave a monitor or recovery step to
-  infer how many path segments the run id occupies. Artifacts must keep a stable per-run path or
-  the self-guard and `guard_run_config` both break.
-- `scripts/` contains shell only. **Never put yaml under scripts/** — the grid lives in the generation conversation, the wave README, and EXPERIMENTS.md rows.
+  final artifact path into each generated wave script **and into the supervisor manifest**; never
+  leave a monitor or recovery step to infer how many path segments the run id occupies. Artifacts
+  must keep a stable per-run path or the self-guard and `guard_run_config` both break.
+- `scripts/` contains shell only. **Never put yaml under scripts/** — the grid lives in the generation conversation, the wave README, and EXPERIMENTS.md rows. The supervisor manifest (template in `references/templates.md`) is launch input and is written to the scratch area, never under `scripts/`.
 
 ## Test, commit, and deploy one revision
 
@@ -169,97 +184,60 @@ After generation and before any tmux launch:
    create that annotated tag at `HEAD`. Push the configured branch and exact tag without force;
    verify GitHub resolves both to the full local commit SHA. A push failure blocks dispatch.
 4. Run `rig-sync deploy-revision --wave <wave_id>` first as a dry run, obtain authorization under
-   the active engineering mode, then confirm it for **all assigned rigs plus the hub together**. It
+   the active engineering mode, then confirm it for **every rig in the pool plus the hub together**
+(any lane may claim any run, so every pool rig needs the worktree and the environment). It
    adds the detached worktree `.waves/<wave_id>` at the tagged commit on each machine, only
    verifies one that already exists, and never moves any main checkout — so other waves keep
    running untouched. Run `verify-revision` across the same set. Then run the approved
    `environment-sync provision --wave <wave_id> --revision <sha>` when its dry run showed changes
-   and `verify --wave <wave_id> --revision <sha>` for the full set plus every assigned lane; it
+   and `verify --wave <wave_id> --revision <sha>` for the full set plus every pool lane; it
    prints the `ENVIRONMENT_DIR` and fingerprint the wave scripts carry. Do not launch unless
    source, fingerprint, and GPU smoke all pass.
 
 Later commits on the hub (EXPERIMENTS.md, JOURNAL.md, the next wave) never affect a dispatched
 wave: its code is read from its own worktree and its environment is never re-synced while it runs.
 
-## Launch & monitor — orchestrator + one subagent per rig
+## Launch — hand the wave to the supervisor
 
-The chat where the launch is requested is the **orchestrator**. It performs the all-rig Git deployment gate but never launches or polls rigs itself. Only after that gate passes, use the host's parallel background-subagent capability to spawn **one background subagent per assigned rig in parallel**, then collect their reports. One subagent per *rig*, not per lane. A peer subagent drives one SSH target; when the assigned rig is the current local hub, its subagent uses direct bounded commands and never requires self-SSH. If the host cannot run background subagents in parallel, stop before launch and tell the user; do not silently collapse monitoring into the orchestrator.
+The chat never launches a lane, polls a rig, or writes the fleet board. After the all-rig Git and
+environment gates pass:
 
-Before launch, also require a recurring wait/monitor primitive that lets the orchestrator remain
-active and responsive for the full wave. If it is unavailable, stop before launch. The
-orchestrator must not send its final response while any run remains queued or running unless the
-user explicitly asks it to stop monitoring. Use the recurring wait primitive between events;
-never implement monitoring with shell `sleep`.
-
-Each rig subagent:
-
-1. Runs `rig-sync verify-revision` and read-only `environment-sync verify --wave <wave_id>
-   --revision <sha>` for its rig/lane immediately before launch, then **dispatches each
-   lane** as its own named tmux session — except the `leonardo` subagent, which instead reruns the
-   certificate precondition and **submits each job** with the guarded `sbatch` command in
-   `references/cineca-slurm.md`, records every job id, and monitors with `squeue`/`sacct` plus the
-   three signals; its recovery is resubmission under the same wave id, mapped from the Slurm state
-   table there — — `<project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>` — running
-   a glob loop over that lane's wave scripts (exact one-liner in
-   [references/templates.md](references/templates.md)). Each queued script repeats the Git guard
-   before Python. Every launch and recovery loop treats the complete reserved set as lane-stopping:
-   source-drift `86`, environment-drift `87`, and insufficient storage `88`; ordinary run failures
-   continue the queue.
-   Sequencing remains a shell loop so it survives subagent death, compaction, and multi-day queues.
-   Report each confirmed session back at once; the **orchestrator** then runs `rig-board` `claim`
-   for that lane (rig, GPU set, project, experiment, wave id, hub project root, run count). A
-   claim that exits 3 means another project holds the lane: kill nothing, report, and stop that
-   lane. Subagents never write the board.
-2. **Monitors** its queues to completion, judging each run by the three signals (hierarchy in
-`conventions.md` — artifacts are golden). Read each run's exact status and artifact paths from its
-generated wave record; do not recreate paths from the flat id or slash depth. Batch all lanes/status
-files for that rig into bounded probes; in normal operation obtain at least one fresh snapshot every
-five minutes so a scheduled chat update never depends on an arbitrarily old poll:
-   - **expected final artifact** on disk (final checkpoint / final eval output) ⇒ truly done;
-   - **`.status.json`** (`schema_version`, `state`, `heartbeat`, display + numeric progress,
-    timing, `wave_id`, `gpu`, source tag/SHA, environment fingerprint);
-   - tail of the latest **`logs/NNN_exp/<run_id folder>/wave_<wave_id>/wave_<rig>_gpu<ids>-<timestamp>.log`** — tracebacks/errors ⇒ failed; stale heartbeat + silent log ⇒ first rule out a machine fault (below), then suspect a hang and say so.
-   Within the five-minute freshness cap, match poll intervals to expected run length (reference
-   `elapsed` values in EXPERIMENTS.md help here) — don't hammer ssh.
-3. **Reports back** snapshots with an observation timestamp and heartbeat age, per-run outcome
-   (`queued`/`running`/`done`/`failed`/hung/`interrupted→relaunched`), lane, structured progress,
-   timing, and queued order. Push terminal/fault/recovery transitions immediately; the
-   orchestrator requests or uses the newest complete snapshot for each scheduled report.
-
-**Single-writer rule: only the orchestrator edits EXPERIMENTS.md**, from the subagents' reports. Subagents never touch it.
+1. Write the supervisor manifest and run `sweep-supervisor` `register --wave <wave_id> --manifest
+   <file> --dry-run`, show it, then `--confirm` under the active engineering mode.
+2. The supervisor service does the rest on its next cycle: it repeats `rig-sync verify-revision`
+   and read-only `environment-sync verify` for a lane immediately before starting it (when the
+   lane is on the current local hub it runs the same commands without self-SSH), starts each lane
+   as its own named tmux session `<project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>` running the wave's
+   `lane.sh`, claims it on `rig-board`, feeds its buffer, and submits `leonardo` jobs under the
+   caps with the guarded `sbatch` in `references/cineca-slurm.md`. A claim that exits 3 means
+   another project holds the lane: nothing is killed, the lane stays out, and it is reported.
+3. Confirm the first table (`sweep-supervisor` `table --wave <wave_id> --cycle`) shows every pool
+   lane started or names why not, then follow `sweep-supervisor` § In a chat for the ten-minute
+   printout. A chat that stalls loses only the printout.
 
 Tell the user how to watch manually too: for a peer, `ssh <rig>` then
 `tmux attach -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>`; for the current local hub, run the
 `tmux attach` command directly; for `leonardo`, `ssh leonardo squeue --me`.
 
-## Machine faults — reboot/crash detection & auto-resume
+## Machine faults and recovery
 
-Each rig subagent is also its rig's watchdog. A machine-level failure (crash, reboot, power loss) kills every tmux session on it and freezes each running run's `.status.json` at `running` — those are **interrupted** runs (machine fault), never `failed` ones (code error). Handle it with this state machine:
+Owned by `sweep-supervisor`: its service detects an unreachable rig, a reboot, or a missing lane
+session and relaunches the lane **with the same wave id** (a relaunch is not a new dispatch: same
+paths, session names, tag, and commit) after the same revision and environment gates; completed
+runs skip, interrupted ones re-execute, and anything it cannot verify is left blocked for its
+agent. What stays true here:
 
-- **Unreachable** — ssh fails/times out. Use noninteractive bounded probes (`ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> true`). One failed poll may be a network blip: declare the rig *down* only after 2–3 consecutive failures. Then keep probing reachability every 1–2 minutes and report once to the orchestrator: "rig down since <time>". Never mark its runs failed while it's down.
-- **Back up — diagnose before acting** (one ssh round-trip; exact command in [references/templates.md](references/templates.md)): boot time (`uptime -s`) newer than the dispatch time ⇒ the rig rebooted (tmux never survives a reboot); a lane's session missing from `tmux ls` ⇒ that lane is gone even without a reboot; session alive and heartbeat advancing ⇒ it was only a network blip — resume normal polling, touch nothing.
-- **Recover, lane by lane** — first re-run `rig-sync deploy-revision` for the wave (it verifies the
-  existing worktree, or recreates a pruned one from the same tag, never touching another wave),
-  then `verify-revision` and `environment-sync verify` for the wave's original SHA, environment
-  key, fingerprint, and lane smoke; provision the key again only if it was pruned. If any step
-  fails, report recovery blocked and do not alter the worktree. Otherwise re-issue that lane's
-  dispatch one-liner **with the same wave id** (a relaunch is not a new dispatch: same paths,
-  session names, tag, and commit). Completed runs skip; interrupted ones re-execute.
-- **Recovery never re-decides GPU placement** — a relaunch re-executes the *same* wave script, so it inherits that wave's authorization (including its `# GPU auth:` header and guard) unchanged. Never widen a lane's GPU set during recovery, and never move a lane to a different card on `behemoth` to work around a busy GPU 0. If placement genuinely must change, that is a new wave, needing authorization under the active engineering mode and — for anything past gpu0 on `behemoth` — a fresh grant from the user.
-- **Never double-launch** — immediately before relaunching a lane, check `tmux has-session -t <lane session>` again; if it exists, just monitor it.
-- **Board across a fault** — `rig-board` `reconcile` marks the lane *interrupted* after a reboot and keeps it held, so no other project takes the card mid-recovery. After the relaunch, the orchestrator re-runs `claim` with the same session name (a re-claim, not a new hold). If recovery is blocked and the user abandons the lane, release it with that reason.
+- **Recovery may re-place a run, never widen the pool.** A relaunched or requeued run may be
+  claimed by any pool lane. A card outside the pool — above all a `behemoth` card without a grant
+  for this wave — is a pool change and needs the user.
 - **Unsupported layouts** — any noncanonical or mixed checkpoint/evaluation layout, or any wave
   whose recorded status/artifact paths disagree with the experiment's pinned `RUN_ID_PATH_LAYOUT`,
   blocks recovery. Never infer slash depth or substitute different paths. Route changed work to a
   new numbered sub-experiment; otherwise ordinary recovery continues only from the unchanged wave
   README/script, pin, tag, and revision.
-- **Slurm jobs** — a `leonardo` job never sees a rig reboot: `NODE_FAIL`, `PREEMPTED`, and
-  system cancellations are its machine faults, `TIMEOUT` is interrupted-by-walltime, `FAILED` and
-  `OUT_OF_MEMORY` are code failures, and an ssh failure to the login node is first a certificate
-  question. The mapping and the guarded resubmit command live in `references/cineca-slurm.md`.
-- **Autonomous, not silent** — relaunching already-approved work is not a new dispatch decision:
-  don't ask permission, recover and report — which runs were already done (skipped), which were
-  interrupted and relaunched, in which lanes, and whether each resumes or restarts.
+- **Statically assigned waves** (launched before the pull queue: `wave_<rig>_gpu<ids>` scripts, no
+  `.waves/_state/<wave_id>`) may be monitored and reconciled, never recovered or relaunched.
+- **Slurm jobs** — state mapping and the guarded resubmit live in `references/cineca-slurm.md`.
 
 ## Supersede — replacing in-flight placements of the same runs
 
@@ -268,10 +246,13 @@ every engineering mode (cancelling work is destructive). Show the exact list fir
 
 - **Slurm:** `scancel` exactly the overlapping jobs, by id (from `leonardo.jobs` and the
   `<old_wave_id>__<run_id_name>` job-name match); never by user, partition, or pattern.
-- **tmux lane:** a lane cannot drop one queued script, so it is stopped whole
-  (`tmux kill-session -t <lane session>`), and only when every non-terminal run in that lane is
-  in the new wave; propose adding the missing ones instead of stranding them. Release the lane on
-  `rig-board` with reason `superseded by wave <new_wave_id>`.
+- **Supervised lane:** take exactly the overlapping runs out of the old wave with
+  `sweep-supervisor` `steal --run <id> --reason "superseded by wave <new_wave_id>"` (it proves the
+  process is that wave's own before stopping it) followed by `queue drop`; the old lane keeps
+  working through the rest of its queue. A statically assigned wave cannot drop one script, so its
+  lane is stopped whole (`tmux kill-session -t <lane session>`), and only when every non-terminal
+  run in that lane is in the new wave; then release it on `rig-board` with reason
+  `superseded by wave <new_wave_id>`.
 - **Rows:** flip the old wave's rows for those runs to `superseded` with a note naming the new
   wave (`experiments-tracking`). A superseded row is terminal and never recovered.
 - **Partial state:** a superseded run may have left a checkpoint that the new wave would resume
@@ -290,45 +271,18 @@ skipped: when the final summary of a wave is posted, run
 output, and ask. On approval run the same command with `--confirm`. `prune` refuses active or
 dirty worktrees by itself; still list only waves whose rows are all terminal.
 
-## Ten-minute status and ETA updates to the user
+## Status and ETA updates
 
-Anchor `next_update` to the confirmed launch time and advance it in exact 600-second increments;
-collection or message latency must not drift later ticks. At every tick, even if nothing changed,
-the orchestrator reconciles EXPERIMENTS.md from the newest per-rig snapshots, runs `rig-board`
-`refresh` for each of its lanes (active run, progress, ETA and basis, runs done), and posts one
-compact aggregate update. A completion, failure, suspected hang, rig outage, or recovery is reported as
-soon as observed and does not reset `next_update`. When every run is terminal, `rig-board`
-`release` every lane of the wave, rebuild the run_id map once with
-`write_run_id_map(<evaluations experiment dir>, layout=RUN_ID_PATH_LAYOUT)` on each machine whose
-evaluations tree received the wave's runs (never per run; a collision it raises is a blocker in
-the summary), post the final summary immediately with the prune proposal
-(§ Pruning finished waves), and stop the schedule. A
-lane that stops early on a reserved exit (`86`/`87`/`88`) or is deliberately abandoned is
-released in the same turn with that reason.
-
-Immediately before every scheduled, urgent, and final message, obtain a timezone-bearing local
-timestamp (for example `date '+%Y-%m-%dT%H:%M:%S%:z'`) and open exactly with
-`Status written <timestamp> —`. Do not reuse a status-file timestamp as the message-written time.
-Include:
-
-- wave counts: `done`, `running`, `queued`, `failed`, plus the estimated wave completion;
-- one line per lane: active run, display progress, heartbeat age, estimated active-run
-  completion, queued count/next run, and estimated lane completion;
-- failures, stale telemetry, unreachable rigs, interruptions, and recovery actions; for
-  `leonardo` also each job's id, Slurm state and pending reason, and remaining walltime;
-- the basis for each estimate (`structured progress`, `exact-run history`, or
-  `experiment median`), or `ETA unavailable: <reason>`.
-
-All ETAs are estimates. Use `experiments-tracking` for the calculation hierarchy. A schema-v2
-heartbeat older than three minutes is stale: diagnose rig/session/process health and mark its ETA
-unavailable until liveness is resolved. Non-schema-v2 status makes the project unsupported.
+The ten-minute table, the urgent reports, the final summary, board refresh and release, and the
+once-per-wave `write_run_id_map(<evaluations experiment dir>, layout=RUN_ID_PATH_LAYOUT)` rebuild
+(never per run) belong to `sweep-supervisor`. When its final table is posted, propose the prune
+(§ Pruning finished waves).
 
 ## Tracking side-effects (same turn)
 
-- Append `todo` rows to EXPERIMENTS.md for every generated run — **one row per (run, wave)**, carrying its wave id, rig and gpu. A run re-launched in a later wave gets a **new row**, never an in-place update.
-- Board: `claim` per confirmed lane session, `refresh` per tick, `release` per terminal lane (`rig-board`); the board is fleet state and never replaces any signal below.
-- Flip launched rows to `inpr` and fill `started`; on completion reports flip to `done`/`failed` and fill `ended`/`elapsed`; a supersede flips the replaced rows to `superseded`; keep `progress`/`eta` fresh while runs are in flight (format + single-writer rules: `experiments-tracking` skill).
+- Append `todo` rows to EXPERIMENTS.md for every generated run — **one row per (run, wave)**, carrying its wave id, with `rig` and `gpu` blank until a lane claims it. A run re-launched in a later wave gets a **new row**, never an in-place update.
+- After `register`, the supervisor's agent is the single writer of those rows for the life of the wave (format and rules: `experiments-tracking`); the board is written by the supervisor service.
 - Put the exact launch entry in the assignment record (`research-journal` skill). Apply its
   mode-aware authorization before the dispatch commit; never bypass the journal hook. The entry names
-  the wave, rationale, environment fingerprint, rig/GPU assignment, and any one-off behemoth
-  authorization.
+  the wave, rationale, environment fingerprint, the pool and offload rigs, the standing
+  authorization, and any one-off behemoth authorization.

@@ -1,6 +1,6 @@
 ---
 name: rig-sync
-description: Deploy exact tested Git revisions as per-wave worktrees and synchronize selected artifacts across configured Research 2.0 GPU rigs. Use when preparing an approved empty rig clone, verifying GitHub and rig identity, materializing an authorized wave commit as its own worktree, checking cross-rig revision consistency, listing which waves are active on a machine, proposing or running an approved prune of finished wave worktrees and unused wave environments, or transferring selected artifacts. Pair with environment-sync; do not use for legacy projects, environment provisioning, continuous mirroring, destructive Git recovery, deletion of anything but approved prune targets, or writes outside an approved engineering envelope.
+description: Deploy exact tested Git revisions as per-wave worktrees and move artifacts across configured Research 2.0 GPU rigs, including the continuous hub-ward offload that keeps a disk-constrained rig usable. Use when preparing an approved empty rig clone, verifying GitHub and rig identity, materializing an authorized wave commit as its own worktree, checking cross-rig revision consistency, listing which waves are active on a machine, proposing or running an approved prune of finished wave worktrees and unused wave environments, transferring selected artifacts, offloading a supervised wave's checkpoints from a rig short on disk, restoring a run's checkpoints to the rig that resumes it, or copying a subtree of a declared shared cache to a rig. Pair with environment-sync; do not use for legacy projects, environment provisioning, destructive Git recovery, deletion of anything but approved prune targets and checksum-verified offloaded checkpoints, or writes outside an approved engineering envelope.
 ---
 
 # rig-sync
@@ -36,8 +36,11 @@ by the approved envelope. New destinations and any destructive recovery remain p
   mode for the named source, destination, and selector. The engineering envelope may authorize its commit, tag,
   push, and worktree deployment to the named rigs.
 - Never force-push, reset, stash, clean, merge, add `--delete`, delete remote files, or infer an
-  SSH alias/path. The single deletion this skill performs is `prune` (below), and only with
-  explicit user approval of its dry run in every engineering mode.
+  SSH alias/path. This skill performs exactly two deletions. `prune` (below) runs only with
+  explicit user approval of its dry run in every engineering mode. `offload` (below) removes a
+  rig's copy of a checkpoint only under its fixed predicate, and is authorized **per wave** at the
+  `sweep-dispatch` gate rather than per pass — the data still exists, checksum-verified, on the hub.
+  Never delete a file by hand because `offload` kept it: the clause it names is the reason.
 - Treat `rig-4090` as local when its configured name or hostname matches the current host; do not
   require self-SSH. Use bounded, noninteractive SSH for peers.
 - Treat a configured registry `hostname` as an identity assertion: `doctor` must compare it with
@@ -92,6 +95,10 @@ python3 "$RIGSYNC_SCRIPT" verify-revision --wave 20260802-120000 \
 python3 "$RIGSYNC_SCRIPT" activity --machines rig-4090,leonardo
 python3 "$RIGSYNC_SCRIPT" prune --machines rig-4090,leonardo --waves 20260802-120000 --dry-run
 python3 "$RIGSYNC_SCRIPT" prune --machines rig-4090,leonardo --waves 20260802-120000 --confirm
+python3 "$RIGSYNC_SCRIPT" offload --machine behemoth --wave 20260802-120000 --dry-run
+python3 "$RIGSYNC_SCRIPT" offload --machine behemoth --wave 20260802-120000 --confirm
+python3 "$RIGSYNC_SCRIPT" restore --machine rig-3090-ti --wave 20260802-120000 --run <run_id_name> --confirm
+python3 "$RIGSYNC_SCRIPT" sync-cache --var HF_DATASETS_CACHE --subpath <relative subtree> --to rig-3090-ti --dry-run
 python3 "$RIGSYNC_SCRIPT" status --group evaluations
 python3 "$RIGSYNC_SCRIPT" pull evaluations/000_exp --from rig-3090-ti --dry-run
 python3 "$RIGSYNC_SCRIPT" pull evaluations/000_exp --from rig-3090-ti --confirm
@@ -119,6 +126,25 @@ It is proposed by `sweep-dispatch` when a wave ends and by `experiments-tracking
 and runs with `--confirm` only after the user approves the dry run. A pruned wave stays
 recoverable: `deploy-revision` recreates its worktree from the tag. `push-source` never establishes Research 2.0 launch consistency and must not
 be used by dispatch.
+
+`offload` is one pass of the continuous hub-ward copy that lets a rig with little disk keep
+working; low disk is never a reason to leave a rig out of a wave. `sweep-supervisor` runs it every
+cycle for the rigs a wave declared, and it needs that wave's queue on the hub (it refuses any
+other wave). Per pass it lists the wave's checkpoint and evaluation directories on the rig, copies
+to the same relative paths on the hub every file written more than two minutes ago that the hub
+lacks, then frees a rig file **only when every clause holds**: it is under the run's recorded
+checkpoint directory inside `[artifacts.checkpoints]`; the run's status carries this wave id (this
+wave produced it); it was written more than two minutes ago; it is not the newest checkpoint of a
+run that is not `done` (a resume needs it); and the hub copy's SHA-256 equals the rig's. It writes
+`<file>.offloaded.json` (path, size, checksum, hub path, time, wave) atomically **before**
+unlinking, so an interrupted pass leaves the file or the receipt, never neither. Evaluations are
+copied and always kept: the run's self-guard and reconciliation read them, and both accept a
+receipt in place of an offloaded final artifact. It refuses to run when the hub is under its own
+storage floor. `restore` is the way back: hub → rig copy of one run's checkpoints for a run that
+will resume on a rig that never had them. `sync-cache` copies one relative subtree of a **declared**
+shared cache (`[machines.<rig>.caches]`) hub → rig, never deletes, and serializes on a lock in the
+rig's cache so two lanes never fetch the same data at once; it refuses undeclared variables and
+paths with `..`.
 
 Artifact selectors are `<group>` or `<group>/<relative/path>`, where `<group>` is declared under
 `[artifacts]` in `sync.toml`. `pull` means peer → current rig; `push` means current rig → peer.

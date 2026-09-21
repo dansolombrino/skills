@@ -130,11 +130,31 @@ Resolve every item with the applicable engineering-mode owner; do not leave impl
    state it in the decision: `checkpoint size × checkpoints retained × runs in the sweep`. Full
    training state (item 2) is typically several times the model size, and "keep every step" is a
    retention policy — usually an unexamined one. Multiply it out against the rig's declared
-   headroom (`rig-sync` → `references/configuration.md`): a sweep whose total exceeds the
-   allowance cannot be placed anywhere, and no dispatch-time guard can rescue it. If the total is
+   headroom (`rig-sync` → `references/configuration.md`) **and the hub's**: a rig short on disk is
+   still used, because `rig-sync offload` keeps moving a wave's checkpoints to the hub, but the
+   hub must then hold the whole sweep, and a run's own retained footprint must still fit the rig
+   while it runs. Record the **per-run retained footprint in KiB**; each wave script adds it to
+   its lane's storage floor. If the total is
    uncomfortable, the lever is here — keep last-N plus the final, checkpoint on a coarser cadence,
    or store weights-only for the intermediates and full state only where resume must work.
-5. **Expected final artifact** — which file (final checkpoint and/or final eval output) proves the run truly finished? This is the **golden completion signal** monitors check first (`conventions.md`); record the choice in the experiment's EXPERIMENTS.md section header.
+4a. **Write every checkpoint atomically**: to a temporary name in the same directory, then
+   `os.replace` onto the final name, the way `code/common/status.py` writes status. A checkpoint
+   that is copied, offloaded, or resumed from while half-written is indistinguishable from a real
+   one until it is loaded. Temporary names end in `.tmp` so offload never touches them.
+5. **Expected final artifact** — which file (final checkpoint and/or final eval output) proves the run truly finished? Prefer a small evaluation output: evaluations always stay on the rig that produced them, while an offloaded final checkpoint is represented there by its receipt. This is the **golden completion signal** monitors check first (`conventions.md`); record the choice in the experiment's EXPERIMENTS.md section header.
+
+## 4a. Placement needs (must resolve)
+
+A wave is one queue that any lane of its pool may serve, so record in the experiment's
+EXPERIMENTS.md section header what decides where a run **can** go, never where it should:
+
+- **`min_vram_mib`** — the smallest card a run fits, per config shape when the grid varies model
+  or batch size. Measure it in the smoke or state it as an estimate; absent means "fits anywhere",
+  and the supervisor tightens it after an out-of-memory failure.
+- **`data needs`** — one tag per dataset or pretrained weight a run reads
+  (`hf:<repo>`, `torch:<name>`, `file:<cache-relative path>`) with the declared cache variable it
+  lives under and its size. A run is only handed to a rig where its tags are marked ready;
+  fetching or copying them is the supervisor agent's job, not the user's.
 
 ## 4b. Run signaling & timing (mandatory, no user decision needed)
 

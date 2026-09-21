@@ -600,7 +600,9 @@ class BoardTests(unittest.TestCase):
         ]
         output = "\n".join(lines) + "\n__SACCT__\n" + "\n".join(sacct) + "\n__SALDO__\n" + "\n".join(saldo) + "\n__SQUEUE_OK__\n"
         probe = probe_output([], [(0, 0, 0)], "2026-09-01 08:00:00")
-        code, out = self.reconcile_with({"rig-4090": probe, "behemoth": probe}, {"leonardo": (output, "")})
+        # the saldo fixture carries real dates: freeze the clock so "expiring" does not rot into "expired"
+        with mock.patch.object(board, "now", return_value=datetime.fromisoformat("2026-09-10T10:00:00+02:00")):
+            code, out = self.reconcile_with({"rig-4090": probe, "behemoth": probe}, {"leonardo": (output, "")})
         self.assertIn("leonardo: 7 jobs appeared (PENDING) [203…301]", out)
         self.assertIn("leonardo: job 200 appeared (RUNNING)", out)
         cluster = board.read_json(self.config.rig_path("leonardo"))
@@ -791,6 +793,18 @@ class BoardTests(unittest.TestCase):
         missing = Fake("/nope")
         missing.do_GET()
         self.assertEqual(missing.code, 404)
+
+    def test_status_shows_supervised_waves_and_how_recently_they_were_driven(self) -> None:
+        project = Path(self.tmp.name) / "proj"
+        state = project / ".waves" / "_state" / "20260921-093000"
+        board.write_json(self.config.root / "supervisor" / "proj__20260921-093000.json", {"project_root": str(project), "wave_id": "20260921-093000"})
+        board.write_json(state / "runtime.json", {"cycled_at": board.iso(board.now()), "agent_ticked_at": None})
+        board.write_json(state / "snapshot.json", {"project": "proj", "counts": {"done": 3}, "total": 9, "questions": [{"id": "q1"}]})
+        code, out, _ = self.run_cli("status")
+        self.assertEqual(code, 0)
+        self.assertRegex(out, r"supervised: proj wave 20260921-093000 · done 3/9 · supervisor cycle \S+ ago · agent tick \S+ ago · 1 open question")
+        data = json.loads(self.run_cli("status", "--json")[1])
+        self.assertEqual(data["supervised_waves"][0]["wave_id"], "20260921-093000")
 
 
 if __name__ == "__main__":

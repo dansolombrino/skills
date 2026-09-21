@@ -278,13 +278,30 @@ above and nothing else.
   substitutes it into the dispatch, monitor, and recovery commands instead of spelling a path
   a second time.
 - `storage-env --machine <rig>` — prints `QUOTA_FS`, `MIN_FREE_GB`, and `MIN_FREE_KIB` of the
-  project's storage root for a wave script's pre-flight guard. With several roots it resolves
+  project's storage root for a wave script's pre-flight guard; `sweep-supervisor` exports them to
+  each lane it starts, so a wave script never carries a rig's numbers. With several roots it resolves
   `repo_path` on the rig to pick that root, and fails when none contains it. A wave may raise the floor for its own checkpoint footprint; it must
   not sink below the registry's.
 - `push-env --machine <rig> --dry-run|--confirm` — copies the hub's `.env` to a peer. `.env` is
   ignored by Git, so a freshly `prepare`d peer has none; nothing else puts one there. It is a
   protected write that **carries secrets**, it refuses a `.env` that assigns machine-level
   variables, and it will not overwrite a peer's existing file without `--overwrite`.
+
+## Offload, restore, and cache copies
+
+`[artifacts.checkpoints]` is more than a transfer selector: it is the **only tree `offload` may
+delete from**. A project without that group cannot offload, and a run whose recorded checkpoint
+directory lies outside it is copied but never freed. `offload` and `restore` read the wave's run
+paths from the supervisor queue on the hub (`.waves/_state/<wave_id>/queue.json`, written by
+`sweep-supervisor register`), never from a directory listing, so they cannot reach into another
+wave's or another project's files. They copy to and from the **same relative path** on the hub;
+the hub's own storage root and floor (`doctor`'s storage check) gate every pass.
+
+`sync-cache --var <NAME> --subpath <relative>` moves data between the hub's and a rig's value of
+one variable from `[machines.<rig>.caches]`. Both machines must declare the variable; an
+undeclared cache is never guessed from the other side. A shared cache on a machine such as
+`behemoth` is used by other people: this command only adds files, and nothing in this skill ever
+removes one.
 
 ## Environment overrides
 

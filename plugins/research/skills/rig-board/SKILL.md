@@ -34,11 +34,11 @@ is never a lane: Slurm is its own coordination center and the cluster does not r
   of the same project can hold disjoint lanes on one rig at once; the board still refuses any
   overlapping GPU set, whoever holds it. Lane panes and Slurm jobs keep the project root as their
   working directory, so project inference is unchanged.
-- **Single writer per lane.** Only the chat that launched a wave (the orchestrator of
-  `sweep-dispatch`, on the hub) claims, refreshes and releases its lanes. Monitoring subagents
-  never touch the board. `reconcile` may run from anywhere and only corrects provenance.
-- Board ETAs are copies of the orchestrator's own estimates (`experiments-tracking` hierarchy),
-  refreshed at its ten-minute tick. An adopted lane has no ETA until an orchestrator reports.
+- **Single writer per lane.** Only the wave's **orchestrator** — the `sweep-supervisor` service
+  on the hub — claims, refreshes and releases its lanes. No chat and no agent writes the board by
+  hand. `reconcile` may run from anywhere and only corrects provenance.
+- Board ETAs are copies of the supervisor's own estimates (`experiments-tracking` hierarchy) of
+  when the lane falls free, refreshed every ten minutes. An adopted lane has no ETA until an orchestrator reports.
 
 ## Commands
 
@@ -83,15 +83,22 @@ Set `RIGSYNC_REGISTRY` or pass `--registry` to use another registry.
    Ordering between projects is the user's decision: present the holder and ETA and let them
    choose to wait or move to another rig.
 
-## Dispatch hooks (owned by `sweep-dispatch`)
+## Supervisor hooks (owned by `sweep-supervisor`)
 
-- Gate 2 reads `status --reconcile` before proposing an assignment; held and foreign lanes are
-  not free capacity.
-- `claim` immediately after each lane's tmux session is confirmed running. A claim on a held
-  lane exits 3 and blocks the launch. A same-session claim is a re-claim (recovery relaunch).
-- `refresh` at every ten-minute tick, in the same turn EXPERIMENTS.md is reconciled.
-- `release` when the lane is terminal, in the final summary turn. A machine fault leaves the
-  lane on the board as interrupted until recovery re-claims it or the user releases it.
+- `sweep-dispatch` gate 2 reads `status --reconcile` before proposing a pool; held and foreign
+  lanes are not free capacity.
+- The supervisor service `claim`s a lane immediately after it starts that lane's tmux session. A
+  claim on a held lane exits 3: the lane stays out of the wave and the refusal is reported. A
+  same-session claim is a re-claim (recovery relaunch).
+- It `refresh`es every ten minutes and `release`s a lane as soon as the wave has nothing left for
+  it, or when the wave is terminal. A machine fault leaves the lane on the board as interrupted
+  until the supervisor re-claims it or the user releases it.
+- `status` lists every wave the supervisor service is driving (`supervised: …`, and
+  `supervised_waves` in `--json` and `/api/board`): done count, how long ago the service last
+  cycled it and its agent last ticked, and open questions. A held lane whose wave shows an old
+  cycle means the service is down — say so; never step in by writing the board.
+- Before it stops a run, the supervisor requires the lane to be held here by that wave's own
+  session; a lane the board gives to anyone else is never touched.
 
 ## Viewer
 

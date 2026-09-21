@@ -56,7 +56,8 @@ experiments keep `"nested"|"collapsed-v1"|"hashed-v1"`).
 
 Runs are launched in **waves** (one dispatch decision, id `YYYYMMDD-HHMMSS`) via
 `scripts/NNN_experiment_name/<flat run_id>/wave_<wave_id>/` — a `README.md` saying what the
-wave is, plus one self-contained `wave_<rig>_gpu<ids>.sh` per run. Each wave is smoke-tested,
+wave is, plus one self-contained, placement-free `wave.sh` per run; any GPU lane of the wave's
+pool may claim it. Each wave is smoke-tested,
 committed, and tagged `wave--<wave_id>`; every rig verifies that exact commit before execution.
 Every run also verifies and records the wave's approved environment fingerprint. `logs/` mirrors
 the scripts tree.
@@ -476,7 +477,7 @@ Install with: `chmod +x .githooks/pre-commit && git config core.hooksPath .githo
 Canonical pattern every launch script follows — the log path is the **mirror of the script's
 own path under `logs/`**; the working directory is the project root, and code runs from the
 wave's worktree `.waves/<wave_id>/` with the wave's keyed environment. Full self-contained template with the self-guard, the
-`CUDA_VISIBLE_DEVICES`/`WAVE_ID` exports and the `.status.json` failed-fallback:
+`LANE_RIG`/`LANE_GPUS` placement inputs, the `WAVE_ID` export and the `.status.json` failed-fallback:
 sweep-dispatch skill, `references/templates.md`.
 
 ```bash
@@ -490,7 +491,7 @@ LOGDIR="logs/NNN_experiment/<run_id folder>/wave_<wave_id>"
 mkdir -p "$LOGDIR"
 HYDRA_ARGS=(<tokens produced by hydra_override_arg; one per override>)
 .envs/<env_key>/bin/python "$WAVE_TREE/code/NNN_experiment/script.py" "${HYDRA_ARGS[@]}" 2>&1 \
-  | tee "$LOGDIR/wave_<rig>_gpu<ids>-$(date +%Y%m%d-%H%M%S).log"
+  | tee "$LOGDIR/wave_${LANE_RIG}_gpu${LANE_GPUS:-job}-$(date +%Y%m%d-%H%M%S).log"
 ```
 
 `pipefail` makes either the Python process or `tee` failure visible. The full wave template also
