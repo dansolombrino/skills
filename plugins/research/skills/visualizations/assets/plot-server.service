@@ -1,0 +1,12 @@
+[Unit]
+Description=plot-server: read-only HTTP view of every project's plots/
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 __PLOT_SERVER_PY__ serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

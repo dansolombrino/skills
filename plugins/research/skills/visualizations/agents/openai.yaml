@@ -1,4 +1,4 @@
 interface:
   display_name: "Research Visualizations"
   short_description: "Create approved interactive HTML plots from evaluations"
-  default_prompt: "Use $visualizations to preserve the full numbered producer hierarchy and propose exact RUN_ID-aware titles, their line arrangement, visible metric explanations, interaction affordances, and complete export paths for my approval before editing plotting code."
+  default_prompt: "Use $visualizations to preserve the full numbered producer hierarchy and propose exact RUN_ID-aware titles, their line arrangement, visible metric explanations, interaction affordances, and complete export paths for my approval before editing plotting code, then hand me each rendered plot as a plot-server URL."

@@ -1,6 +1,6 @@
 ---
 name: visualizations
-description: Create or update Research 2.0 plots as self-contained interactive HTML from provenance-valid experiment evaluation outputs, keep run_id selection inside the file instead of the export path, preserve each single producer's complete numbered hierarchy, run plotting directly on rig-4090 without orchestration or wave machinery, and require user approval of exact titles, title line arrangement, metric explanations, interaction affordances, and export paths before every plotting-code edit. Use when the user asks to plot, visualize, chart, make figures from results, or add or modify scripts under visualizations/; do not use to recompute missing evaluation data.
+description: Create or update Research 2.0 plots as self-contained interactive HTML from provenance-valid experiment evaluation outputs, keep run_id selection inside the file instead of the export path, preserve each single producer's complete numbered hierarchy, run plotting directly on rig-4090 without orchestration or wave machinery, and require user approval of exact titles, title line arrangement, metric explanations, interaction affordances, and export paths before every plotting-code edit. Use when the user asks to plot, visualize, chart, make figures from results, add or modify scripts under visualizations/, or open, view, or serve rendered plots through the read-only plot server; do not use to recompute missing evaluation data.
 ---
 
 # visualizations
@@ -150,6 +150,12 @@ network, no server, and no sibling files:
   the approved strings are present in the HTML source, and that the page and plot area
   are white. Do not silently repair wording, placement,
   or title arrangement; propose any correction and reopen the approval gate before editing.
+- **Hand the user each rendered file as a URL.** Run this skill's
+  `scripts/plot_server.py url <file>` on the rendering machine for every leaf written. When the
+  host can open a browser tab inside the user's IDE for the project's workspace, open the printed
+  `local:` URL there; otherwise print the `local:` and `public:` URLs. Never start an ad-hoc server,
+  copy the file elsewhere, or print the access token. If the file is not servable or the server is
+  not answering, say so and point to `references/plot-server.md`; the file path stays the fallback.
 - **No fixed plot checklist**: manual mode asks what the user wants; auto mode chooses the smallest
   visualization that answers the approved plot specification.
 - Treat every plotting render as a direct, non-orchestrated fast path. Run its argparse command in
