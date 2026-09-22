@@ -8,24 +8,29 @@ answers 404. Configuration is the [plots] table of the rigsync registry; see
 references/plot-server.md.
 
 Subcommands:
-  serve   run the server (the systemd user unit runs this); / is the plot browser page
-  url     print the URL of one plot file and whether the server answers
-  list    list the discovered projects and their HTML plots
-  token   print a fresh access token
+  serve          run the server (the service runs this); / is the plot browser page
+  url            print the URL of one plot file and whether the server serves it
+  list           list the discovered projects and their HTML plots
+  token          print a fresh access token
+  sync           (root, sandboxed install) publish each project's plots/ into the sandbox
+  system-config  (root, sandboxed install) write the system config from a user's [plots] table
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hmac
 import html
 import ipaddress
 import json
 import mimetypes
+import re
 import os
 import secrets
 import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -42,6 +47,11 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 DEFAULT_REGISTRY = "~/.config/rigsync/machines.toml"
+SYSTEM_CONFIG = "/etc/plot-server/plot-server.toml"
+SYSTEM_MANIFEST = "/etc/plot-server/projects.txt"
+SYSTEM_DROPIN = "/etc/systemd/system/plot-server.service.d/plots.conf"
+# Paths the sync job will write into a unit file: no spaces, quotes, colons or % specifiers.
+UNIT_SAFE_PATH = re.compile(r"^/[A-Za-z0-9_./=+,@-]+$")
 DEFAULT_PORT = 40975
 DEFAULT_BIND = "127.0.0.1"
 DEFAULT_DEPTH = 4
@@ -67,6 +77,7 @@ class PlotsConfig:
     token: str | None
     depth: int
     public_url: str | None
+    manifest: Path | None = None
 
 
 def load_config(registry_path: Path) -> PlotsConfig:
@@ -104,7 +115,36 @@ def load_config(registry_path: Path) -> PlotsConfig:
     public_url = table.get("public_url")
     if public_url is not None and (not isinstance(public_url, str) or not public_url.startswith(("http://", "https://"))):
         raise PlotServerError(f"{registry_path}: plots.public_url must start with http:// or https://")
-    return PlotsConfig(tuple(roots), port, bind, token, depth, public_url.rstrip("/") if public_url else None)
+    manifest = table.get("manifest")
+    if manifest is not None and (not isinstance(manifest, str) or not Path(manifest).is_absolute()):
+        raise PlotServerError(f"{registry_path}: plots.manifest must be an absolute path")
+    return PlotsConfig(
+        tuple(roots), port, bind, token, depth, public_url.rstrip("/") if public_url else None,
+        Path(manifest) if manifest else None,
+    )
+
+
+def read_manifest(config: PlotsConfig) -> set[Path]:
+    """Projects the sync job published into the sandbox (the sandbox hides .git, so no discovery)."""
+    assert config.manifest is not None
+    try:
+        lines = config.manifest.read_text().splitlines()
+    except OSError:
+        return set()
+    projects = set()
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith("#"):
+            path = Path(os.path.normpath(line))
+            if path.is_absolute() and any(path.is_relative_to(r) for r in config.roots):
+                projects.add(path)
+    return projects
+
+
+def owns_plots(config: PlotsConfig, project: Path) -> bool:
+    if config.manifest is not None:
+        return project in read_manifest(config) and (project / PLOTS_DIR).is_dir()
+    return is_project(project)
 
 
 def is_loopback(address: str) -> bool:
@@ -141,7 +181,7 @@ def resolve_plot(config: PlotsConfig, url_path: str) -> Path | None:
     for ancestor in lexical.parents:
         if ancestor == root or not ancestor.is_relative_to(root):
             return None
-        if ancestor.name == PLOTS_DIR and is_project(ancestor.parent):
+        if ancestor.name == PLOTS_DIR and owns_plots(config, ancestor.parent):
             break
     else:
         return None
@@ -159,6 +199,8 @@ def resolve_plot(config: PlotsConfig, url_path: str) -> Path | None:
 
 
 def discover_projects(config: PlotsConfig) -> list[Path]:
+    if config.manifest is not None:
+        return sorted(p for p in read_manifest(config) if (p / PLOTS_DIR).is_dir())
     projects: list[Path] = []
     for root in config.roots:
         if not root.is_dir():
@@ -314,15 +356,25 @@ def presented_token(handler: BaseHTTPRequestHandler, query: str) -> tuple[str | 
     return None, False
 
 
-def make_handler(config: PlotsConfig, catalog: Catalog | None = None):
+def make_handler(config: PlotsConfig, catalog: Catalog | None = None, access_log=None):
+    """access_log, when given, receives one line per request (the service sends it to the journal)."""
     catalog = catalog or Catalog(config)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "plot-server"
         sys_version = ""
+        auth = "-"
 
-        def log_message(self, *args: object) -> None:  # quiet
+        def log_message(self, *args: object) -> None:  # errors are reported through log_request
             pass
+
+        def log_request(self, code: object = "-", size: object = "-") -> None:
+            if access_log is None:
+                return
+            # Never log the query string: it can carry the token.
+            path = urlparse(self.path).path if isinstance(self.path, str) else "-"
+            status = getattr(code, "value", code)
+            access_log(f"{self.client_address[0]} {self.command} {path} {status} auth={self.auth}")
 
         def do_HEAD(self) -> None:  # noqa: N802
             self._respond(head=True)
@@ -336,13 +388,16 @@ def make_handler(config: PlotsConfig, catalog: Catalog | None = None):
                 self._send(200, "text/plain; charset=utf-8", b"ok\n", head=head)
                 return
             set_cookie = None
+            self.auth = "loopback" if is_loopback(self.client_address[0]) else ("open" if config.token is None else "-")
             # Loopback clients (a shell on this machine, or an SSH tunnel ending here) are already
             # authenticated by the machine; anyone arriving over the network needs the token.
             if config.token is not None and not is_loopback(self.client_address[0]):
                 token, from_query = presented_token(self, url.query)
                 if token is None or not hmac.compare_digest(token.encode(), config.token.encode()):
+                    self.auth = "missing" if token is None else "REJECTED"
                     self._send(401, "text/plain; charset=utf-8", DENIED, head=head)
                     return
+                self.auth = "token"
                 if from_query:
                     set_cookie = f"{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000"
             if url.path in ("/", "/index.html"):
@@ -463,7 +518,7 @@ def serve(config: PlotsConfig, args: argparse.Namespace) -> int:
     require_safe_exposure(config, bind)
     family = socket.AF_INET6 if ":" in bind else socket.AF_INET
     server_class = type("PlotHTTPServer", (ThreadingHTTPServer,), {"address_family": family, "daemon_threads": True})
-    server = server_class((bind, port), make_handler(config))
+    server = server_class((bind, port), make_handler(config, access_log=lambda line: print(line, flush=True)))
     access = "token required off this machine" if config.token else "loopback only"
     print(f"plot-server on http://{bind}:{port}/ ({access}); roots: {', '.join(map(str, config.roots))}", flush=True)
     try:
@@ -503,7 +558,103 @@ def cmd_url(config: PlotsConfig, args: argparse.Namespace) -> int:
     if not server_answers(config):
         print(f"server: not answering on {local_base(config)}; see references/plot-server.md", file=sys.stderr)
         return 3
+    try:
+        request = urllib.request.Request(f"{local_base(config)}{route}", method="HEAD")
+        with urllib.request.urlopen(request, timeout=5) as response:
+            served = response.status == 200
+    except (urllib.error.URLError, OSError):
+        served = False
+    if not served:
+        print(
+            "server: up, but not serving this file yet; a sandboxed server sees a new project once "
+            "its sync job has run (every 2 minutes); see references/plot-server.md",
+            file=sys.stderr,
+        )
+        return 4
     print("server: up")
+    return 0
+
+
+def write_if_changed(path: Path, text: str, mode: int) -> bool:
+    try:
+        if path.read_text() == text:
+            return False
+    except OSError:
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    tmp.chmod(mode)
+    tmp.replace(path)
+    return True
+
+
+def cmd_sync(config: PlotsConfig, args: argparse.Namespace) -> int:
+    """Publish each project's plots/ into the sandboxed service as a read-only bind mount.
+
+    Runs as root from a timer. The service sees nothing of /mnt but these mounts, so this is
+    the one place that decides what the server can read."""
+    if config.manifest is None:
+        raise PlotServerError("sync needs plots.manifest (the sandboxed install sets it)")
+    real_roots = [r.resolve() for r in config.roots if r.is_dir()]
+    binds, projects = [], []
+    for project in discover_projects(dataclasses.replace(config, manifest=None)):
+        plots = project / PLOTS_DIR
+        try:
+            real = plots.resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if not any(real.is_relative_to(r) for r in real_roots):
+            print(f"skip {project}: plots/ resolves outside every root ({real})", file=sys.stderr)
+            continue
+        if not (UNIT_SAFE_PATH.match(plots.as_posix()) and UNIT_SAFE_PATH.match(real.as_posix())):
+            print(f"skip {project}: path has characters a unit file cannot carry safely", file=sys.stderr)
+            continue
+        projects.append(project.as_posix())
+        binds.append(real.as_posix() if real == plots else f"{real.as_posix()}:{plots.as_posix()}")
+    dropin = (
+        "# Generated by plot_server.py sync; do not edit. Each line exposes one project's plots/\n"
+        "# to the sandboxed plot-server, read-only.\n[Service]\n"
+        + "".join(f"BindReadOnlyPaths=-{b}\n" for b in binds)
+    )
+    manifest = "# Generated by plot_server.py sync; do not edit.\n" + "".join(f"{p}\n" for p in projects)
+    changed = write_if_changed(Path(args.dropin), dropin, 0o644)
+    changed = write_if_changed(config.manifest, manifest, 0o644) or changed
+    print(f"{len(projects)} project(s) published; {'changed' if changed else 'unchanged'}")
+    if changed and not args.no_reload:
+        subprocess.run(["systemctl", "daemon-reload"], check=True)
+        subprocess.run(["systemctl", "try-restart", "plot-server.service"], check=True)
+    return 0
+
+
+def toml_str(value: str) -> str:
+    return json.dumps(value)  # a JSON string is a valid TOML basic string
+
+
+def cmd_system_config(config: PlotsConfig, args: argparse.Namespace) -> int:
+    """Write the sandboxed service's config from a user's [plots] table, keeping or rotating the token."""
+    out = Path(args.out)
+    token = None
+    if not args.new_token and out.exists():
+        token = load_config(out).token
+    if not args.new_token and token is None:
+        token = config.token
+    if token is None or args.new_token:
+        token = secrets.token_urlsafe(32)
+    lines = [
+        "# plot-server system config, written by plot_server.py system-config. Readable by root and plotserver only.",
+        "[plots]",
+        "roots = [" + ", ".join(toml_str(r.as_posix()) for r in config.roots) + "]",
+        f"port = {config.port}",
+        f"bind = {toml_str(config.bind)}",
+        f"depth = {config.depth}",
+        f"token = {toml_str(token)}",
+        f"manifest = {toml_str(args.manifest)}",
+    ]
+    if config.public_url:
+        lines.append(f"public_url = {toml_str(config.public_url)}")
+    write_if_changed(out, "\n".join(lines) + "\n", 0o640)
+    print(f"wrote {out}{' with a new token' if args.new_token else ''}")
     return 0
 
 
@@ -527,6 +678,13 @@ def main(argv: list[str] | None = None) -> int:
     url_parser.add_argument("file")
     sub.add_parser("list", help="list discovered projects and their HTML plots")
     sub.add_parser("token", help="print a fresh access token")
+    sync_parser = sub.add_parser("sync", help="(root) publish each project's plots/ into the sandboxed service")
+    sync_parser.add_argument("--dropin", default=SYSTEM_DROPIN)
+    sync_parser.add_argument("--no-reload", action="store_true", help="write files only; do not reload systemd")
+    cfg_parser = sub.add_parser("system-config", help="(root) write the sandboxed service's config")
+    cfg_parser.add_argument("--out", default=SYSTEM_CONFIG)
+    cfg_parser.add_argument("--manifest", default=SYSTEM_MANIFEST)
+    cfg_parser.add_argument("--new-token", action="store_true", help="rotate the token")
     args = parser.parse_args(argv)
     if args.command == "token":
         print(secrets.token_urlsafe(32))
@@ -537,6 +695,10 @@ def main(argv: list[str] | None = None) -> int:
             return serve(config, args)
         if args.command == "url":
             return cmd_url(config, args)
+        if args.command == "sync":
+            return cmd_sync(config, args)
+        if args.command == "system-config":
+            return cmd_system_config(config, args)
         return cmd_list(config)
     except PlotServerError as exc:
         print(f"plot-server: {exc}", file=sys.stderr)

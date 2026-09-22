@@ -1,0 +1,57 @@
+# plot-server as a sandboxed system service. Installed by scripts/install_sandboxed.sh; see
+# references/plot-server.md. The server runs as the dedicated plotserver account and sees a
+# read-only filesystem in which /home and /mnt are empty; the sync job bind-mounts each project's
+# plots/ back in, read-only (plot-server.service.d/plots.conf). Nothing else of your data exists
+# from inside, whatever the server's own code does.
+[Unit]
+Description=plot-server: read-only HTTP view of every project's plots/ (sandboxed)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=plotserver
+Group=plotserver
+ExecStart=/usr/bin/python3 /usr/local/lib/plot-server/scripts/plot_server.py --registry /etc/plot-server/plot-server.toml serve
+Restart=on-failure
+RestartSec=5
+
+# Filesystem: read-only everywhere; homes and data volumes hidden except the published plots/.
+ProtectSystem=strict
+ProtectHome=tmpfs
+TemporaryFileSystem=/mnt:ro /media:ro /srv:ro /opt:ro
+InaccessiblePaths=-/root -/var/lib -/var/log -/var/backups -/var/mail -/var/spool -/var/cache -/boot -/snap
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+UMask=0077
+
+# Processes, kernel and privileges.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Resources: a flood of requests cannot starve the rig.
+MemoryMax=1G
+TasksMax=128
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

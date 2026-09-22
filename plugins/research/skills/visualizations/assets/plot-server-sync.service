@@ -1,0 +1,9 @@
+# Publishes each project's plots/ into the sandboxed plot-server (see plot-server.sandboxed.service).
+[Unit]
+Description=plot-server: publish new projects' plots/ into the sandbox
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/plot-server/scripts/plot_server.py --registry /etc/plot-server/plot-server.toml sync
+NoNewPrivileges=yes
+PrivateTmp=yes

@@ -133,11 +133,99 @@ class PlotServerTest(Fixture):
         self.assertGreaterEqual(len(out.strip()), 32)
 
 
+class SandboxedInstallTest(Fixture):
+    """sync (root, from a timer) and system-config, plus the manifest mode the sandboxed server runs in."""
+
+    def sync(self, config) -> tuple[int, str, str, Path]:
+        dropin = Path(self.tmp.name) / "plots.conf"
+        out, err = io.StringIO(), io.StringIO()
+        args = plot_server.argparse.Namespace(dropin=str(dropin), no_reload=True)
+        with redirect_stdout(out), redirect_stderr(err):
+            code = plot_server.cmd_sync(config, args)
+        return code, out.getvalue(), err.getvalue(), dropin
+
+    def manifest_config(self):
+        manifest = Path(self.tmp.name) / "projects.txt"
+        self.write_registry(f'manifest = "{manifest}"\n')
+        return self.config, manifest
+
+    def test_sync_publishes_plots_read_only_and_is_idempotent(self) -> None:
+        config, manifest = self.manifest_config()
+        code, out, _, dropin = self.sync(config)
+        self.assertEqual(code, 0)
+        self.assertIn("1 project(s) published; changed", out)
+        text = dropin.read_text()
+        self.assertIn(f"BindReadOnlyPaths=-{self.project / 'plots'}\n", text)
+        self.assertNotIn("BindPaths=", text)
+        self.assertEqual(manifest.read_text().splitlines()[-1], str(self.project))
+        self.assertIn("unchanged", self.sync(config)[1])
+
+    def test_sync_maps_a_symlinked_plots_and_refuses_escapes_and_unsafe_paths(self) -> None:
+        config, _ = self.manifest_config()
+        elsewhere = self.root / "volume_plots"
+        elsewhere.mkdir()
+        linked = self.root / "area" / "linked" / "linked"
+        (linked / ".git").mkdir(parents=True)
+        (linked / "plots").symlink_to(elsewhere)
+        escaping = self.root / "area" / "escape" / "escape"
+        (escaping / ".git").mkdir(parents=True)
+        (escaping / "plots").symlink_to(Path(self.tmp.name))  # outside every root
+        spaced = self.root / "area" / "has space" / "p"
+        (spaced / ".git").mkdir(parents=True)
+        (spaced / "plots").mkdir()
+        _, out, err, dropin = self.sync(config)
+        text = dropin.read_text()
+        self.assertIn(f"BindReadOnlyPaths=-{elsewhere}:{linked / 'plots'}\n", text)
+        self.assertNotIn(str(escaping), text)
+        self.assertIn("resolves outside every root", err)
+        self.assertNotIn("has space", text)
+        self.assertIn("cannot carry safely", err)
+        self.assertIn("2 project(s) published", out)
+
+    def test_manifest_mode_serves_only_published_projects(self) -> None:
+        config, manifest = self.manifest_config()
+        # Before sync nothing is published, even though the checkout is right there.
+        self.assertIsNone(plot_server.resolve_plot(config, self.plot.as_posix()))
+        self.assertEqual(plot_server.discover_projects(config), [])
+        self.sync(config)
+        self.assertEqual(plot_server.resolve_plot(config, self.plot.as_posix()), self.plot)
+        self.assertEqual(plot_server.discover_projects(config), [self.project])
+        # The sandbox hides .git: a published project needs no .git to be served.
+        (self.project / ".git").rmdir()
+        self.assertEqual(plot_server.resolve_plot(config, self.plot.as_posix()), self.plot)
+        # A manifest line outside every root is ignored.
+        manifest.write_text("/etc\n" + str(self.project) + "\n")
+        self.assertEqual(plot_server.discover_projects(config), [self.project])
+
+    def test_system_config_keeps_the_token_unless_rotated(self) -> None:
+        self.write_registry(f'bind = "0.0.0.0"\ntoken = "{TOKEN}"\npublic_url = "http://example.test:40975"\n')
+        out = Path(self.tmp.name) / "etc.toml"
+        args = plot_server.argparse.Namespace(out=str(out), manifest="/etc/plot-server/projects.txt", new_token=False)
+        with redirect_stdout(io.StringIO()):
+            plot_server.cmd_system_config(self.config, args)
+        first = plot_server.load_config(out)
+        self.assertEqual((first.token, first.bind, first.public_url), (TOKEN, "0.0.0.0", "http://example.test:40975"))
+        self.assertEqual(first.manifest, Path("/etc/plot-server/projects.txt"))
+        self.assertEqual(out.stat().st_mode & 0o777, 0o640)
+        args.new_token = True
+        with redirect_stdout(io.StringIO()):
+            plot_server.cmd_system_config(self.config, args)
+        rotated = plot_server.load_config(out).token
+        self.assertNotEqual(rotated, TOKEN)
+        args.new_token = False
+        with redirect_stdout(io.StringIO()):
+            plot_server.cmd_system_config(self.config, args)
+        self.assertEqual(plot_server.load_config(out).token, rotated)
+
+
 class LiveServerTest(Fixture):
     """Real HTTP round trips; the remote-client case is simulated by patching is_loopback."""
 
     def start(self) -> str:
-        server = plot_server.ThreadingHTTPServer(("127.0.0.1", 0), plot_server.make_handler(self.config))
+        self.log: list[str] = []
+        server = plot_server.ThreadingHTTPServer(
+            ("127.0.0.1", 0), plot_server.make_handler(self.config, access_log=self.log.append)
+        )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(server.server_close)
@@ -178,6 +266,11 @@ class LiveServerTest(Fixture):
             self.assertIn("HttpOnly", headers["Set-Cookie"])
             self.assertEqual(self.get(base + self.plot.as_posix(), {"Cookie": cookie})[0], 200)
             self.assertEqual(self.get(base + self.plot.as_posix(), {"Authorization": f"Bearer {TOKEN}"})[0], 200)
+        joined = "\n".join(self.log)
+        self.assertNotIn(TOKEN, joined)  # the query string never reaches the log
+        self.assertRegex(joined, r"127\.0\.0\.1 GET \S+/loss\.html 401 auth=missing")
+        self.assertRegex(joined, r"GET \S+/loss\.html 401 auth=REJECTED")
+        self.assertRegex(joined, r"GET / 200 auth=token")
 
     def test_browser_page_and_json_api(self) -> None:
         base = self.start()

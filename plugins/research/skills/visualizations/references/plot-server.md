@@ -69,7 +69,59 @@ The server refuses to start on a non-loopback `bind` without a `token`.
   opening the public URL on untrusted networks, and rotate it by replacing the registry value and
   restarting the service. Never publish the port without a token.
 
-## Install as a user service
+## Install sandboxed (recommended whenever the port is reachable from the network)
+
+The server's own path checks keep it inside `plots/`, but a user service runs as you and could
+read everything you can. Unprivileged sandboxing is unavailable on hosts that restrict user
+namespaces (Ubuntu 24.04 does), so the sandboxed install is a system service and needs `sudo` once:
+
+```bash
+sudo bash <skill>/scripts/install_sandboxed.sh --new-token   # --new-token rotates the token; omit to keep it
+```
+
+It reads your `[plots]` table, then:
+
+- creates the `plotserver` system account (no login, no home);
+- installs a root-owned copy of the server in `/usr/local/lib/plot-server/`;
+- writes `/etc/plot-server/plot-server.toml` (mode 0640, root:plotserver) with the token and
+  `manifest = "/etc/plot-server/projects.txt"`;
+- installs `plot-server.service` (from `assets/plot-server.sandboxed.service`) plus
+  `plot-server-sync.service` and `.timer`, replaces your user-level service, starts everything,
+  and prints the bookmark.
+
+What the sandbox enforces, whatever the server's code does:
+
+- **Only `plots/` exists.** `/home`, `/root` and `/mnt` are empty; `/media`, `/srv`, `/opt`, most of
+  `/var` and `/boot` are hidden. The root sync job bind-mounts each project's `plots/` back in,
+  read-only. Code, evaluations, checkpoints, `.git`, SSH keys and your registry are not reachable.
+- **Nothing is writable.** The whole filesystem is read-only to the service (`ProtectSystem=strict`
+  plus read-only binds); `/tmp` is private.
+- **No privilege.** It runs as `plotserver` with no capabilities, `NoNewPrivileges`, no setuid,
+  a system-call allow-list, no namespaces, and only IP and local sockets.
+- **Bounded resources.** 1 GB of memory, 128 tasks, two CPU cores.
+
+`plot-server-sync.timer` runs `plot_server.py sync` as root every 2 minutes: it discovers checkouts
+with `plots/` under the roots, refuses a `plots/` that resolves outside every root or whose path a
+unit file cannot carry safely (spaces, quotes, `:` or `%`), writes the bind list to
+`/etc/systemd/system/plot-server.service.d/plots.conf` and the project list to the manifest, and
+restarts the server only when the list changed. A new project's plots appear within 2 minutes;
+`sudo systemctl start plot-server-sync.service` publishes them at once.
+
+Re-run the install script after a release that changes `plot_server.py` or `plot-browser.html`:
+the service runs its root-owned copy, not the skill checkout. Useful commands:
+
+```bash
+journalctl -u plot-server -f                          # access log: client, method, path, status, auth
+journalctl -u plot-server | grep -E 'auth=(REJECTED|missing)'   # refused network requests
+sudo grep token /etc/plot-server/plot-server.toml     # the current token
+sudo systemctl stop plot-server                       # emergency stop
+systemd-analyze security plot-server                  # systemd's own exposure score
+```
+
+Each access-log line is `<client> <method> <path> <status> auth=<loopback|token|missing|REJECTED|open>`.
+The query string is never logged, so a `?token=` never lands in the journal.
+
+## Install as a user service (no sudo, no sandbox)
 
 `assets/plot-server.service` is a systemd user unit template. Point it at a **stable** copy of
 the script, such as this repository's checkout on the machine, and re-point it if that path moves:
@@ -95,5 +147,6 @@ python3 <skill>/scripts/plot_server.py token             # a fresh token
 python3 <skill>/scripts/plot_server.py serve             # run in the foreground (what the unit runs)
 ```
 
-`url` exits 2 when the file is not servable (outside every project's `plots/`) and 3 when the file
-is servable but the server is not answering. It still prints the URLs in that case.
+`url` exits 2 when the file is not servable (outside every project's `plots/`), 3 when the server
+is not answering, and 4 when the server answers but does not serve this file yet (a sandboxed
+server before its sync job has published the project). It prints the URLs in every case but 2.

@@ -154,8 +154,10 @@ network, no server, and no sibling files:
   `scripts/plot_server.py url <file>` on the rendering machine for every leaf written. When the
   host can open a browser tab inside the user's IDE for the project's workspace, open the printed
   `local:` URL there; otherwise print the `local:` and `public:` URLs. Never start an ad-hoc server,
-  copy the file elsewhere, or print the access token. If the file is not servable or the server is
-  not answering, say so and point to `references/plot-server.md`; the file path stays the fallback.
+  copy the file elsewhere, or print the access token. If the file is not servable, the server is
+  not answering, or it does not serve the file yet (a sandboxed server publishes a new project
+  within 2 minutes), say so and point to `references/plot-server.md`; the file path stays the
+  fallback.
 - **No fixed plot checklist**: manual mode asks what the user wants; auto mode chooses the smallest
   visualization that answers the approved plot specification.
 - Treat every plotting render as a direct, non-orchestrated fast path. Run its argparse command in
