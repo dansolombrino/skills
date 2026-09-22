@@ -32,6 +32,7 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
+import zlib
 from dataclasses import dataclass
 from datetime import datetime
 from email.utils import formatdate
@@ -48,6 +49,8 @@ PLOTS_DIR = "plots"
 PLOT_SUFFIXES = (".html", ".htm")
 DISCOVERY_TTL_S = 30.0
 COOKIE_NAME = "plot_server_token"
+GZIP_MIN_BYTES = 64 * 1024
+GZIP_TYPES = ("text/", "application/json", "application/javascript", "image/svg+xml")
 BROWSER_PATH = Path(__file__).resolve().parents[1] / "assets" / "plot-browser.html"
 DENIED = b"plot-server: access token required. Open any page once as ?token=<token>; a cookie then remembers it.\n"
 
@@ -395,7 +398,56 @@ def make_handler(config: PlotsConfig, catalog: Catalog | None = None):
                 return
             with handle:
                 stat = os.fstat(handle.fileno())
-                self._headers(200, ctype, stat.st_size, set_cookie, {"Last-Modified": formatdate(stat.st_mtime, usegmt=True)})
+                # Plot HTML is mostly inline JSON and compresses ~10x; gzip it on the way out.
+                gzip = (
+                    stat.st_size >= GZIP_MIN_BYTES
+                    and ctype.startswith(GZIP_TYPES)
+                    and "gzip" in self.headers.get("Accept-Encoding", "")
+                )
+                tag = f"{stat.st_mtime_ns:x}-{stat.st_size:x}"
+                etag = f'"{tag}-gz"' if gzip else f'"{tag}"'
+                validators = {
+                    "ETag": etag,
+                    "Last-Modified": formatdate(stat.st_mtime, usegmt=True),
+                    "Vary": "Accept-Encoding",
+                    # The uncompressed size, so a client can show progress in real megabytes.
+                    "X-Plot-Size": str(stat.st_size),
+                }
+                if etag in [t.strip() for t in self.headers.get("If-None-Match", "").split(",")]:
+                    self.send_response(304)
+                    for key, value in validators.items():
+                        self.send_header(key, value)
+                    self.send_header("Cache-Control", "no-cache")
+                    if set_cookie:
+                        self.send_header("Set-Cookie", set_cookie)
+                    self.end_headers()
+                    return
+                if gzip:
+                    # Streamed: no Content-Length; the HTTP/1.0 connection close ends the body.
+                    self.close_connection = True
+                    self.send_response(200)
+                    self.send_header("Content-Type", ctype)
+                    self.send_header("Content-Encoding", "gzip")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.send_header("Referrer-Policy", "no-referrer")
+                    for key, value in validators.items():
+                        self.send_header(key, value)
+                    if set_cookie:
+                        self.send_header("Set-Cookie", set_cookie)
+                    self.end_headers()
+                    if head:
+                        return
+                    compressor = zlib.compressobj(6, zlib.DEFLATED, 31)
+                    try:
+                        while chunk := handle.read(1024 * 1024):
+                            if out := compressor.compress(chunk):
+                                self.wfile.write(out)
+                        self.wfile.write(compressor.flush())
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                    return
+                self._headers(200, ctype, stat.st_size, set_cookie, validators)
                 if not head:
                     try:
                         shutil.copyfileobj(handle, self.wfile, 1024 * 1024)

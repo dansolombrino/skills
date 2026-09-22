@@ -198,6 +198,29 @@ class LiveServerTest(Fixture):
         with mock.patch.object(plot_server, "BROWSER_PATH", plot_server.BROWSER_PATH.with_name("missing.html")):
             self.assertIn(b"000_x/plot_loss/loss.html", self.get(base + "/")[1])
 
+    def test_large_text_is_gzipped_and_revalidates_with_304(self) -> None:
+        import gzip
+        page = self.project / "plots/page.html"
+        payload = ("<html><body>" + "0.123456789, " * 20000 + "</body></html>").encode()
+        page.write_bytes(payload)
+        base = self.start()
+        code, body, headers = self.get(base + page.as_posix(), {"Accept-Encoding": "gzip"})
+        self.assertEqual(code, 200)
+        self.assertEqual(headers["Content-Encoding"], "gzip")
+        self.assertLess(len(body), len(payload) // 5)
+        self.assertEqual(gzip.decompress(body), payload)
+        self.assertEqual(int(headers["X-Plot-Size"]), len(payload))
+        code, body, plain = self.get(base + page.as_posix())
+        self.assertNotIn("Content-Encoding", plain)
+        self.assertEqual(body, payload)
+        self.assertNotEqual(headers["ETag"], plain["ETag"])
+        self.assertEqual(self.get(base + page.as_posix(), {"If-None-Match": plain["ETag"]})[0], 304)
+        self.assertEqual(
+            self.get(base + page.as_posix(), {"If-None-Match": headers["ETag"], "Accept-Encoding": "gzip"})[0], 304
+        )
+        # Small files go out as-is.
+        self.assertNotIn("Content-Encoding", self.get(base + self.plot.as_posix(), {"Accept-Encoding": "gzip"})[2])
+
     def test_large_files_stream_whole(self) -> None:
         big = self.project / "plots/big.html"
         payload = os.urandom(3 * 1024 * 1024 + 7)
