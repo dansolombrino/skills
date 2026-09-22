@@ -14,7 +14,17 @@ a systemd user service, on the machine where plots are rendered (`rig-4090`).
   else, including code, evaluations and checkpoints, answers 404. `..` segments are refused, and a
   symlink inside `plots/` cannot reach outside it. `plots/` itself may be a symlink to another
   volume.
-- `/` lists every discovered project and its HTML plots, newest first. Discovery is cached for 30 s.
+- `/` is the plot browser (`assets/plot-browser.html`, read on every request): a project picker,
+  the project's `plots/` as a folder tree (single-child folder chains merged into one row) or as a
+  newest-first list, a filter box, and the selected plot beside it with its breadcrumb, render time,
+  size, reload, copy-link and open-alone buttons. The address bar carries `#p=<project>&f=<plot>`,
+  so a copied link reopens the same view. A green dot marks plots new or re-rendered since this
+  browser last opened them, the list rescans every 30 s, and an open plot that gets re-rendered
+  offers a reload. Keys: `/` filter, `↑`/`↓` or `j`/`k` previous/next plot, `Esc` clear, `r` reload.
+  On a narrow screen the list slides in from the menu button. View preferences stay in the browser.
+  Without the page file, `/` falls back to the plain list, which is always at `/plain`.
+- `/api/projects` and `/api/files?project=<absolute project path>` are the JSON behind the page.
+  Project discovery is cached for 30 s.
 - `/healthz` answers `ok` without a token.
 - Responses carry `Cache-Control: no-cache`, so reloading the tab after a rerender shows the new file.
 - The server never writes anything.

@@ -8,7 +8,7 @@ answers 404. Configuration is the [plots] table of the rigsync registry; see
 references/plot-server.md.
 
 Subcommands:
-  serve   run the server (the systemd user unit runs this)
+  serve   run the server (the systemd user unit runs this); / is the plot browser page
   url     print the URL of one plot file and whether the server answers
   list    list the discovered projects and their HTML plots
   token   print a fresh access token
@@ -20,6 +20,7 @@ import argparse
 import hmac
 import html
 import ipaddress
+import json
 import mimetypes
 import os
 import secrets
@@ -47,6 +48,7 @@ PLOTS_DIR = "plots"
 PLOT_SUFFIXES = (".html", ".htm")
 DISCOVERY_TTL_S = 30.0
 COOKIE_NAME = "plot_server_token"
+BROWSER_PATH = Path(__file__).resolve().parents[1] / "assets" / "plot-browser.html"
 DENIED = b"plot-server: access token required. Open any page once as ?token=<token>; a cookie then remembers it.\n"
 
 
@@ -253,6 +255,48 @@ def index_page(config: PlotsConfig, projects: list[Path]) -> bytes:
     return page.encode()
 
 
+def project_root(config: PlotsConfig, project: Path) -> Path:
+    return next(r for r in config.roots if project.is_relative_to(r))
+
+
+def api_projects(config: PlotsConfig, projects: list[Path]) -> dict:
+    entries = []
+    for project in projects:
+        plots = project_plots(project)
+        root = project_root(config, project)
+        entries.append({
+            "id": project.as_posix(),
+            "name": project.relative_to(root).as_posix(),
+            "root": root.as_posix(),
+            "count": len(plots),
+            "latest": max((stat.st_mtime for _, stat in plots), default=None),
+        })
+    return {"host": socket.gethostname(), "projects": entries}
+
+
+def api_files(config: PlotsConfig, projects: list[Path], project_id: str) -> dict | None:
+    project = next((p for p in projects if p.as_posix() == project_id), None)
+    if project is None:
+        return None
+    files = [
+        {
+            "path": path.relative_to(project / PLOTS_DIR).as_posix(),
+            "url": quote(path.as_posix()),
+            "size": stat.st_size,
+            "mtime": stat.st_mtime,
+        }
+        for path, stat in project_plots(project)
+    ]
+    return {"project": project.as_posix(), "files": files}
+
+
+def browser_page(config: PlotsConfig, projects: list[Path]) -> bytes:
+    try:
+        return BROWSER_PATH.read_bytes()
+    except OSError:
+        return index_page(config, projects)
+
+
 def presented_token(handler: BaseHTTPRequestHandler, query: str) -> tuple[str | None, bool]:
     """(token the client presented, whether it came from the query string)."""
     value = parse_qs(query).get("token")
@@ -299,7 +343,22 @@ def make_handler(config: PlotsConfig, catalog: Catalog | None = None):
                 if from_query:
                     set_cookie = f"{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000"
             if url.path in ("/", "/index.html"):
+                self._send(200, "text/html; charset=utf-8", browser_page(config, catalog.projects()), set_cookie, head)
+                return
+            if url.path == "/plain":
                 self._send(200, "text/html; charset=utf-8", index_page(config, catalog.projects()), set_cookie, head)
+                return
+            if url.path == "/api/projects":
+                body = json.dumps(api_projects(config, catalog.projects())).encode()
+                self._send(200, "application/json; charset=utf-8", body, set_cookie, head)
+                return
+            if url.path == "/api/files":
+                project_id = parse_qs(url.query).get("project", [""])[0]
+                data = api_files(config, catalog.projects(), project_id)
+                if data is None:
+                    self._send(404, "application/json; charset=utf-8", b'{"error": "unknown project"}', set_cookie, head)
+                else:
+                    self._send(200, "application/json; charset=utf-8", json.dumps(data).encode(), set_cookie, head)
                 return
             path = resolve_plot(config, url.path)
             if path is None:

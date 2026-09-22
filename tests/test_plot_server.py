@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import os
 import sys
 import tempfile
 import threading
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -158,7 +160,7 @@ class LiveServerTest(Fixture):
         self.assertEqual(body, b"<html>loss</html>")
         self.assertTrue(headers["Content-Type"].startswith("text/html"))
         self.assertEqual(headers["Cache-Control"], "no-cache")
-        code, body, _ = self.get(base + "/")
+        code, body, _ = self.get(base + "/plain")
         self.assertEqual(code, 200)
         self.assertIn(b"000_x/plot_loss/loss.html", body)
         self.assertEqual(self.get(base + (self.project / "code.py").as_posix())[0], 404)
@@ -176,6 +178,25 @@ class LiveServerTest(Fixture):
             self.assertIn("HttpOnly", headers["Set-Cookie"])
             self.assertEqual(self.get(base + self.plot.as_posix(), {"Cookie": cookie})[0], 200)
             self.assertEqual(self.get(base + self.plot.as_posix(), {"Authorization": f"Bearer {TOKEN}"})[0], 200)
+
+    def test_browser_page_and_json_api(self) -> None:
+        base = self.start()
+        code, body, _ = self.get(base + "/")
+        self.assertEqual(code, 200)
+        self.assertEqual(body, plot_server.BROWSER_PATH.read_bytes())
+        self.assertIn(b"/api/files", body)
+        self.assertIn(b"000_x/plot_loss/loss.html", self.get(base + "/plain")[1])
+        code, body, _ = self.get(base + "/api/projects")
+        projects = json.loads(body)["projects"]
+        self.assertEqual([p["id"] for p in projects], [self.project.as_posix()])
+        self.assertEqual((projects[0]["name"], projects[0]["count"]), ("area/proj/proj", 1))
+        code, body, _ = self.get(base + "/api/files?project=" + urllib.parse.quote(self.project.as_posix()))
+        files = json.loads(body)["files"]
+        self.assertEqual(files[0]["path"], "000_x/plot_loss/loss.html")
+        self.assertEqual(self.get(base + files[0]["url"])[0], 200)
+        self.assertEqual(self.get(base + "/api/files?project=/etc")[0], 404)
+        with mock.patch.object(plot_server, "BROWSER_PATH", plot_server.BROWSER_PATH.with_name("missing.html")):
+            self.assertIn(b"000_x/plot_loss/loss.html", self.get(base + "/")[1])
 
     def test_large_files_stream_whole(self) -> None:
         big = self.project / "plots/big.html"

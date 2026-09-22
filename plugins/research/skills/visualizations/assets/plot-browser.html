@@ -1,0 +1,611 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plots</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --panel: #f7f7f8;
+    --line: #e4e4e7;
+    --line-strong: #d4d4d8;
+    --text: #18181b;
+    --muted: #71717a;
+    --faint: #a1a1aa;
+    --accent: #2563eb;
+    --accent-soft: #e8efff;
+    --hover: #eeeef0;
+    --new: #16a34a;
+    --warn-bg: #fff7e6;
+    --warn-line: #f5c26b;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --sidebar: 340px;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.4 var(--sans); display: flex; flex-direction: column; overflow: hidden; }
+  button { font: inherit; color: inherit; background: none; border: 1px solid var(--line-strong); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button:hover { background: var(--hover); }
+  button:focus-visible, select:focus-visible, input:focus-visible, .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .icon { width: 16px; height: 16px; display: inline-block; vertical-align: -3px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+  header { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--bg); min-height: 50px; }
+  header .brand { font-weight: 650; white-space: nowrap; }
+  header .host { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  #menu { display: none; padding: 5px 8px; }
+  .picker { position: relative; flex: 1; min-width: 0; max-width: 560px; }
+  #project { width: 100%; appearance: none; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 34px 7px 10px; cursor: pointer; text-overflow: ellipsis; }
+  .picker::after { content: ""; position: absolute; right: 13px; top: 50%; width: 7px; height: 7px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: translateY(-70%) rotate(45deg); pointer-events: none; }
+  header .spacer { flex: 1; }
+
+  .layout { flex: 1; display: flex; min-height: 0; }
+  aside { width: var(--sidebar); min-width: 220px; max-width: 70vw; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: var(--panel); }
+  .divider { width: 5px; margin-left: -3px; cursor: col-resize; z-index: 2; }
+  .divider:hover, .divider.dragging { background: var(--accent-soft); }
+  .tools { padding: 10px 10px 8px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--line); }
+  .search { position: relative; }
+  .search .icon { position: absolute; left: 9px; top: 9px; color: var(--faint); }
+  #filter { width: 100%; font: inherit; padding: 6px 28px 6px 30px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg); color: var(--text); }
+  #clear { position: absolute; right: 4px; top: 4px; border: 0; padding: 2px 6px; color: var(--muted); display: none; }
+  .modes { display: flex; align-items: center; gap: 8px; }
+  .seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; padding: 4px 12px; font-size: 13px; }
+  .seg button[aria-pressed="true"] { background: var(--text); color: var(--bg); }
+  .count { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .actions { display: flex; gap: 4px; }
+  .actions button { border: 0; padding: 4px 6px; color: var(--muted); font-size: 12px; }
+
+  #list { flex: 1; overflow: auto; padding: 4px 0 16px; }
+  .row { display: flex; align-items: center; gap: 6px; padding: 3px 10px 3px calc(10px + var(--depth, 0) * 14px); cursor: pointer; user-select: none; white-space: nowrap; min-height: 28px; }
+  .row:hover { background: var(--hover); }
+  .row.selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+  .row .chev { width: 12px; flex: none; color: var(--muted); transition: transform .12s; }
+  .row.open .chev { transform: rotate(90deg); }
+  .row .name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .row.dir .name { font-weight: 560; }
+  /* A merged folder chain shows in full: first folder bold, the rest muted and wrapped. */
+  .row.dir .name.chain { white-space: normal; overflow-wrap: anywhere; font-weight: 400; padding: 3px 0; }
+  .row.dir .name.chain b { font-weight: 560; }
+  .row.dir .name.chain .rest { color: var(--muted); font-size: 12px; }
+  .row .file-ic { width: 12px; flex: none; color: var(--faint); }
+  .row .meta { margin-left: auto; padding-left: 8px; color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; flex: none; }
+  .row .sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+  .row.flat { flex-wrap: wrap; row-gap: 0; padding-top: 5px; padding-bottom: 5px; }
+  .row.flat .line { display: flex; width: 100%; align-items: center; gap: 6px; min-width: 0; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--new); flex: none; }
+  mark { background: #fde68a; color: inherit; border-radius: 2px; padding: 0 1px; }
+  .empty { color: var(--muted); padding: 16px; }
+
+  main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); min-height: 46px; }
+  .crumbs { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 2px; font-size: 13px; }
+  .crumbs button { border: 0; padding: 2px 4px; color: var(--muted); }
+  .crumbs .leaf { font-weight: 650; padding: 2px 4px; overflow-wrap: anywhere; }
+  .crumbs .sep { color: var(--faint); }
+  .bar .info { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .bar .btns { display: flex; gap: 6px; }
+  .bar .btns button { padding: 5px 8px; }
+  .updated { display: none; background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 999px; padding: 3px 10px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+  .stage { flex: 1; position: relative; min-height: 0; }
+  iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; }
+  .loading { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; gap: 10px; background: rgba(255,255,255,.85); color: var(--muted); }
+  .spin { width: 18px; height: 18px; border: 2px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .welcome { position: absolute; inset: 0; overflow: auto; padding: 28px; }
+  .welcome h2 { margin: 0 0 4px; font-size: 18px; }
+  .welcome p { margin: 0 0 18px; color: var(--muted); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+  .card { text-align: left; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--bg); display: flex; flex-direction: column; gap: 3px; }
+  .card:hover { border-color: var(--accent); background: var(--bg); }
+  .card .t { font-weight: 600; overflow-wrap: anywhere; }
+  .card .s { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  .keys { margin-top: 22px; color: var(--muted); font-size: 12px; }
+  kbd { font: 11px var(--mono); border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: var(--panel); }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 7px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  .error { margin: 40px auto; max-width: 520px; padding: 16px; border: 1px solid var(--warn-line); background: var(--warn-bg); border-radius: 10px; }
+
+  @media (max-width: 760px) {
+    #menu { display: inline-block; }
+    header .host, header .brand { display: none; }
+    aside { position: fixed; top: 50px; bottom: 0; left: 0; width: min(88vw, 380px); max-width: none; z-index: 10; transform: translateX(-100%); transition: transform .18s; box-shadow: 2px 0 16px rgba(0,0,0,.12); }
+    body.nav-open aside { transform: none; }
+    .divider { display: none; }
+    .bar .info { display: none; }
+    .welcome { padding: 16px; }
+    .row { min-height: 36px; }
+  }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4"/></symbol>
+  <symbol id="i-ext" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M18 14v6H4V6h6"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></symbol>
+  <symbol id="i-reload" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+</svg>
+
+<header>
+  <button id="menu" aria-label="Show plot list"><svg class="icon"><use href="#i-menu"/></svg></button>
+  <span class="brand">Plots</span>
+  <div class="picker"><select id="project" aria-label="Project"></select></div>
+  <span class="spacer"></span>
+  <button id="refresh" title="Rescan projects and plots"><svg class="icon"><use href="#i-reload"/></svg></button>
+  <span class="host" id="host"></span>
+</header>
+
+<div class="layout">
+  <aside id="aside">
+    <div class="tools">
+      <div class="search">
+        <svg class="icon"><use href="#i-search"/></svg>
+        <input id="filter" type="search" placeholder="Filter plots  ( / )" autocomplete="off" spellcheck="false" aria-label="Filter plots">
+        <button id="clear" aria-label="Clear filter">×</button>
+      </div>
+      <div class="modes">
+        <div class="seg" role="group" aria-label="View">
+          <button id="mode-tree" aria-pressed="true">Folders</button>
+          <button id="mode-recent" aria-pressed="false">Newest</button>
+        </div>
+        <span class="count" id="count"></span>
+      </div>
+      <div class="actions" id="tree-actions">
+        <button id="expand">Expand all</button>
+        <button id="collapse">Collapse all</button>
+      </div>
+    </div>
+    <div id="list" role="tree" tabindex="-1"></div>
+  </aside>
+  <div class="divider" id="divider" aria-hidden="true"></div>
+  <main>
+    <div class="bar" id="bar" hidden>
+      <div class="crumbs" id="crumbs"></div>
+      <button class="updated" id="updated" title="The file was re-rendered">Updated · reload</button>
+      <span class="info" id="info"></span>
+      <div class="btns">
+        <button id="reload" title="Reload plot"><svg class="icon"><use href="#i-reload"/></svg></button>
+        <button id="copy" title="Copy link to this view"><svg class="icon"><use href="#i-link"/></svg></button>
+        <button id="open" title="Open plot alone in a new tab"><svg class="icon"><use href="#i-ext"/></svg></button>
+      </div>
+    </div>
+    <div class="stage">
+      <iframe id="frame" title="Plot" hidden></iframe>
+      <div class="loading" id="loading"><div class="spin"></div><span id="loading-text">Loading plot…</span></div>
+      <div class="welcome" id="welcome"></div>
+    </div>
+  </main>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const store = {
+    get(key, fallback) { try { const v = localStorage.getItem("plots." + key); return v === null ? fallback : JSON.parse(v); } catch { return fallback; } },
+    set(key, value) { try { localStorage.setItem("plots." + key, JSON.stringify(value)); } catch {} },
+  };
+
+  const state = {
+    projects: [],
+    project: null,      // id (absolute path)
+    files: [],          // [{path, url, size, mtime}]
+    file: null,         // relative path inside plots/
+    mode: store.get("mode", "tree"),
+    filter: "",
+    open: new Set(),    // expanded folder paths for the current project
+    seen: {},           // path -> mtime the page last knew
+    visible: [],        // file paths in current display order, for keyboard navigation
+  };
+
+  // ── formatting ──────────────────────────────────────────────────────────
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const size = (b) => b >= 1048576 ? (b / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB";
+  const ago = (t) => {
+    if (!t) return "";
+    const s = Date.now() / 1000 - t;
+    if (s < 60) return "just now";
+    if (s < 3600) return Math.floor(s / 60) + "m ago";
+    if (s < 86400) return Math.floor(s / 3600) + "h ago";
+    if (s < 86400 * 30) return Math.floor(s / 86400) + "d ago";
+    return new Date(t * 1000).toISOString().slice(0, 10);
+  };
+  const stamp = (t) => new Date(t * 1000).toLocaleString([], { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  // Generic leaf names (index.html) say nothing; name them after their folder instead.
+  const leafName = (p) => {
+    const parts = p.split("/");
+    const leaf = parts.pop().replace(/\.html?$/i, "");
+    return /^index$/i.test(leaf) && parts.length ? parts.pop() : leaf;
+  };
+  const tail = (p, n = 3) => { const parts = p.split("/"); parts.pop(); return (parts.length > n ? "…/" : "") + parts.slice(-n).join("/"); };
+  const highlight = (text, q) => {
+    if (!q) return esc(text);
+    const i = text.toLowerCase().indexOf(q);
+    if (i < 0) return esc(text);
+    return esc(text.slice(0, i)) + "<mark>" + esc(text.slice(i, i + q.length)) + "</mark>" + esc(text.slice(i + q.length));
+  };
+  let toastTimer;
+  const toast = (msg) => { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 1600); };
+
+  // ── data ────────────────────────────────────────────────────────────────
+  async function getJSON(url) {
+    const r = await fetch(url, { credentials: "same-origin", cache: "no-store" });
+    if (r.status === 401) throw new Error("auth");
+    if (!r.ok) throw new Error(r.status + " " + url);
+    return r.json();
+  }
+
+  function showError(err) {
+    const msg = err.message === "auth"
+      ? "This server needs its access token. Open this page once as <code>?token=&lt;token&gt;</code>; a cookie remembers it afterwards."
+      : "Could not reach the plot server (" + esc(err.message) + ").";
+    $("welcome").innerHTML = '<div class="error">' + msg + "</div>";
+    $("welcome").hidden = false;
+  }
+
+  async function loadProjects() {
+    const data = await getJSON("/api/projects");
+    state.projects = data.projects;
+    $("host").textContent = data.host;
+    document.title = "Plots · " + data.host;
+    const sel = $("project");
+    const byRoot = new Map();
+    for (const p of state.projects) {
+      if (!byRoot.has(p.root)) byRoot.set(p.root, []);
+      byRoot.get(p.root).push(p);
+    }
+    sel.innerHTML = "";
+    for (const [root, list] of byRoot) {
+      const group = document.createElement("optgroup");
+      group.label = root;
+      for (const p of list) {
+        const o = document.createElement("option");
+        o.value = p.id;
+        o.textContent = p.name + "  ·  " + p.count + (p.count === 1 ? " plot" : " plots") + (p.latest ? "  ·  " + ago(p.latest) : "");
+        group.appendChild(o);
+      }
+      sel.appendChild(group);
+    }
+  }
+
+  async function loadFiles(keepSeen) {
+    const data = await getJSON("/api/files?project=" + encodeURIComponent(state.project));
+    const before = state.seen;
+    state.files = data.files;
+    const seenKey = "seen:" + state.project;
+    const persisted = store.get(seenKey, null);
+    if (!keepSeen) state.seen = persisted || Object.fromEntries(state.files.map((f) => [f.path, f.mtime]));
+    else state.seen = before;
+    if (!persisted) store.set(seenKey, state.seen);
+  }
+
+  const isNew = (f) => state.seen[f.path] === undefined || f.mtime > state.seen[f.path] + 1;
+  function markSeen(f) {
+    state.seen[f.path] = f.mtime;
+    store.set("seen:" + state.project, state.seen);
+  }
+
+  // ── tree ────────────────────────────────────────────────────────────────
+  function buildTree(files) {
+    const root = { dirs: new Map(), files: [], count: 0, latest: 0, path: "" };
+    for (const f of files) {
+      const parts = f.path.split("/");
+      let node = root;
+      node.count++; node.latest = Math.max(node.latest, f.mtime);
+      for (let i = 0; i < parts.length - 1; i++) {
+        const key = parts.slice(0, i + 1).join("/");
+        if (!node.dirs.has(parts[i])) node.dirs.set(parts[i], { name: parts[i], dirs: new Map(), files: [], count: 0, latest: 0, path: key });
+        node = node.dirs.get(parts[i]);
+        node.count++; node.latest = Math.max(node.latest, f.mtime);
+      }
+      node.files.push(f);
+    }
+    return root;
+  }
+
+  const matches = (f, q) => !q || f.path.toLowerCase().includes(q);
+
+  function render(reveal = false) {
+    const q = state.filter.trim().toLowerCase();
+    const shown = state.files.filter((f) => matches(f, q));
+    $("count").textContent = q ? shown.length + " of " + state.files.length : state.files.length + (state.files.length === 1 ? " plot" : " plots");
+    $("tree-actions").style.display = state.mode === "tree" && !q ? "" : "none";
+    const list = $("list");
+    const out = [];
+    state.visible = [];
+    if (!state.files.length) {
+      list.innerHTML = '<div class="empty">No HTML plots in this project yet.</div>';
+      return;
+    }
+    if (!shown.length) {
+      list.innerHTML = '<div class="empty">Nothing matches “' + esc(state.filter) + "”.</div>";
+      return;
+    }
+    if (state.mode === "recent") {
+      const sorted = shown.slice().sort((a, b) => b.mtime - a.mtime);
+      for (const f of sorted) {
+        state.visible.push(f.path);
+        const dir = f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : "";
+        out.push(
+          '<div class="row flat' + (f.path === state.file ? " selected" : "") + '" role="treeitem" tabindex="-1" data-file="' + esc(f.path) + '" title="' + esc(f.path) + '">' +
+          '<div class="line">' + (isNew(f) ? '<span class="dot" title="New or re-rendered since you last opened it"></span>' : "") +
+          '<span class="name">' + highlight(leafName(f.path), q) + '</span><span class="meta" title="' + esc(stamp(f.mtime)) + '">' + ago(f.mtime) + "</span></div>" +
+          '<div class="line"><span class="sub" title="' + esc(dir) + '">' + (q ? highlight(dir, q) : esc(tail(f.path, 4))) + "</span></div></div>"
+        );
+      }
+    } else {
+      const tree = buildTree(shown);
+      const walk = (node, depth) => {
+        const dirs = [...node.dirs.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+        for (let d of dirs) {
+          let label = d.name;
+          while (d.dirs.size === 1 && d.files.length === 0) {
+            d = [...d.dirs.values()][0];
+            label += "/" + d.name;
+          }
+          d = Object.assign({}, d, { name: label });
+          const open = q ? true : state.open.has(d.path);
+          out.push(
+            '<div class="row dir' + (open ? " open" : "") + '" role="treeitem" aria-expanded="' + open + '" tabindex="-1" style="--depth:' + depth + '" data-dir="' + esc(d.path) + '">' +
+            '<svg class="icon chev"><use href="#i-chev"/></svg>' + (d.name.includes("/")
+              ? '<span class="name chain" title="' + esc(d.name) + '"><b>' + highlight(d.name.slice(0, d.name.indexOf("/")), q) + '</b><span class="rest">' + highlight(d.name.slice(d.name.indexOf("/")).replaceAll("/", "/\u200b"), q) + "</span></span>"
+              : '<span class="name">' + highlight(d.name, q) + "</span>") +
+            '<span class="meta" title="' + d.count + ' plots, newest ' + esc(stamp(d.latest)) + '">' + d.count + "</span></div>"
+          );
+          if (open) walk(d, depth + 1);
+        }
+        const files = node.files.slice().sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true }));
+        for (const f of files) {
+          state.visible.push(f.path);
+          out.push(
+            '<div class="row' + (f.path === state.file ? " selected" : "") + '" role="treeitem" tabindex="-1" style="--depth:' + depth + '" data-file="' + esc(f.path) + '" title="' + esc(f.path) + '">' +
+            (isNew(f) ? '<span class="dot" title="New or re-rendered since you last opened it"></span>' : '<svg class="icon file-ic"><use href="#i-file"/></svg>') +
+            '<span class="name">' + highlight(leafName(f.path), q) + '</span><span class="meta" title="' + esc(stamp(f.mtime)) + " · " + size(f.size) + '">' + ago(f.mtime) + "</span></div>"
+          );
+        }
+      };
+      walk(tree, 0);
+    }
+    list.innerHTML = out.join("");
+    const sel = reveal && list.querySelector(".row.selected");
+    if (sel) sel.scrollIntoView({ block: "nearest" });
+  }
+
+  function saveOpen() { store.set("open:" + state.project, [...state.open]); }
+
+  function revealFile(path) {
+    const parts = path.split("/");
+    for (let i = 1; i < parts.length; i++) state.open.add(parts.slice(0, i).join("/"));
+    saveOpen();
+  }
+
+  // ── viewer ──────────────────────────────────────────────────────────────
+  function currentFile() { return state.files.find((f) => f.path === state.file) || null; }
+
+  function renderBar() {
+    const f = currentFile();
+    $("bar").hidden = !f;
+    if (!f) return;
+    const parts = f.path.split("/");
+    const crumbs = ['<button data-crumb="">plots</button>'];
+    for (let i = 0; i < parts.length - 1; i++) {
+      crumbs.push('<span class="sep">/</span><button data-crumb="' + esc(parts.slice(0, i + 1).join("/")) + '">' + esc(parts[i]) + "</button>");
+    }
+    crumbs.push('<span class="sep">/</span><span class="leaf">' + esc(parts[parts.length - 1]) + "</span>");
+    $("crumbs").innerHTML = crumbs.join("");
+    $("info").textContent = "rendered " + stamp(f.mtime) + " · " + size(f.size);
+    $("info").title = ago(f.mtime);
+  }
+
+  let loadedMtime = null;
+  function showFile(path, { push = true } = {}) {
+    const f = state.files.find((x) => x.path === path);
+    state.file = f ? f.path : null;
+    if (push) writeHash();
+    renderBar();
+    $("updated").style.display = "none";
+    const frame = $("frame");
+    if (!f) {
+      frame.hidden = true;
+      frame.removeAttribute("src");
+      renderWelcome();
+      render();
+      return;
+    }
+    $("welcome").hidden = true;
+    frame.hidden = false;
+    $("loading-text").textContent = "Loading plot" + (f.size > 5 * 1048576 ? " (" + size(f.size) + ")" : "") + "…";
+    $("loading").style.display = "flex";
+    loadedMtime = f.mtime;
+    frame.src = f.url + "?v=" + Math.round(f.mtime);
+    markSeen(f);
+    revealFile(f.path);
+    render(true);
+    document.body.classList.remove("nav-open");
+  }
+  $("frame").addEventListener("load", () => { $("loading").style.display = "none"; });
+
+  function renderWelcome() {
+    const w = $("welcome");
+    w.hidden = false;
+    const p = state.projects.find((x) => x.id === state.project);
+    if (!p) { w.innerHTML = '<div class="empty">No project with a plots/ folder was found.</div>'; return; }
+    const recent = state.files.slice().sort((a, b) => b.mtime - a.mtime).slice(0, 12);
+    w.innerHTML =
+      "<h2>" + esc(p.name) + "</h2><p>" + esc(p.id) + " · " + p.count + (p.count === 1 ? " plot" : " plots") + "</p>" +
+      (recent.length ? '<div class="cards">' + recent.map((f) =>
+        '<button class="card" data-file="' + esc(f.path) + '" title="' + esc(f.path) + '"><span class="t">' + esc(leafName(f.path)) + '</span><span class="s">' +
+        esc(tail(f.path)) + '</span><span class="s">' + ago(f.mtime) + " · " + size(f.size) + "</span></button>").join("") + "</div>" : "") +
+      '<div class="keys"><kbd>/</kbd> filter · <kbd>↑</kbd> <kbd>↓</kbd> previous / next plot · <kbd>Esc</kbd> clear filter · <kbd>r</kbd> reload plot</div>';
+  }
+
+  // ── routing ─────────────────────────────────────────────────────────────
+  function readHash() {
+    const h = new URLSearchParams(location.hash.slice(1));
+    return { project: h.get("p"), file: h.get("f") };
+  }
+  function writeHash() {
+    const h = new URLSearchParams();
+    if (state.project) h.set("p", state.project);
+    if (state.file) h.set("f", state.file);
+    const next = "#" + h.toString();
+    if (location.hash !== next) history.pushState(null, "", next);
+  }
+
+  async function selectProject(id, file, { push = true } = {}) {
+    state.project = id;
+    $("project").value = id;
+    store.set("project", id);
+    state.open = new Set(store.get("open:" + id, []));
+    state.file = null;
+    await loadFiles(false);
+    if (file && state.files.some((f) => f.path === file)) showFile(file, { push });
+    else { if (push) writeHash(); showFile(null, { push: false }); }
+  }
+
+  async function route({ push = false } = {}) {
+    const h = readHash();
+    const exists = (id) => state.projects.some((p) => p.id === id);
+    let id = exists(h.project) ? h.project : null;
+    if (!id) id = exists(store.get("project", null)) ? store.get("project", null) : null;
+    if (!id && state.projects.length) id = state.projects.slice().sort((a, b) => (b.latest || 0) - (a.latest || 0))[0].id;
+    if (!id) { renderWelcome(); render(); return; }
+    if (id !== state.project) await selectProject(id, h.file, { push });
+    else if (h.file !== state.file) showFile(h.file, { push: false });
+  }
+
+  // ── refresh ─────────────────────────────────────────────────────────────
+  async function refresh({ projects = false } = {}) {
+    try {
+      if (projects) { await loadProjects(); $("project").value = state.project; }
+      if (!state.project) return;
+      await loadFiles(true);
+      const f = currentFile();
+      if (state.file && !f) { toast("That plot no longer exists"); showFile(null); return; }
+      if (f && loadedMtime !== null && f.mtime > loadedMtime + 1) $("updated").style.display = "inline-block";
+      renderBar();
+      render();
+    } catch (err) { showError(err); }
+  }
+
+  // ── events ──────────────────────────────────────────────────────────────
+  $("project").addEventListener("change", (e) => selectProject(e.target.value, null));
+  $("list").addEventListener("click", (e) => {
+    const row = e.target.closest(".row");
+    if (!row) return;
+    if (row.dataset.dir !== undefined) {
+      const d = row.dataset.dir;
+      if (state.filter) return;
+      state.open.has(d) ? state.open.delete(d) : state.open.add(d);
+      saveOpen();
+      render();
+    } else if (row.dataset.file) showFile(row.dataset.file);
+  });
+  $("welcome").addEventListener("click", (e) => { const c = e.target.closest("[data-file]"); if (c) showFile(c.dataset.file); });
+  $("crumbs").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-crumb]");
+    if (!b) return;
+    const path = b.dataset.crumb;
+    setMode("tree");
+    state.filter = ""; $("filter").value = ""; $("clear").style.display = "none";
+    if (path) {
+      state.open = new Set([...state.open].filter((p) => !(p === path || p.startsWith(path + "/"))));
+      const parts = path.split("/");
+      for (let i = 1; i <= parts.length; i++) state.open.add(parts.slice(0, i).join("/"));
+    } else state.open.clear();
+    saveOpen();
+    render();
+    document.body.classList.add("nav-open");
+    const row = [...$("list").querySelectorAll(".row.dir")].find((r) => r.dataset.dir === path);
+    if (row) row.scrollIntoView({ block: "center" });
+  });
+  $("filter").addEventListener("input", (e) => {
+    state.filter = e.target.value;
+    $("clear").style.display = state.filter ? "block" : "none";
+    render();
+  });
+  $("clear").addEventListener("click", () => { state.filter = ""; $("filter").value = ""; $("clear").style.display = "none"; render(); $("filter").focus(); });
+  function setMode(mode) {
+    state.mode = mode; store.set("mode", mode);
+    $("mode-tree").setAttribute("aria-pressed", mode === "tree");
+    $("mode-recent").setAttribute("aria-pressed", mode === "recent");
+    render();
+  }
+  $("mode-tree").addEventListener("click", () => setMode("tree"));
+  $("mode-recent").addEventListener("click", () => setMode("recent"));
+  $("expand").addEventListener("click", () => {
+    for (const f of state.files) { const parts = f.path.split("/"); for (let i = 1; i < parts.length; i++) state.open.add(parts.slice(0, i).join("/")); }
+    saveOpen(); render();
+  });
+  $("collapse").addEventListener("click", () => { state.open.clear(); saveOpen(); render(); });
+  const reloadPlot = () => { const f = currentFile(); if (f) showFile(f.path, { push: false }); };
+  $("reload").addEventListener("click", reloadPlot);
+  $("updated").addEventListener("click", reloadPlot);
+  $("open").addEventListener("click", () => { const f = currentFile(); if (f) window.open(f.url, "_blank", "noopener"); });
+  $("copy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(location.href); toast("Link copied"); }
+    catch { prompt("Copy this link:", location.href); }
+  });
+  $("refresh").addEventListener("click", async () => { await refresh({ projects: true }); toast("Rescanned"); });
+  $("menu").addEventListener("click", () => document.body.classList.toggle("nav-open"));
+  window.addEventListener("popstate", () => route());
+  window.addEventListener("focus", () => refresh());
+  setInterval(() => { if (!document.hidden) refresh(); }, 30000);
+
+  function step(delta) {
+    if (!state.visible.length) return;
+    const i = state.visible.indexOf(state.file);
+    const next = i < 0 ? (delta > 0 ? 0 : state.visible.length - 1) : Math.min(state.visible.length - 1, Math.max(0, i + delta));
+    if (state.visible[next] !== state.file) showFile(state.visible[next]);
+  }
+  document.addEventListener("keydown", (e) => {
+    const typing = e.target === $("filter");
+    if (e.key === "/" && !typing) { e.preventDefault(); $("filter").focus(); $("filter").select(); return; }
+    if (e.key === "Escape" && typing) { state.filter = ""; $("filter").value = ""; $("clear").style.display = "none"; render(); $("filter").blur(); return; }
+    if (e.metaKey || e.ctrlKey || e.altKey || e.target.tagName === "SELECT") return;
+    if (e.key === "ArrowDown" || (e.key === "j" && !typing)) { e.preventDefault(); step(1); }
+    else if (e.key === "ArrowUp" || (e.key === "k" && !typing)) { e.preventDefault(); step(-1); }
+    else if (e.key === "Enter" && typing && state.visible.length) { showFile(state.visible[0]); }
+    else if (e.key === "r" && !typing) { reloadPlot(); }
+  });
+
+  // Resizable sidebar.
+  const divider = $("divider");
+  const width = store.get("sidebar", null);
+  if (width) document.documentElement.style.setProperty("--sidebar", width + "px");
+  divider.addEventListener("pointerdown", (e) => {
+    divider.classList.add("dragging");
+    divider.setPointerCapture(e.pointerId);
+    $("frame").style.pointerEvents = "none";
+    const move = (ev) => document.documentElement.style.setProperty("--sidebar", Math.max(220, Math.min(ev.clientX, window.innerWidth * 0.7)) + "px");
+    const up = (ev) => {
+      divider.classList.remove("dragging");
+      $("frame").style.pointerEvents = "";
+      store.set("sidebar", Math.round($("aside").getBoundingClientRect().width));
+      divider.removeEventListener("pointermove", move);
+      divider.removeEventListener("pointerup", up);
+    };
+    divider.addEventListener("pointermove", move);
+    divider.addEventListener("pointerup", up);
+  });
+
+  // ── start ───────────────────────────────────────────────────────────────
+  setMode(state.mode);
+  (async () => {
+    try {
+      if (new URLSearchParams(location.search).has("token")) history.replaceState(null, "", location.pathname + location.hash);
+      await loadProjects();
+      await route({ push: false });
+      if (!location.hash && state.project) history.replaceState(null, "", "#" + new URLSearchParams({ p: state.project }).toString());
+    } catch (err) { showError(err); }
+  })();
+})();
+</script>
+</body>
+</html>
