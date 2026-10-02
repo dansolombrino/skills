@@ -70,7 +70,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "8.5.0")
+        self.assertEqual(manifest["version"], "9.0.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -86,26 +86,19 @@ class ResearchContractTests(unittest.TestCase):
         self.assertEqual(research_entry["version"], manifest["version"])
         self.assertTrue((ROOT / "plugins/research/skills/rig-sync/SKILL.md").is_file())
         self.assertTrue(
-            (ROOT / "plugins/research/skills/integrate-reference-code/SKILL.md").is_file()
-        )
-        self.assertTrue(
             (ROOT / "plugins/research/skills/environment-sync/SKILL.md").is_file()
         )
         skill_names = {
             path.parent.name
             for path in (ROOT / "plugins/research/skills").glob("*/SKILL.md")
         }
-        self.assertEqual(len(skill_names), 14)
+        self.assertEqual(len(skill_names), 10)
         self.assertEqual(
             skill_names,
             {
-                "brainstorm-hold",
                 "environment-sync",
                 "experiment-design",
                 "experiments-tracking",
-                "integrate-reference-code",
-                "intent-gate",
-                "intent-mirror",
                 "research-journal",
                 "research-project-init",
                 "rig-board",
@@ -1550,21 +1543,6 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("Unsupported layouts", dispatch)
         self.assertNotIn("offer to migrate", tracking)
 
-    def test_reference_code_integration_requires_informed_delta_approval(self) -> None:
-        skill_root = ROOT / "plugins/research/skills/integrate-reference-code"
-        skill = (skill_root / "SKILL.md").read_text()
-        metadata = (skill_root / "agents/openai.yaml").read_text()
-
-        self.assertIn("Keep this phase read-only", skill)
-        self.assertIn("Enumerate every concrete", skill)
-        self.assertIn("Use all seven columns", skill)
-        self.assertIn("mark each initial approval as", skill)
-        self.assertIn("Stop and wait for the user to approve", skill)
-        self.assertIn("general permission", skill)
-        self.assertIn("If a new deviation becomes necessary, stop before applying it", skill)
-        self.assertIn("any unapproved deviation remains", skill)
-        self.assertIn("$integrate-reference-code", metadata)
-
     def test_rig_sync_documents_canonical_3090_ti_hostname(self) -> None:
         configuration = (
             ROOT / "plugins/research/skills/rig-sync/references/configuration.md"
@@ -1936,7 +1914,7 @@ class ResearchContractTests(unittest.TestCase):
         init_skill = flat(init_root / "SKILL.md")
         templates = flat(init_root / "references/templates.md")
         reference_code = flat(
-            ROOT / "plugins/research/skills/integrate-reference-code/SKILL.md"
+            ROOT / "plugins/core/skills/integrate-reference-code/SKILL.md"
         )
 
         # The canon states the rule, and names the permitted reads so it cannot be over-read.
@@ -1971,47 +1949,6 @@ class ResearchContractTests(unittest.TestCase):
             skill = flat(ROOT / "plugins/research/skills" / skill_name / "SKILL.md")
             self.assertIn("Directives are closed", skill, skill_name)
             self.assertIn("another project on disk", skill, skill_name)
-
-    def test_intent_gate_family_is_congruent(self) -> None:
-        skills_root = ROOT / "plugins/research/skills"
-        contract_path = skills_root / "intent-gate/references/contract.md"
-        self.assertTrue(contract_path.is_file())
-        contract = " ".join(contract_path.read_text().split())
-        bodies = {
-            name: " ".join((skills_root / name / "SKILL.md").read_text().split())
-            for name in ("intent-mirror", "brainstorm-hold", "intent-gate")
-        }
-
-        # The two single-mode skills defer to the combined skill's contract as canon.
-        for name in ("intent-mirror", "brainstorm-hold"):
-            self.assertIn("../intent-gate/references/contract.md", bodies[name], name)
-        self.assertIn("references/contract.md", bodies["intent-gate"])
-
-        # Shared vocabulary appears in the contract and in every body.
-        for text_name, text in {"contract": contract, **bodies}.items():
-            self.assertIn("Did I sniff that right", text, text_name)
-            self.assertIn("greenlight", text, text_name)
-            self.assertIn("not doing yet", text, text_name)
-            self.assertIn("Engineering-auto may not bypass this gate", text, text_name)
-
-        # The hold forbids the host's planning mode, host-neutrally.
-        for text_name in ("contract", "brainstorm-hold", "intent-gate"):
-            text = contract if text_name == "contract" else bodies[text_name]
-            self.assertIn("planning mode", text, text_name)
-
-        # The combined skill confirms each detected mode separately.
-        self.assertIn("once per mode", bodies["intent-gate"].lower())
-        self.assertIn("Never bundle", bodies["intent-gate"])
-
-        # Exploration during a hold is negotiated, never assumed.
-        for text_name in ("contract", "brainstorm-hold", "intent-gate"):
-            text = contract if text_name == "contract" else bodies[text_name]
-            self.assertIn("Do you want exploration at this stage?", text, text_name)
-
-        # The mirror re-fires on every later directive once active.
-        for text_name in ("contract", "intent-mirror", "intent-gate"):
-            text = contract if text_name == "contract" else bodies[text_name]
-            self.assertIn("every later directive", text, text_name)
 
     def test_supervision_never_depends_on_an_open_chat(self) -> None:
         """A chat that blocked on a question at 02:12 once left a fleet unwatched for five hours."""
@@ -2270,6 +2207,7 @@ class ResearchContractTests(unittest.TestCase):
         envsync_skill = (ROOT / "plugins/research/skills/environment-sync/SKILL.md").read_text()
         self.assertIn('`gpus = "job"`', envsync_skill)
         self.assertIn("gpus=deferred to job", envsync_skill)
+
 
 if __name__ == "__main__":
     unittest.main()

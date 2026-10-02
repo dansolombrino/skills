@@ -23,7 +23,13 @@ values, and material the user supplies explicitly. See "Directives are closed" i
 1. Resolve the requested project path exactly.
 2. Require a new path, an empty directory, or an empty Git repository with no research content or
    remote history. If the path contains an existing project, legacy research layout, commits that
-   would need rewriting, or nontrivial files, stop as unsupported. Do not offer migration.
+   would need rewriting, or nontrivial files, stop as unsupported. Do not offer migration. The
+   project tag written by `project-init` does not count as content: `.project.toml`,
+   `.claude/settings.json`, and `.codex/config.toml` are allowed when they hold only what
+   `project-init` writes. Require `.project.toml` to list `research`; when the tag is missing or
+   omits `research`, stop and hand off to `project-init` to tag the project first. Never write or
+   edit these three files here; the scaffold leaves them untouched and includes them in the first
+   commit.
 3. Confirm project name, path, one-line description, GitHub remote, dispatch branch, exact Python
    patch, exact uv version, bounded GPU smoke command, and whether evaluations/plots are committed.
    Ask which single directory name the uv virtual environment should have — the hub development

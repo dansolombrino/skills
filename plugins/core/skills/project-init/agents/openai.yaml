@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project Init"
+  short_description: "Tag a project so domain plugins load only there"
+  default_prompt: "Use $project-init to tag this project with its categories and enable the matching plugins here."

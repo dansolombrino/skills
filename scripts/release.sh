@@ -9,6 +9,8 @@
 # Usage:
 #   scripts/release.sh [--dry-run] [--plugin NAME] [-m MESSAGE]
 #
+# One plugin per run (default: research). Release core and research separately.
+#
 # --dry-run validates and reports each host's installed version against the target without
 # tagging, pushing, or touching either host. It doubles as a standalone drift check.
 
@@ -24,7 +26,7 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY_RUN=1; shift ;;
     --plugin) PLUGIN="${2:?--plugin needs a value}"; shift 2 ;;
     -m|--message) TAG_MESSAGE="${2:?--message needs a value}"; shift 2 ;;
-    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -78,15 +80,15 @@ run_quietly() {
 run_quietly "validate_repo.py" python3 scripts/validate_repo.py
 
 # validate_repo.py covers three of the four places a version lives. The fourth is the pin in
-# tests/test_research_contracts.py, which is bumped in every release commit — catching a partial
+# tests/test_<plugin>_contracts.py, which is bumped in every release commit — catching a partial
 # bump here beats letting it surface as a bare assertion diff halfway through the suite.
-CONTRACT_TEST="tests/test_research_contracts.py"
-if [ -f "$CONTRACT_TEST" ]; then
-  pinned="$(sed -n 's/.*assertEqual(manifest\["version"\], "\([0-9.]*\)").*/\1/p' "$CONTRACT_TEST" | head -1)"
-  manifest_version="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$CODEX_MANIFEST")"
-  if [ -n "$pinned" ] && [ "$pinned" != "$manifest_version" ]; then
-    fail "version bump is incomplete: manifests say $manifest_version but $CONTRACT_TEST still pins $pinned"
-  fi
+CONTRACT_TEST="tests/test_${PLUGIN}_contracts.py"
+[ -f "$CONTRACT_TEST" ] || fail "no version pin for $PLUGIN: $CONTRACT_TEST is missing"
+pinned="$(sed -n 's/.*assertEqual(manifest\["version"\], "\([0-9.]*\)").*/\1/p' "$CONTRACT_TEST" | head -1)"
+manifest_version="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$CODEX_MANIFEST")"
+[ -n "$pinned" ] || fail "$CONTRACT_TEST has no assertEqual(manifest[\"version\"], ...) pin"
+if [ "$pinned" != "$manifest_version" ]; then
+  fail "version bump is incomplete: manifests say $manifest_version but $CONTRACT_TEST still pins $pinned"
 fi
 
 # The suite builds git fixtures in temp dirs. An ambient TMPDIR on a foreign-owned mount makes git
@@ -161,7 +163,12 @@ fi
 step "Sync Claude Code"
 
 claude plugin marketplace update "$MARKETPLACE"
-claude plugin update "$PLUGIN_ID" --scope user
+# `update` only refreshes an installed plugin, so a plugin's first release installs it instead.
+if [ "$CLAUDE_BEFORE" = "not-installed" ]; then
+  claude plugin install "$PLUGIN_ID" --scope user
+else
+  claude plugin update "$PLUGIN_ID" --scope user
+fi
 
 # ────────────────────────────── 5. sync Codex ───────────────────────────────
 step "Sync Codex"

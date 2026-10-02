@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).parents[1]
+PLUGINS = sorted(path.parent.parent for path in (ROOT / "plugins").glob("*/.codex-plugin/plugin.json"))
 SKILLS = ROOT / "plugins/research/skills"
 SKILL_SIGIL_RE = re.compile(r"\$([a-z0-9]+(?:-[a-z0-9]+)+)\b")
 
@@ -36,26 +37,31 @@ class DualHostManifestTests(unittest.TestCase):
             self.assertEqual(entry["source"], f"./plugins/{entry['name']}")
 
     def test_plugin_manifests_do_not_drift(self) -> None:
-        codex = read_json("plugins/research/.codex-plugin/plugin.json")
-        claude = read_json("plugins/research/.claude-plugin/plugin.json")
-        catalog = read_json(".claude-plugin/marketplace.json")["plugins"][0]
-
-        for field in ("name", "version", "description"):
-            self.assertEqual(codex[field], claude[field], f"{field} drifted between hosts")
-        self.assertEqual(catalog["version"], codex["version"])
+        catalog = {
+            entry["name"]: entry for entry in read_json(".claude-plugin/marketplace.json")["plugins"]
+        }
+        self.assertEqual(set(catalog), {plugin.name for plugin in PLUGINS})
+        for plugin in PLUGINS:
+            codex = read_json(f"plugins/{plugin.name}/.codex-plugin/plugin.json")
+            claude = read_json(f"plugins/{plugin.name}/.claude-plugin/plugin.json")
+            for field in ("name", "version", "description"):
+                self.assertEqual(codex[field], claude[field], f"{plugin.name}: {field} drifted between hosts")
+            self.assertEqual(catalog[plugin.name]["version"], codex["version"], plugin.name)
 
     def test_claude_manifest_omits_codex_only_and_redundant_fields(self) -> None:
-        claude = read_json("plugins/research/.claude-plugin/plugin.json")
-
-        # `interface` is Codex-only and warns under `claude plugin validate`.
-        self.assertNotIn("interface", claude)
-        # Claude auto-discovers ./skills/; declaring it again is redundant.
-        self.assertNotIn("skills", claude)
+        for plugin in PLUGINS:
+            claude = read_json(f"plugins/{plugin.name}/.claude-plugin/plugin.json")
+            # `interface` is Codex-only and warns under `claude plugin validate`.
+            self.assertNotIn("interface", claude, plugin.name)
+            # Claude auto-discovers ./skills/; declaring it again is redundant.
+            self.assertNotIn("skills", claude, plugin.name)
 
 
 class SharedSkillTreeTests(unittest.TestCase):
     def skill_dirs(self) -> list[Path]:
-        return sorted(path.parent for path in SKILLS.glob("*/SKILL.md"))
+        return sorted(
+            path.parent for plugin in PLUGINS for path in (plugin / "skills").glob("*/SKILL.md")
+        )
 
     def test_every_skill_is_discoverable_by_both_hosts(self) -> None:
         skill_dirs = self.skill_dirs()
@@ -86,7 +92,8 @@ class SharedSkillTreeTests(unittest.TestCase):
     def test_skill_bodies_carry_no_host_specific_invocation_sigil(self) -> None:
         offenders = [
             f"{markdown.relative_to(ROOT)}: {match.group(0)}"
-            for markdown in SKILLS.rglob("*.md")
+            for plugin in PLUGINS
+            for markdown in (plugin / "skills").rglob("*.md")
             for match in SKILL_SIGIL_RE.finditer(markdown.read_text())
         ]
         self.assertEqual(offenders, [], "distributed skills must not use the Codex '$' sigil")
@@ -135,7 +142,8 @@ class BehavioralRegressionTests(unittest.TestCase):
     def test_no_unresolvable_installed_placeholder(self) -> None:
         offenders = [
             f"{markdown.relative_to(ROOT)}: {line.strip()}"
-            for markdown in SKILLS.rglob("*.md")
+            for plugin in PLUGINS
+            for markdown in (plugin / "skills").rglob("*.md")
             for line in markdown.read_text().splitlines()
             if "<installed " in line
         ]

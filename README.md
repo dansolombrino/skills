@@ -3,7 +3,11 @@
 Personal skills distributed as a private plugin marketplace for **Codex and Claude Code**.
 
 Skills are organized as domain plugins: one plugin per domain, each containing related skills
-installed as a unit. The current plugin is **research**.
+installed as a unit. Two plugins exist:
+
+- **core** — always on in every project: intent gating (`intent-mirror`, `intent-gate`,
+  `brainstorm-hold`), `integrate-reference-code`, and `project-init`.
+- **research** — Research 2.0 GPU experiment workflow. Off by default; enabled per project.
 
 Both hosts read the same `SKILL.md` files. Only the manifests differ, so a skill is written once
 and stays identical everywhere.
@@ -32,6 +36,7 @@ Codex:
 
 ```bash
 codex plugin marketplace add git@github.com:dansolombrino/skills.git
+codex plugin add core@dansolombrino-skills
 codex plugin add research@dansolombrino-skills
 ```
 
@@ -39,11 +44,33 @@ Claude Code:
 
 ```bash
 /plugin marketplace add git@github.com:dansolombrino/skills.git
+/plugin install core@dansolombrino-skills
 /plugin install research@dansolombrino-skills
 ```
 
+Then turn `research` off globally, so it loads only in projects tagged with it:
+
+- `~/.claude/settings.json`: `"enabledPlugins": {"core@dansolombrino-skills": true, "research@dansolombrino-skills": false}`
+- `~/.codex/config.toml`: `[plugins."research@dansolombrino-skills"]` with `enabled = false`
+  (and `core` with `enabled = true`)
+
 Start a new session after installation so the bundled skills are loaded. Claude namespaces them
-as `research:<skill>`; Codex exposes them as `$<skill>`.
+as `core:<skill>` and `research:<skill>`; Codex exposes them as `$<skill>`.
+
+## Per-project plugins
+
+Each project declares its categories in `.project.toml` at its root (`categories = ["research"]`;
+`core` is implied). Ask for `project-init` in the project to write it: the skill's script generates
+the matching `enabledPlugins` entry in `.claude/settings.json` and a managed
+`[plugins."research@dansolombrino-skills"]` block in `.codex/config.toml`, preserving everything
+else in both files. `project-init` can also check that the marker and both files agree.
+
+Codex reads a project's `.codex/config.toml` only when that exact project root is trusted — a
+trusted parent does not count — and says nothing otherwise; `project-init` reports the trust
+state. Plugins load at session start, so a new tag takes effect in the next session.
+
+A fresh Research 2.0 project is tagged first, then scaffolded by `research-project-init` in a new
+session.
 
 Cross-rig workflows require the bundled `rig-sync` and `environment-sync` contracts plus GitHub
 access on every rig; the plugin stops before remote dispatch when source or runtime parity cannot
@@ -63,16 +90,16 @@ Codex:
 
 ```bash
 codex plugin marketplace upgrade dansolombrino-skills
-codex plugin remove research@dansolombrino-skills
-codex plugin add research@dansolombrino-skills
+codex plugin remove <plugin>@dansolombrino-skills
+codex plugin add <plugin>@dansolombrino-skills
 ```
 
 Claude Code:
 
 ```bash
 /plugin marketplace update dansolombrino-skills
-/plugin uninstall research@dansolombrino-skills
-/plugin install research@dansolombrino-skills
+/plugin uninstall <plugin>@dansolombrino-skills
+/plugin install <plugin>@dansolombrino-skills
 ```
 
 Restart the desktop app or start a new CLI session after updating.
@@ -93,10 +120,11 @@ validation fails if they drift.
 
 ## Release
 
-Bump the version, commit, then run:
+Bump the version, commit, then run once per changed plugin:
 
 ```bash
-scripts/release.sh
+scripts/release.sh --plugin core
+scripts/release.sh --plugin research
 ```
 
 One command validates, tags, pushes, and installs the new version on both hosts. It **fails unless
@@ -107,7 +135,7 @@ with.
 Check for drift at any time without changing anything:
 
 ```bash
-scripts/release.sh --dry-run
+scripts/release.sh --dry-run --plugin <plugin>
 ```
 
 This prints the target version against what each host actually has installed, and exits non-zero if
@@ -118,7 +146,7 @@ A version bump must land in **four** places, all checked before the release proc
 - `plugins/<plugin>/.codex-plugin/plugin.json`
 - `plugins/<plugin>/.claude-plugin/plugin.json`
 - the `.claude-plugin/marketplace.json` entry
-- the pin in `tests/test_research_contracts.py`
+- the pin in `tests/test_<plugin>_contracts.py`
 
 Manual fallback, if the script cannot run: validate and test, `git push origin main`,
 `claude plugin tag plugins/<plugin> --push`, then the update commands above for each host.

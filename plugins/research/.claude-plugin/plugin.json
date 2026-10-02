@@ -1,7 +1,7 @@
 {
   "name": "research",
-  "version": "8.5.0",
-  "description": "Materialize reproducible experiments across verified GPU rigs: scaffold projects, provision exact environments, deploy tested revisions, dispatch GPU waves as a self-balancing pull queue, supervise them from the hub without an open chat, keep a fleet-wide GPU lane board, visualize results, and gate action behind confirmed intent and explicit greenlights.",
+  "version": "9.0.0",
+  "description": "Materialize reproducible experiments across verified GPU rigs: scaffold projects, provision exact environments, deploy tested revisions, dispatch GPU waves as a self-balancing pull queue, supervise them from the hub without an open chat, keep a fleet-wide GPU lane board, and visualize results.",
   "author": {
     "name": "Dan Solombrino",
     "email": "dansolombrino@gmail.com",
@@ -16,12 +16,7 @@
     "reproducibility",
     "environment-parity",
     "uv",
-    "reference-code",
-    "adaptation",
     "visualization",
-    "gpu-board",
-    "alignment",
-    "brainstorm",
-    "greenlight"
+    "gpu-board"
   ]
 }

@@ -21,8 +21,10 @@ the marketplace entry. Do not edit files unless the user asks for fixes.
 - Confirm `agents/openai.yaml` matches the skill, its short description is 25–64 characters, and
   its default prompt explicitly names `$<skill>`.
 - For distributed skills, confirm `.codex-plugin/plugin.json`, `.claude-plugin/plugin.json`, both
-  marketplace entries, topical fit, and a matching version bump across all three relative to the
-  latest `<plugin>--v<version>` tag.
+  marketplace entries, topical fit, and a matching version bump across all three plus the pin in
+  `tests/test_<plugin>_contracts.py`, relative to the latest `<plugin>--v<version>` tag.
+- Flag relative links that leave the skill's plugin, and a domain plugin missing from
+  `project-init`'s `CATEGORIES`.
 - Confirm distributed instructions are host-neutral: no `$<skill>` sigil in any `.md`, no host
   product name outside a genuine per-host install target, and no capability described in terms
   only one host provides.

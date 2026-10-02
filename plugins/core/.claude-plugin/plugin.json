@@ -1,0 +1,20 @@
+{
+  "name": "core",
+  "version": "1.0.0",
+  "description": "Always-on working discipline for every project: mirror intent and hold brainstorm phases until an explicit greenlight, integrate reference code only through approved deviations, and tag each project with its categories so domain plugins such as research load only where they belong.",
+  "author": {
+    "name": "Dan Solombrino",
+    "email": "dansolombrino@gmail.com",
+    "url": "https://github.com/dansolombrino"
+  },
+  "repository": "https://github.com/dansolombrino/skills",
+  "keywords": [
+    "alignment",
+    "brainstorm",
+    "greenlight",
+    "reference-code",
+    "adaptation",
+    "project-init",
+    "project-categories"
+  ]
+}

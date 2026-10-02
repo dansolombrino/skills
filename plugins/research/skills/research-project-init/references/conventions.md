@@ -20,7 +20,7 @@ gates never become optional.
 Always return to the user for destructive operations, history rewrites, deletion of material data,
 overwriting user changes, new repositories/remotes/accounts/destinations, secrets/authentication
 changes, scope/budget/rig expansion, shared-GPU exceptions, or a
-source-to-target deviation governed by `integrate-reference-code`. System permission prompts are
+source-to-target deviation governed by `integrate-reference-code` (a `core` skill). System permission prompts are
 independent and always apply.
 
 ## Directives are closed
@@ -51,7 +51,7 @@ named by a directive rather than discovered by looking around:
   volumes and shared caches are declared. Read the declarations; never substitute a value observed
   on a rig or copied from another project for a missing one;
 - material the user placed in the project's own `references/` directory, or a reference the user
-  identifies explicitly by path or URL, governed by `integrate-reference-code`. References are
+  identifies explicitly by path or URL, governed by `integrate-reference-code` (a `core` skill). References are
   always user-supplied; never go looking for candidates on the filesystem.
 
 ## Taxonomy

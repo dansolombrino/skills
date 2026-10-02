@@ -5,6 +5,18 @@
   },
   "plugins": [
     {
+      "name": "core",
+      "source": {
+        "source": "local",
+        "path": "./plugins/core"
+      },
+      "policy": {
+        "installation": "INSTALLED_BY_DEFAULT",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
       "name": "research",
       "source": {
         "source": "local",

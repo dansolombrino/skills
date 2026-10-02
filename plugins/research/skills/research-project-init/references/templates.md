@@ -69,7 +69,8 @@ the scripts tree.
 # {{PROJECT_NAME}} — project notes
 
 <!-- Thin by design: generic research conventions come from the installed `research`
-     skill bundle. Only project-specific facts live here. -->
+     skill bundle, enabled here by the `research` tag in `.project.toml`, and from the
+     always-on `core` bundle. Only project-specific facts live here. -->
 
 ## What this project is
 
@@ -80,7 +81,7 @@ the scripts tree.
 Follow this project's own files and the `research` skill directives. Never list, read, or copy
 from another project on disk to decide layout, file contents, dependencies, or defaults, and
 never treat a similar-looking project as a template or precedent. Where a convention is not
-stated, ask rather than imitate. External source code enters only through
+stated, ask rather than imitate. External source code enters only through the `core` skill
 `integrate-reference-code`, from a reference the user identifies explicitly or places in
 `references/`.
 

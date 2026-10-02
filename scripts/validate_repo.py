@@ -83,6 +83,9 @@ def validate_skill(skill_dir: Path, errors: list[str], *, shared: bool = True) -
             resolved = (markdown.parent / target).resolve()
             if not resolved.exists():
                 errors.append(f"{markdown}: dead relative link {target!r}")
+            elif shared and not resolved.is_relative_to(skill_dir.parent.parent.resolve()):
+                # Each plugin installs on its own, so a link into a sibling plugin dangles there.
+                errors.append(f"{markdown}: relative link {target!r} leaves its plugin")
 
     # Skills are shared verbatim by every supported host, so instructions must not carry a
     # host-specific invocation sigil. Host product names are allowed where they name a real

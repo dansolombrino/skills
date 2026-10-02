@@ -1,6 +1,6 @@
 {
   "name": "dansolombrino-skills",
-  "description": "Personal research skills: reproducible GPU experiments across verified rigs.",
+  "description": "Personal skills: an always-on core (intent gating, reference integration, project categories) and opt-in domain plugins such as research (reproducible GPU experiments across verified rigs).",
   "owner": {
     "name": "Dan Solombrino",
     "email": "dansolombrino@gmail.com",
@@ -8,10 +8,17 @@
   },
   "plugins": [
     {
+      "name": "core",
+      "source": "./plugins/core",
+      "description": "Always-on working discipline for every project: mirror intent and hold brainstorm phases until an explicit greenlight, integrate reference code only through approved deviations, and tag each project with its categories so domain plugins such as research load only where they belong.",
+      "version": "1.0.0",
+      "category": "Developer Tools"
+    },
+    {
       "name": "research",
       "source": "./plugins/research",
-      "description": "Materialize reproducible experiments across verified GPU rigs: scaffold projects, provision exact environments, deploy tested revisions, dispatch GPU waves as a self-balancing pull queue, supervise them from the hub without an open chat, keep a fleet-wide GPU lane board, visualize results, and gate action behind confirmed intent and explicit greenlights.",
-      "version": "8.5.0",
+      "description": "Materialize reproducible experiments across verified GPU rigs: scaffold projects, provision exact environments, deploy tested revisions, dispatch GPU waves as a self-balancing pull queue, supervise them from the hub without an open chat, keep a fleet-wide GPU lane board, and visualize results.",
+      "version": "9.0.0",
       "category": "Developer Tools"
     }
   ]

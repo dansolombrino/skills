@@ -1,0 +1,39 @@
+{
+  "name": "core",
+  "version": "1.0.0",
+  "description": "Always-on working discipline for every project: mirror intent and hold brainstorm phases until an explicit greenlight, integrate reference code only through approved deviations, and tag each project with its categories so domain plugins such as research load only where they belong.",
+  "author": {
+    "name": "Dan Solombrino",
+    "email": "dansolombrino@gmail.com",
+    "url": "https://github.com/dansolombrino"
+  },
+  "repository": "https://github.com/dansolombrino/skills",
+  "keywords": [
+    "alignment",
+    "brainstorm",
+    "greenlight",
+    "reference-code",
+    "adaptation",
+    "project-init",
+    "project-categories"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Core",
+    "shortDescription": "Intent gating, reference integration, project tags",
+    "longDescription": "Skills that belong in every project. Mirror the user's request back before acting, and hold brainstorm phases with no plan or code until an explicit greenlight. Integrate reference implementations through protected, user-approved deviations. Tag a project with its categories in .project.toml and generate each host's per-project plugin enablement from it, so domain plugins such as research load only in the projects that use them.",
+    "developerName": "Dan Solombrino",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Show me that you understood my request before doing anything, then hold in brainstorm phase until I greenlight the plan.",
+      "Tag this project as a research project so the research skills load here.",
+      "Port this reference implementation into my codebase and show me every deviation first."
+    ],
+    "screenshots": []
+  }
+}
