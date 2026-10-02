@@ -443,6 +443,23 @@ class RigSyncTests(unittest.TestCase):
             with self.assertRaisesRegex(rigsync.RigSyncError, "--confirm"):
                 rigsync.prune(config, [machine], [wave], dry_run=False, confirmed=False)
 
+    def test_prune_refuses_a_wave_the_supervisor_has_not_finished(self) -> None:
+        import json
+
+        with tempfile.TemporaryDirectory() as raw:
+            config, machine, _old_revision, revision = self.make_git_fixture(Path(raw))
+            wave = "20260802-120000"
+            rigsync.deploy_revision(config, [machine], wave, revision, dry_run=False, confirmed=True)
+            state = config.root / ".waves" / "_state" / wave / "queue.json"
+            write(state, json.dumps({"runs": [], "finished_at": None}))
+            with mock.patch.object(rigsync, "wave_activity", return_value={}):
+                with self.assertRaisesRegex(rigsync.RigSyncError, "not finished"):
+                    rigsync.prune(config, [machine], [wave], dry_run=False, confirmed=True)
+                self.assertTrue((machine.repo_path / ".waves" / wave).exists())
+                write(state, json.dumps({"runs": [], "finished_at": "2026-08-02T13:00:00+02:00"}))
+                rigsync.prune(config, [machine], [wave], dry_run=False, confirmed=True)
+            self.assertFalse((machine.repo_path / ".waves" / wave).exists())
+
     def test_remove_environment_refuses_unexpected_paths(self) -> None:
         machine = rigsync.Machine("peer", "peer", None, Path("/srv/p"), False)
         for path in (Path("/srv/p/.envs"), Path("/srv/p/.envs/../code"), Path("/srv/p/.envs/x/0123456789abcdef")):
@@ -1409,7 +1426,7 @@ class OffloadTests(unittest.TestCase):
             self.config = rigsync.load_config(self.hub_root, self.hub_root / "sync.toml", base / "machines.toml")
         self.rig = self.config.machines["rig"]
         patches = [
-            mock.patch.object(rigsync, "remote", side_effect=lambda machine, argv, check=True: rigsync.run(argv, check=check)),
+            mock.patch.object(rigsync, "remote", side_effect=lambda machine, argv, check=True, input_bytes=None: rigsync.run(argv, check=check, input_bytes=input_bytes)),
             mock.patch.object(rigsync, "rsync_remote", side_effect=lambda machine, path, alias=None: f"{path}/"),
             mock.patch.object(rigsync, "rsync_flags", return_value=["rsync", "-a", "--itemize-changes"]),
             mock.patch.object(rigsync, "check_storage", return_value=(0, [])),
@@ -1450,6 +1467,25 @@ class OffloadTests(unittest.TestCase):
         with redirect_stdout(out), redirect_stderr(out):
             rigsync.offload(self.config, self.rig, WAVE, kwargs.get("dry_run", False), kwargs.get("confirmed", True))
         return out.getvalue()
+
+    def test_offload_inventory_of_a_large_wave_is_not_one_oversized_argument(self) -> None:
+        done = self.add_run("model=done", "done")
+        pad = "x" * 200
+        phantoms = [
+            {
+                "id": f"model=p{index}", "token": f"p{index}",
+                "status_path": f"evaluations/000_exp/{pad}/p{index}/.status.json",
+                "artifact": f"evaluations/000_exp/{pad}/p{index}/result.json",
+                "checkpoint_dir": f"checkpoints/000_exp/{pad}/p{index}",
+                "eval_dir": f"evaluations/000_exp/{pad}/p{index}",
+            }
+            for index in range(250)
+        ]
+        self.assertGreater(len(rigsync.offload_inventory_script([done, *phantoms])), 131072)
+        self.register([done, *phantoms])
+        out = self.offload()
+        self.assertIn("freed 2", out)
+        self.assertTrue((self.hub_root / done["checkpoint_dir"] / "step2.pt").exists())
 
     def test_offload_copies_everything_and_frees_only_what_the_predicate_allows(self) -> None:
         import json as _json

@@ -481,6 +481,7 @@ def build_queue(manifest: dict, project_root: Path, config, settings: Settings) 
         "offload": sorted(set(offload)),
         "ready": {rig: [] for rig in pool},
         "blocked_lanes": {},
+        "waiting_lanes": {},
         "next_seq": 1,
         "runs": runs,
         "finished_at": None,
@@ -868,28 +869,35 @@ class Cycle:
         return None
 
     def ensure_lane(self, queue: dict, machine, gpu: str, view: dict, has_work: bool) -> bool:
-        """Return whether the lane's session is alive, launching or relaunching it when it should be."""
+        """Return whether the lane may be fed: its session is alive (or was just launched) and the board gives us the card."""
         session = session_name(queue, machine.name, gpu)
-        if session in view["sessions"]:
-            return True
         key = f"{machine.name}:{gpu}"
-        if not has_work or key in queue["blocked_lanes"]:
+        alive = session in view["sessions"]
+        if alive and self.holds_lane(machine.name, gpu, session):
+            return True
+        if not alive and (not has_work or key in queue["blocked_lanes"]):
             return False
+        # the board decides first: a refused claim keeps the lane out (an alive one is simply not fed)
+        if not self.claim_lane(queue, machine.name, gpu, session):
+            return False
+        if alive:
+            return True
         problem = self.verify_lane(queue, machine, gpu)
         if problem:
             queue["blocked_lanes"][key] = problem
             self.event("recovery-blocked", rig=machine.name, gpu=gpu, problem=problem)
+            self.board_release(machine.name, gpu, f"wave {queue['wave_id']} could not start this lane")
             return False
         sh(machine, f'rm -f "$1/drain"', lane_dir(machine, queue["wave_id"], gpu))
         result = sh(machine, self.lane_launch_command(queue, machine, gpu))
         if result.returncode != 0:
             queue["blocked_lanes"][key] = f"tmux: {result.stderr.strip()[-200:]}"
             self.event("recovery-blocked", rig=machine.name, gpu=gpu, problem=queue["blocked_lanes"][key])
+            self.board_release(machine.name, gpu, f"wave {queue['wave_id']} could not start this lane")
             return False
         rebooted = bool(view.get("boot_at") and parse_iso(view["boot_at"]) and parse_iso(view["boot_at"]) > (parse_iso(queue["registered_at"]) or self.at))
         launched_before = any(r.get("event") == "lane-launched" and r.get("rig") == machine.name and r.get("gpu") == gpu for r in self.wave.ledger())
         self.event("lane-relaunched" if launched_before else "lane-launched", rig=machine.name, gpu=gpu, session=session, rebooted=rebooted)
-        self.board_claim(queue, machine.name, gpu, session)
         return True
 
     def feed(self, queue: dict, machine, gpu: str, view: dict, vram: int | None) -> None:
@@ -1039,7 +1047,26 @@ class Cycle:
 
     # -- board ------------------------------------------------------------
 
-    def board_claim(self, queue: dict, rig: str, gpu: str, session: str) -> None:
+    def holds_lane(self, rig: str, gpu: str, session: str) -> bool:
+        held = board.read_json(self.board_config.lane_path(rig, gpu)) or {}
+        return held.get("tmux_session") == session
+
+    def claim_lane(self, queue: dict, rig: str, gpu: str, session: str) -> bool:
+        """Claim the card on the board; a refusal is remembered and reported once, until it changes."""
+        problem = self.board_claim(queue, rig, gpu, session)
+        waiting = queue.setdefault("waiting_lanes", {})
+        key = f"{rig}:{gpu}"
+        if problem is None:
+            if waiting.pop(key, None) is not None:
+                self.event("claim-granted", rig=rig, gpu=gpu)
+            return True
+        if waiting.get(key) != problem:
+            self.event("claim-refused", rig=rig, gpu=gpu, problem=problem)
+        waiting[key] = problem
+        return False
+
+    def board_claim(self, queue: dict, rig: str, gpu: str, session: str) -> str | None:
+        """Return None when the board gives us the lane, else why it refused."""
         args = argparse.Namespace(
             rig=rig, gpu=gpu, project=queue["project"], experiment=queue["experiment"], wave=queue["wave_id"],
             project_root=queue["project_root"], runs_total=len(queue["runs"]), tmux_session=session,
@@ -1050,8 +1077,7 @@ class Cycle:
                 code = board.claim(self.board_config, args)
         except board.BoardError as exc:
             code, sink = 2, io.StringIO(str(exc))
-        if code != 0:
-            self.event("claim-refused", rig=rig, gpu=gpu, problem=sink.getvalue().strip()[-300:])
+        return None if code == 0 else (sink.getvalue().strip()[-300:] or f"board claim exited {code}")
 
     def board_refresh(self, queue: dict, lane_rows: list[dict]) -> None:
         for row in lane_rows:
@@ -1131,7 +1157,7 @@ class Cycle:
                         waiting = any(r["state"] == "queued" and eligible(queue, r, rig, vram[(rig, gpu)]) for r in queue["runs"])
                     alive = self.ensure_lane(queue, machine, gpu, view, waiting or mine)
                     if not alive:
-                        if view["lanes"].get(gpu, {}).get("drain") and self.board_config.lane_path(rig, gpu).exists():
+                        if view["lanes"].get(gpu, {}).get("drain") and self.holds_lane(rig, gpu, session_name(queue, rig, gpu)):
                             # the drained loop has exited: only now is the card really free for someone else
                             self.board_release(rig, gpu, f"wave {queue['wave_id']} has nothing left for this lane")
                         continue
@@ -1190,17 +1216,20 @@ def build_snapshot(queue: dict, runtime: dict, wave: Wave, vram: dict, at: datet
                 free = None if free is None or cost is None else free + cost
                 basis = basis or run_basis
             blocked = queue["blocked_lanes"].get(f"{rig}:{gpu}")
+            waiting = queue.get("waiting_lanes", {}).get(f"{rig}:{gpu}")
             if down:
                 state = "rig down"
             elif blocked:
                 state = "blocked"
+            elif waiting and not active and not buffered:
+                state = "waiting for board"
             elif active:
                 state = "stale" if stale else "running"
             elif buffered:
                 state = "starting"
             else:
                 state = "idle"
-            lane_free[(rig, gpu)] = None if down or blocked else free
+            lane_free[(rig, gpu)] = None if down or blocked or state == "waiting for board" else free
             observed = (active or {}).get("observed") or {}
             heartbeat = parse_iso(observed.get("heartbeat"))
             rows.append(
@@ -1662,9 +1691,17 @@ def finish(wave: Wave, board_config, args: argparse.Namespace) -> int:
     print(f"[{'dry-run' if args.dry_run else 'finish'}] wave {wave.wave_id}: stop supervising ({len(live)} non-terminal)")
     if args.dry_run:
         return 0
-    wave.log("finish", abandoned=bool(live))
+    with WaveLock(wave):
+        queue = wave.load()
+        # rig-sync prune reads this mark: an abandoned wave is over too
+        queue["finished_at"] = queue.get("finished_at") or iso(now())
+        wave.save(queue)
+        wave.log("finish", abandoned=bool(live))
     for rig, pool in queue["pool"].items():
         for gpu in pool.get("lanes", []):
+            held = board.read_json(board_config.lane_path(rig, gpu)) or {}
+            if held.get("tmux_session") != session_name(queue, rig, gpu):
+                continue  # another wave's card, or already free
             with contextlib.suppress(board.BoardError), contextlib.redirect_stdout(io.StringIO()):
                 board.release(board_config, argparse.Namespace(rig=rig, gpu=gpu, reason=f"wave {wave.wave_id} finished"))
     index_path(board_config, queue["project"], wave.wave_id).unlink(missing_ok=True)

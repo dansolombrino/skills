@@ -32,6 +32,7 @@ a code problem.
 | lane stopped on 88 | `lane offload-on --rig <rig>` and `lane unblock` if blocked; low disk never removes a rig |
 | cluster `job-timeout` | the service already resized it from measured progress; confirm the number is sane, else `queue constrain --walltime-s`. A run that restarts from scratch and cannot fit 24 h goes to the user |
 | `budget-cap` reached | `ask`; meanwhile the cluster takes no new jobs |
+| `claim-refused` (lane `waiting for board`) | nothing to undo: the service already kept the lane out and retries every cycle. Report who holds the card; if the hold looks stale, `rig-board status --reconcile` evidence goes to the user, never a forced release |
 | a card in the envelope became free on the fleet board | run the full `rig-sync` and `environment-sync` gates for it; admitting a lane that was not in the pool is a pool change: `ask` |
 
 ### Tail stealing

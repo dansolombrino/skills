@@ -43,6 +43,10 @@ The queue is ordered once by dispatch. A lane holds at most one run in flight pl
 so a fast card simply takes more runs: a wrong initial estimate corrects itself, and an unstarted
 run can still be re-routed. The hub reaches rigs; rigs never reach the hub.
 
+The fleet board decides first: the service claims a card before it starts a lane there, and a
+refused claim keeps the lane out (state `waiting for board`, one `claim-refused` event per refusal)
+until the holder releases it. A lane whose card the board gives to another wave is not fed.
+
 ## In a chat
 
 1. **Never block while a wave is non-terminal.** Do not use a blocking-question tool and do not

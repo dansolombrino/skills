@@ -121,7 +121,8 @@ under `?`.
 
 `prune` removes the named waves' worktrees with `git worktree remove` (never forced), then every
 `.envs/<env_key>` no remaining worktree uses; it refuses a wave with any activity, any activity it
-cannot attribute to a wave, and a dirty worktree, and leaves unrecognized `.envs/` entries alone.
+cannot attribute to a wave, a dirty worktree, and a wave the hub's supervisor still has registered
+without `finished_at` (`sweep-supervisor finish` first), and leaves unrecognized `.envs/` entries alone.
 It is proposed by `sweep-dispatch` when a wave ends and by `experiments-tracking` reconciliation,
 and runs with `--confirm` only after the user approves the dry run. A pruned wave stays
 recoverable: `deploy-revision` recreates its worktree from the tag. `push-source` never establishes Research 2.0 launch consistency and must not

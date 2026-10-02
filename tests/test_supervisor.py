@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import contextlib
 import importlib.util
 import io
@@ -54,9 +55,9 @@ def write(path: Path, text: str, executable: bool = False) -> None:
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
 
-def local_remote(machine, argv, *, check=True):
+def local_remote(machine, argv, *, check=True, input_bytes=None):
     """Every rig is a directory on this host: the shell the supervisor sends really runs."""
-    return rigsync.run(argv, check=check)
+    return rigsync.run(argv, check=check, input_bytes=input_bytes)
 
 
 class SupervisorTests(unittest.TestCase):
@@ -370,6 +371,63 @@ class SupervisorTests(unittest.TestCase):
         run = [r for r in self.queue()["runs"] if r["id"] == "model=m3"][0]
         self.assertEqual((run["state"], run["exclude"]), ("queued", ["peer"]))
         self.assertEqual(len(list((self.lane(self.peer) / "retracted").iterdir())), 1)
+
+    def hold_for_another_wave(self, rig: str, gpu: str = "0") -> Path:
+        other = argparse.Namespace(
+            rig=rig, gpu=gpu, project="other", experiment="000_exp", wave="20260101-000000",
+            project_root="/elsewhere", runs_total=1, tmux_session=f"other_000_exp_20260101-000000_{rig}_gpu{gpu}",
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(board.claim(board.load_config(self.registry), other), 0)
+        return self.base / "board" / "lanes" / rig / f"gpu{gpu}.json"
+
+    def test_a_refused_claim_keeps_the_lane_out_until_the_board_frees_it(self) -> None:
+        held = self.hold_for_another_wave("peer")
+        self.register()
+        self.cli("cycle", "--wave", WAVE)
+        self.cli("cycle", "--wave", WAVE)
+        sessions = (self.base / "tmux-sessions").read_text() if (self.base / "tmux-sessions").exists() else ""
+        self.assertNotIn("_peer_gpu0", sessions)
+        queue = self.queue()
+        self.assertFalse([r for r in queue["runs"] if (r["lane"] or {}).get("rig") == "peer"])
+        self.assertIn("peer:0", queue["waiting_lanes"])
+        events = [r["event"] for r in supervisor.Wave(self.hub, WAVE).ledger()]
+        self.assertEqual(events.count("claim-refused"), 1, "a standing refusal is reported once")
+        self.assertEqual(board.read_json(held)["project"], "other")
+        snapshot = board.read_json(supervisor.Wave(self.hub, WAVE).snapshot_path)
+        self.assertIn("waiting for board", [row["state"] for row in snapshot["lanes"] if row["kind"] == "lane"])
+        held.unlink()
+        self.cli("cycle", "--wave", WAVE)
+        queue = self.queue()
+        self.assertNotIn("peer:0", queue["waiting_lanes"])
+        self.assertTrue([r for r in queue["runs"] if (r["lane"] or {}).get("rig") == "peer"])
+        self.assertEqual(board.read_json(held)["wave_id"], WAVE)
+
+    def test_an_alive_lane_the_board_gives_to_another_wave_is_not_fed(self) -> None:
+        self.register()
+        self.cli("cycle", "--wave", WAVE)
+        lane_file = self.base / "board" / "lanes" / "peer" / "gpu0.json"
+        lane_file.unlink()
+        self.hold_for_another_wave("peer")
+        before = [r["id"] for r in self.queue()["runs"] if (r["lane"] or {}).get("rig") == "peer"]
+        for run in [r for r in self.queue()["runs"] if (r["lane"] or {}).get("rig") == "peer"]:
+            self.finish_entry(self.peer, run["entry"], 0, run["artifact"])
+        self.cli("cycle", "--wave", WAVE)
+        fed = [r["id"] for r in self.queue()["runs"] if (r["lane"] or {}).get("rig") == "peer" and r["state"] == "assigned"]
+        self.assertTrue(before)
+        self.assertEqual(fed, [])
+        self.assertEqual(board.read_json(lane_file)["project"], "other")
+
+    def test_finish_releases_only_the_lanes_this_wave_holds(self) -> None:
+        self.register()
+        self.cli("cycle", "--wave", WAVE)
+        lane_file = self.base / "board" / "lanes" / "peer" / "gpu0.json"
+        lane_file.unlink()
+        self.hold_for_another_wave("peer")
+        self.assertEqual(self.cli("finish", "--wave", WAVE, "--abandon", "--confirm")[0], 0)
+        self.assertEqual(board.read_json(lane_file)["project"], "other")
+        self.assertFalse((self.base / "board" / "lanes" / "hub" / "gpu0.json").exists())
+        self.assertTrue(self.queue()["finished_at"], "rig-sync prune reads finished_at")
 
     def test_cluster_takes_from_the_tail_and_an_idle_lane_pulls_a_pending_job(self) -> None:
         pool = {"hub": {"lanes": ["0"]}, "cluster": {"max_jobs": 2, "core_hours_cap": 1000, "default_walltime_s": 3600}}

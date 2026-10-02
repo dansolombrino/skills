@@ -352,10 +352,12 @@ def run(
     return result
 
 
-def remote(machine: Machine, argv: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
+def remote(
+    machine: Machine, argv: list[str], *, check: bool = True, input_bytes: bytes | None = None
+) -> subprocess.CompletedProcess:
     if machine.local:
-        return run(argv, check=check)
-    return run(ssh_base(machine) + [shlex.join(argv)], check=check)
+        return run(argv, input_bytes=input_bytes, check=check)
+    return run(ssh_base(machine) + [shlex.join(argv)], input_bytes=input_bytes, check=check)
 
 
 def require_git(config: Config) -> GitSettings:
@@ -903,6 +905,13 @@ def prune(
         raise RigSyncError("prune needs at least one wave id")
     for wave in waves:
         validate_wave(wave)
+    live = [wave for wave in waves if supervised_unfinished(config, wave)]
+    if live:
+        raise RigSyncError(
+            "wave(s) still registered with the supervisor and not finished: "
+            + ", ".join(live)
+            + "; finish them with sweep-supervisor first"
+        )
     plans = []
     for machine in machines:
         active = wave_activity(config, machine)
@@ -947,6 +956,18 @@ def prune(
                 remove_environment(machine, path)
         if not dry_run:
             git_command(machine, "worktree", "prune")
+
+
+def supervised_unfinished(config: Config, wave: str) -> bool:
+    """A wave the hub's supervisor still runs: its queue exists and has no `finished_at`."""
+    path = config.root / WAVES_DIR / STATE_DIR / wave / "queue.json"
+    if not path.exists():
+        return False
+    try:
+        queue = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return True  # unreadable state is not proof the wave is over
+    return not (isinstance(queue, dict) and queue.get("finished_at"))
 
 
 def remove_environment(machine: Machine, path: Path) -> None:
@@ -1884,7 +1905,9 @@ def offload(config: Config, machine: Machine, wave: str, dry_run: bool, confirme
         for key in ("status_path", "checkpoint_dir", "eval_dir"):
             _safe_relative(entry.get(key), f"queue run {entry.get('id')!r}.{key}")
         runs.append(entry)
-    result = remote(machine, ["sh", "-c", offload_inventory_script(runs), "rigsync", str(machine.repo_path)], check=False)
+    # the script grows with the wave; over stdin it never meets the kernel's per-argument limit
+    script = offload_inventory_script(runs).encode()
+    result = remote(machine, ["sh", "-s", "--", str(machine.repo_path)], input_bytes=script, check=False)
     if result.returncode != 0:
         raise RigSyncError(f"{machine.name}: offload inventory failed ({result.returncode})")
     rig_now, inventory = parse_offload_inventory(result.stdout.decode(errors="replace"))
