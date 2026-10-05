@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f2a37">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>ReSirch Killalot</title>
+<style>
+:root {
+  --bg: #f6f5f2; --panel: #ffffff; --ink: #1c2128; --muted: #5f6b7a; --line: #e2e0da;
+  --accent: #1f5fbf; --accent-ink: #ffffff; --warn: #b4531a; --danger: #b42318; --ok: #1f7a4d;
+  --chip: #eceae4; --shadow: 0 1px 2px rgba(0,0,0,.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12161c; --panel: #1a2029; --ink: #e6e9ee; --muted: #9aa5b4; --line: #2a323e;
+    --accent: #6ea8fe; --accent-ink: #0b1220; --warn: #f0a46c; --danger: #ff8a7a; --ok: #6fd3a0;
+    --chip: #232b36; --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); }
+body { font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; padding-bottom: env(safe-area-inset-bottom); }
+header { position: sticky; top: 0; z-index: 2; background: var(--bg); border-bottom: 1px solid var(--line); padding: 10px 16px 0; padding-top: max(10px, env(safe-area-inset-top)); }
+h1 { font-size: 17px; margin: 0 0 8px; letter-spacing: .2px; }
+h1 small { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 6px; }
+nav { display: flex; gap: 4px; overflow-x: auto; }
+nav button { border: 0; background: none; color: var(--muted); padding: 8px 10px; font: inherit; border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; }
+nav button.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+main { padding: 12px 16px 40px; max-width: 760px; margin: 0 auto; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 18px 0 8px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 0 0 8px; box-shadow: var(--shadow); }
+.card.click { cursor: pointer; }
+.title { font-weight: 600; word-break: break-word; }
+.meta { color: var(--muted); font-size: 13px; margin-top: 2px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip { background: var(--chip); border-radius: 999px; padding: 1px 8px; font-size: 12px; color: var(--ink); }
+.chip.warn { color: var(--warn); } .chip.danger { color: var(--danger); } .chip.ok { color: var(--ok); }
+.empty { color: var(--muted); font-size: 14px; padding: 4px 2px 8px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+button.b { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 8px; padding: 7px 12px; cursor: pointer; min-height: 36px; }
+button.b.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.b.danger { color: var(--danger); }
+button.b:disabled { opacity: .5; cursor: default; }
+pre { background: var(--chip); border-radius: 8px; padding: 10px; overflow-x: auto; font-size: 12.5px; white-space: pre-wrap; word-break: break-word; max-height: 60vh; }
+input, select, textarea { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; width: 100%; }
+textarea { min-height: 70px; }
+label { display: block; font-size: 13px; color: var(--muted); margin: 8px 0 4px; }
+.err { color: var(--danger); margin: 8px 0; }
+.toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; }
+.toast.on { opacity: 1; }
+.back { border: 0; background: none; color: var(--accent); font: inherit; padding: 0; cursor: pointer; margin-bottom: 8px; }
+.hist { font-size: 12.5px; color: var(--muted); }
+.hist div { padding: 2px 0; border-top: 1px dashed var(--line); }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+@media (max-width: 420px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>ReSirch Killalot <small id="who"></small></h1>
+  <nav id="tabs">
+    <button data-tab="inbox" class="on">Inbox</button>
+    <button data-tab="projects">Projects</button>
+    <button data-tab="digest">Digest</button>
+    <button data-tab="devices">Devices</button>
+  </nav>
+</header>
+<main id="main"></main>
+<div class="toast" id="toast"></div>
+<script>
+"use strict";
+const main = document.getElementById("main");
+let current = { tab: "inbox" };
+
+// Every string from the store goes through textContent: item titles come from agents.
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k === "class") node.className = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else node.setAttribute(k, v === true ? "" : v);
+  }
+  for (const child of children.flat()) {
+    if (child === null || child === undefined || child === false) continue;
+    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  }
+  return node;
+}
+function toast(text) {
+  const t = document.getElementById("toast");
+  t.textContent = text; t.classList.add("on");
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.classList.remove("on"), 2600);
+}
+async function api(path, body) {
+  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json", "X-Killalot": "1" }, body: JSON.stringify(body) };
+  const res = await fetch(path, { credentials: "same-origin", cache: "no-store", ...opts });
+  if (res.status === 401) { location.reload(); throw new Error("not paired"); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+function when(isoText) {
+  if (!isoText) return "—";
+  const d = new Date(isoText);
+  const diff = (Date.now() - d.getTime()) / 1000;
+  const abs = Math.abs(diff), fut = diff < 0;
+  const span = abs < 90 ? "now" : abs < 5400 ? Math.round(abs / 60) + "m" : abs < 129600 ? Math.round(abs / 3600) + "h" : Math.round(abs / 86400) + "d";
+  return span === "now" ? "now" : fut ? "in " + span : span + " ago";
+}
+const STATE_CHIP = { proposed: "warn", waiting: "danger", in_progress: "ok", snoozed: "", accepted: "", done: "ok", rejected: "", dropped: "" };
+
+function itemCard(item, opts = {}) {
+  const meta = el("div", { class: "meta" },
+    el("span", { class: "chip " + (STATE_CHIP[item.state] || "") }, item.state.replace("_", " ")),
+    el("span", { class: "chip" }, item.kind),
+    opts.hideProject ? null : el("span", {}, item.project_name || item.project.split("/").pop()),
+    item.owner === "agent" ? el("span", {}, "· agent") : null,
+    item.due_at ? el("span", {}, "· due " + when(item.due_at)) : null,
+    item.state === "waiting" && item.wait_reason ? el("span", {}, "· " + item.wait_reason) : null,
+    el("span", {}, "· #" + item.id));
+  return el("div", { class: "card click", onclick: () => go({ tab: "item", id: item.id, from: current }) },
+    el("div", { class: "title" }, item.title), meta);
+}
+
+async function render() {
+  for (const b of document.querySelectorAll("#tabs button")) b.classList.toggle("on", b.dataset.tab === current.tab || (current.tab === "project" && b.dataset.tab === "projects"));
+  main.replaceChildren(el("div", { class: "empty" }, "Loading…"));
+  try {
+    const view = { inbox: viewInbox, projects: viewProjects, project: viewProject, item: viewItem, digest: viewDigest, devices: viewDevices }[current.tab];
+    main.replaceChildren(...(await view()));
+  } catch (e) {
+    main.replaceChildren(el("div", { class: "err" }, e.message));
+  }
+}
+function go(state) { current = state; history.pushState(state, ""); render(); window.scrollTo(0, 0); }
+window.addEventListener("popstate", (e) => { current = e.state || { tab: "inbox" }; render(); });
+document.getElementById("tabs").addEventListener("click", (e) => { const t = e.target.closest("button"); if (t) go({ tab: t.dataset.tab }); });
+
+async function viewInbox() {
+  const data = await api("/api/inbox");
+  document.getElementById("who").textContent = "· " + data.device;
+  const out = [];
+  let total = 0;
+  for (const [key, label] of data.buckets) {
+    const items = data.inbox[key];
+    total += items.length;
+    out.push(el("h2", {}, `${label} (${items.length})`));
+    out.push(items.length ? items.map((i) => itemCard(i)) : el("div", { class: "empty" }, "Nothing here."));
+  }
+  document.title = total ? `(${total}) ReSirch Killalot` : "ReSirch Killalot";
+  return out;
+}
+
+async function viewProjects() {
+  const data = await api("/api/projects");
+  const active = data.projects.filter((p) => !p.parked), parked = data.projects.filter((p) => p.parked);
+  const row = (p) => el("div", { class: "card click", onclick: () => go({ tab: "project", path: p.path, name: p.name }) },
+    el("div", { class: "title" }, p.name),
+    el("div", { class: "meta" },
+      p.stale ? el("span", { class: "chip danger" }, "stale") : null,
+      p.unpark_suggested ? el("span", { class: "chip warn" }, "active again — unpark?") : null,
+      el("span", {}, `${p.open} open`),
+      p.counts.proposed ? el("span", {}, `· ${p.counts.proposed} proposed`) : null,
+      el("span", {}, "· last " + when(p.last_activity)),
+      p.categories.length ? el("span", {}, "· " + p.categories.join(", ")) : null),
+    p.next ? el("div", { class: "meta" }, "next: #" + p.next.id + " " + p.next.title) : null,
+    p.parked && p.park_reason ? el("div", { class: "meta" }, "parked: " + p.park_reason) : null);
+  return [
+    el("h2", {}, `Active (${active.length})`), active.length ? active.map(row) : el("div", { class: "empty" }, "No tagged projects found."),
+    el("h2", {}, `Parked (${parked.length})`), parked.length ? parked.map(row) : el("div", { class: "empty" }, "None parked."),
+    el("div", { class: "meta" }, `Stale = no activity for ${data.stale_days}+ days with items still open.`),
+  ];
+}
+
+async function viewProject() {
+  const [data, projects] = await Promise.all([api("/api/project?path=" + encodeURIComponent(current.path) + (current.all ? "&all=1" : "")), api("/api/projects")]);
+  const p = projects.projects.find((x) => x.path === current.path) || { name: current.name, parked: false };
+  const groups = {};
+  for (const item of data.items) (groups[item.state] = groups[item.state] || []).push(item);
+  const order = ["waiting", "proposed", "in_progress", "accepted", "snoozed", "done", "rejected", "dropped"];
+  const out = [el("button", { class: "back", onclick: () => go({ tab: "projects" }) }, "‹ Projects"),
+    el("div", { class: "title" }, p.name), el("div", { class: "meta" }, current.path)];
+  const actions = el("div", { class: "row" });
+  if (p.parked) {
+    actions.append(el("button", { class: "b", onclick: async () => { await api("/api/unpark", { project: current.path }); toast("Unparked"); render(); } }, "Unpark"));
+  } else {
+    actions.append(el("button", { class: "b", onclick: () => parkForm(out, actions) }, "Park…"));
+  }
+  actions.append(el("button", { class: "b", onclick: () => { current.all = !current.all; render(); } }, current.all ? "Open only" : "Show closed too"));
+  out.push(actions);
+  for (const state of order) if (groups[state]) {
+    out.push(el("h2", {}, `${state.replace("_", " ")} (${groups[state].length})`), groups[state].map((i) => itemCard(i, { hideProject: true })));
+  }
+  if (!data.items.length) out.push(el("div", { class: "empty" }, "No open items."));
+  out.push(addForm(current.path));
+  return out;
+}
+
+function parkForm(out, actions) {
+  const reason = el("input", { placeholder: "why (optional)" }), revisit = el("input", { placeholder: "revisit: 2w, 2026-11-01 (optional)" });
+  actions.replaceWith(el("div", { class: "card" }, el("label", {}, "Park this project"), reason, el("label", {}, "Revisit"), revisit,
+    el("div", { class: "row" }, el("button", { class: "b primary", onclick: async () => {
+      try { await api("/api/park", { project: current.path, reason: reason.value, revisit: revisit.value || null }); toast("Parked"); render(); } catch (e) { toast(e.message); }
+    } }, "Park"), el("button", { class: "b", onclick: render }, "Cancel"))));
+}
+
+function addForm(project) {
+  const title = el("input", { placeholder: "What needs doing" });
+  const kind = el("select", {}, ["task", "decision", "question", "reminder"].map((k) => el("option", { value: k }, k)));
+  const owner = el("select", {}, el("option", { value: "me" }, "me"), el("option", { value: "agent" }, "an agent"));
+  const due = el("input", { placeholder: "due: 2h, 3d, 2026-10-12 (optional)" });
+  const body = el("textarea", { placeholder: "notes (optional)" });
+  return el("div", { class: "card" }, el("h2", { style: "margin-top:0" }, "Add item"), title,
+    el("div", { class: "grid2" }, el("div", {}, el("label", {}, "Kind"), kind), el("div", {}, el("label", {}, "Owner"), owner)),
+    el("label", {}, "Due"), due, el("label", {}, "Notes"), body,
+    el("div", { class: "row" }, el("button", { class: "b primary", onclick: async () => {
+      if (!title.value.trim()) return toast("A title is required");
+      try { await api("/api/add", { project, title: title.value, kind: kind.value, owner: owner.value, due: due.value || null, body: body.value }); toast("Added"); render(); }
+      catch (e) { toast(e.message); }
+    } }, "Add")));
+}
+
+async function act(id, action, extra = {}) {
+  try { await api("/api/action", { id, action, ...extra }); toast(action + " ✓"); render(); }
+  catch (e) { toast(e.message); }
+}
+
+async function viewItem() {
+  const { item, events } = await api("/api/item?id=" + current.id);
+  const from = current.from || { tab: "inbox" };
+  const out = [el("button", { class: "back", onclick: () => go(from) }, "‹ Back"), itemCardStatic(item)];
+  if (item.body) out.push(el("div", { class: "card" }, item.body));
+  if (item.evidence.length) out.push(el("h2", {}, "Evidence"), el("div", { class: "card" }, item.evidence.map((e) => el("div", {}, "• " + e))));
+  if (item.reject_reason) out.push(el("div", { class: "meta" }, "reason: " + item.reject_reason));
+  if (item.answer) out.push(el("div", { class: "card" }, el("b", {}, "Answer: "), item.answer));
+  if (item.kind === "approval") {
+    out.push(el("h2", {}, "Dry-run (full)"), el("pre", {}, item.evidence_text || ""));
+    if (item.command) out.push(el("div", { class: "meta" }, "runs: ", el("code", {}, item.command)));
+    out.push(el("div", { class: "meta" }, "fingerprint " + item.fingerprint));
+    if (item.approved_until) out.push(el("div", { class: "meta" }, "approved until " + new Date(item.approved_until).toLocaleString()));
+  }
+  out.push(actionsFor(item));
+  out.push(el("h2", {}, "History"), el("div", { class: "hist" }, events.map((ev) =>
+    el("div", {}, `${new Date(ev.at).toLocaleString()} · ${ev.actor}${ev.via ? " (" + ev.via + ")" : ""} · ${ev.action}${ev.to_state ? " → " + ev.to_state : ""}`))));
+  return out;
+}
+function itemCardStatic(item) {
+  const card = itemCard(item); card.classList.remove("click"); card.onclick = null;
+  return el("div", {}, card);
+}
+
+function actionsFor(item) {
+  const row = el("div", { class: "row" });
+  const s = item.state, k = item.kind;
+  const prompted = (label, action, field, placeholder, cls = "b") => el("button", { class: cls, onclick: () => {
+    const value = prompt(placeholder); if (value) act(item.id, action, { [field]: value });
+  } }, label);
+  if (k === "approval" && s === "proposed") {
+    const approve = el("button", { class: "b primary" }, "Approve this dry-run");
+    approve.addEventListener("click", () => {
+      if (!approve.dataset.armed) { approve.dataset.armed = "1"; approve.textContent = "Tap again to confirm this exact dry-run"; approve.classList.add("danger"); return; }
+      act(item.id, "approve", { fingerprint: item.fingerprint, confirm: true });
+    });
+    row.append(approve, prompted("Reject…", "reject", "reason", "Why? (kept so it never comes back)", "b danger"));
+    return row;
+  }
+  if (s === "proposed") {
+    row.append(el("button", { class: "b primary", onclick: () => act(item.id, "accept") }, "Accept"));
+    row.append(el("button", { class: "b", onclick: () => {
+      const title = prompt("Title", item.title); if (title === null) return;
+      api("/api/action", { id: item.id, action: "edit", edits: { title } }).then(() => act(item.id, "accept")).catch((e) => toast(e.message));
+    } }, "Edit & accept"));
+    if (k === "decision" || k === "question") row.append(prompted("Answer…", "answer", "answer", "Your answer"));
+    row.append(prompted("Reject…", "reject", "reason", "Why? (kept so it never comes back)", "b danger"));
+  }
+  if (s === "waiting" || ((k === "decision" || k === "question") && (s === "accepted" || s === "in_progress"))) {
+    row.append(prompted("Answer…", "answer", "answer", s === "waiting" ? "Answer: " + (item.wait_reason || "") : "Your answer", "b primary"));
+  }
+  if (item.owner === "me" && (s === "accepted" || s === "in_progress") && k !== "decision" && k !== "question" && k !== "approval") {
+    row.append(el("button", { class: "b primary", onclick: () => act(item.id, "done") }, "Done"));
+  }
+  if (["proposed", "accepted", "waiting"].includes(s) && k !== "approval") {
+    for (const [label, until] of [["Snooze 1h", "1h"], ["1d", "1d"], ["1w", "1w"]]) row.append(el("button", { class: "b", onclick: () => act(item.id, "snooze", { until }) }, label));
+  }
+  if (["accepted", "in_progress", "waiting", "snoozed"].includes(s)) row.append(prompted("Drop…", "drop", "reason", "Why drop it? (optional, type - for none)", "b danger"));
+  return row;
+}
+
+async function viewDigest() {
+  const d = await api("/api/digest");
+  const out = [el("div", { class: "meta" }, "Since your last digest: " + new Date(d.since).toLocaleString())];
+  for (const [key, label] of [["blocked", "Blocked on you"], ["decisions", "Decisions"], ["proposals", "Proposals"], ["due", "Due"]]) {
+    if (d.inbox[key].length) out.push(el("h2", {}, `${label} (${d.inbox[key].length})`), d.inbox[key].map((i) => itemCard(i)));
+  }
+  const evList = (title, rows) => rows.length ? [el("h2", {}, `${title} (${rows.length})`),
+    el("div", { class: "card" }, rows.map((e) => el("div", {}, `#${e.item} ${e.project_name || ""}: ${e.title || ""}`)))] : [];
+  out.push(...evList("New proposals", d.new_proposals), ...evList("Finished", d.finished));
+  if (d.stale.length) out.push(el("h2", {}, "Stale"), d.stale.map((p) => el("div", { class: "card" }, el("div", { class: "title" }, p.name), el("div", { class: "meta" }, `last ${when(p.last_activity)} · ${p.open} open`))));
+  if (d.unpark_suggested.length) out.push(el("h2", {}, "Parked but active again"), d.unpark_suggested.map((p) => el("div", { class: "card" }, p.name)));
+  if (out.length === 1) out.push(el("div", { class: "empty" }, "Nothing new."));
+  out.push(el("div", { class: "row" }, el("button", { class: "b primary", onclick: async () => { await api("/api/digest", {}); toast("Marked as read"); render(); } }, "Mark digest as read")));
+  return out;
+}
+
+async function viewDevices() {
+  const data = await api("/api/devices");
+  return [el("h2", {}, "Paired devices"), data.devices.map((d) => el("div", { class: "card" },
+    el("div", { class: "title" }, d.name + (d.id === data.current ? " (this device)" : "")),
+    el("div", { class: "meta" }, `paired ${when(d.created_at)} · last used ${when(d.last_used_at)}`, d.revoked_at ? el("span", { class: "chip danger" }, "revoked") : null),
+    d.revoked_at ? null : el("div", { class: "row" }, el("button", { class: "b danger", onclick: async () => {
+      if (!confirm(`Revoke ${d.name}? It will need a new pairing link.`)) return;
+      await api("/api/devices/revoke", { id: d.id }); toast("Revoked"); render();
+    } }, "Revoke")))),
+    el("div", { class: "meta" }, "Pair a new device on the hub: killalot device add \"<name>\"")];
+}
+
+history.replaceState(current, "");
+render();
+</script>
+</body>
+</html>

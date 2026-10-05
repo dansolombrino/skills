@@ -112,6 +112,31 @@ def load_json(path: Path, errors: list[str]) -> dict:
     return payload
 
 
+HOOK_SCRIPT_RE = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/([^\"'\s]+)")
+
+
+def validate_hooks(plugin_root: Path, errors: list[str]) -> None:
+    """A plugin's hooks/hooks.json runs in every session on both hosts, so a broken path or file
+    would fail silently everywhere: require valid JSON and every referenced plugin file to exist."""
+    hooks_path = plugin_root / "hooks" / "hooks.json"
+    if not hooks_path.exists():
+        return
+    data = load_json(hooks_path, errors)
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict) or not hooks:
+        errors.append(f"{hooks_path}: must hold a non-empty 'hooks' object")
+        return
+    for event, groups in hooks.items():
+        for group in groups if isinstance(groups, list) else []:
+            for hook in group.get("hooks", []) if isinstance(group, dict) else []:
+                command = hook.get("command", "") if isinstance(hook, dict) else ""
+                if not command:
+                    errors.append(f"{hooks_path}: {event} hook without a command")
+                for relative in HOOK_SCRIPT_RE.findall(command):
+                    if not (plugin_root / relative).is_file():
+                        errors.append(f"{hooks_path}: {event} hook runs missing file {relative}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
@@ -209,6 +234,8 @@ def main() -> int:
             errors.append(
                 f"{claude_manifest_path}: omit 'skills'; Claude auto-discovers ./skills/"
             )
+
+        validate_hooks(plugin_root, errors)
 
         skill_root = plugin_root / "skills"
         skill_dirs = sorted(path for path in skill_root.iterdir() if path.is_dir()) if skill_root.is_dir() else []

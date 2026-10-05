@@ -193,6 +193,16 @@ drift=0
 [ "$CODEX_AFTER"  = "$TARGET" ] || { warn "Codex is on $CODEX_AFTER, expected $TARGET";  drift=1; }
 [ "$drift" -eq 0 ] || fail "released $PLUGIN $TARGET but a host did not pick it up — fix before relying on it"
 
+# ───────────────── 7. redeploy ReSirch Killalot (core, once set up) ─────────────────
+# The service runs from a copy of a released version, so a core release must move it too — the
+# same skipped-follow-up problem this script exists to remove. Only once its unit exists: the
+# first deploy is a setup step (resirch-killalot references/setup.md).
+if [ "$PLUGIN" = "core" ] && [ -f "$HOME/.config/systemd/user/resirch-killalot.service" ]; then
+  step "Redeploy ReSirch Killalot"
+  CORE_PATH="$(claude plugin list --json | python3 -c 'import json,sys; print(next(p["installPath"] for p in json.load(sys.stdin) if p["id"] == sys.argv[1]))' "$PLUGIN_ID")"
+  python3 "$CORE_PATH/skills/resirch-killalot/scripts/killalot.py" deploy || fail "core $TARGET is installed but the ReSirch Killalot service did not come back healthy"
+fi
+
 echo
 echo "✔ $PLUGIN $TARGET released and installed on both hosts."
 echo "  Restart Claude Code and Codex; running sessions keep the version they launched with."

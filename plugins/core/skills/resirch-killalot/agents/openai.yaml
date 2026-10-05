@@ -1,0 +1,4 @@
+interface:
+  display_name: "ReSirch Killalot"
+  short_description: "Cross-project items, inbox and owner approvals"
+  default_prompt: "Use $resirch-killalot to show what is open in this project and propose what is missing."
