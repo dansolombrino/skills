@@ -1,0 +1,8 @@
+[Unit]
+Description=ReSirch Killalot: point __DOMAIN__ at this hub's current public IP
+
+[Service]
+Type=oneshot
+Environment=KILLALOT_CONFIG=__KILLALOT_CONFIG__
+EnvironmentFile=__DUCKDNS_ENV__
+ExecStart=/usr/bin/env python3 __KILLALOT_PY__ duckdns-update

@@ -515,6 +515,119 @@ class WebTests(Fixture):
         self.assertIsNotNone(killalot.get_meta(self.conn, "last_digest_at"))
 
 
+class PublicModeTests(Fixture):
+    def public_config(self, extra: str = "") -> object:
+        path = self.base / "public.toml"
+        path.write_text(textwrap.dedent(f"""
+            [store]
+            root = "{self.base / 'store'}"
+            [projects]
+            roots = ["{self.roots}"]
+            [web]
+            access = "public"
+            port = 49148
+            [public]
+            domain = "example.duckdns.org"
+            port = 49147
+        """) + extra)
+        return killalot.load_config(path)
+
+    def test_config_rules(self) -> None:
+        config = self.public_config()
+        self.assertEqual(config.public_base, "https://example.duckdns.org:49147")
+        bad = self.base / "bad.toml"
+        for body, message in (
+            ('[web]\nbind = "0.0.0.0"\n', "localhost"),
+            ('[web]\naccess = "public"\n', "domain"),
+            ('[web]\naccess = "public"\nport = 49147\n[public]\ndomain = "x.duckdns.org"\n', "must differ"),
+            ('[web]\naccess = "open"\n', "access"),
+        ):
+            bad.write_text(f'[store]\nroot = "{self.base}/s"\n[projects]\nroots = ["{self.roots}"]\n' + body)
+            with self.assertRaisesRegex(killalot.KillalotError, message):
+                killalot.load_config(bad)
+
+    def serve(self, config):
+        server = killalot.ThreadingHTTPServer(("127.0.0.1", 0), killalot.make_handler(config))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_address[1]}"
+
+    def get(self, url: str, cookie: str | None = None, client: str = "203.0.113.7"):
+        headers = {"X-Forwarded-For": client}
+        if cookie:
+            headers["Cookie"] = f"{killalot.COOKIE_NAME}={cookie}"
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=5) as res:
+                return res.status, res.headers
+        except urllib.error.HTTPError as err:
+            return err.code, err.headers
+
+    def test_cookie_is_the_key_and_failures_lock_out(self) -> None:
+        config = self.public_config()
+        conn = killalot.connect(config)
+        self.addCleanup(conn.close)
+        base = self.serve(config)
+        code = killalot.create_pairing(conn, "phone")
+        paired = killalot.redeem_pairing(conn, code)
+        token = paired[1]
+        status, headers = self.get(base + "/api/inbox", cookie=token)
+        self.assertEqual(status, 200)  # no Tailscale header needed
+        self.assertIn("max-age", headers.get("Strict-Transport-Security", ""))
+        for _ in range(killalot.FAILED_AUTH_LIMIT):
+            self.assertEqual(self.get(base + "/api/inbox", cookie="forged")[0], 401)
+        self.assertEqual(self.get(base + "/api/inbox", cookie=token)[0], 429)  # that client is locked out
+        self.assertEqual(self.get(base + "/api/inbox", cookie=token, client="198.51.100.9")[0], 200)  # others are not
+
+    def test_tailscale_mode_still_requires_identity(self) -> None:
+        base = self.serve(self.config)
+        code = killalot.create_pairing(self.conn, "phone")
+        token = killalot.redeem_pairing(self.conn, code)[1]
+        self.assertEqual(self.get(base + "/api/inbox", cookie=token)[0], 401)
+
+    def test_duckdns_update(self) -> None:
+        config = self.public_config()
+        config.duckdns_env.write_text("DUCKDNS_TOKEN=abc\n")
+        seen = []
+
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def opener(url, timeout):
+            seen.append(url)
+            return Response(b"OK")
+        with mock.patch.dict(killalot.os.environ, {}, clear=False):
+            killalot.os.environ.pop("DUCKDNS_TOKEN", None)
+            self.assertEqual(killalot.duckdns_update(config, opener=opener), "OK")
+            self.assertIn("domains=example&token=abc&ip=", seen[0])
+            with self.assertRaisesRegex(killalot.KillalotError, "refused"):
+                killalot.duckdns_update(config, opener=lambda url, timeout: Response(b"KO"))
+            config.duckdns_env.write_text("DUCKDNS_TOKEN=PASTE_TOKEN\n")
+            with self.assertRaisesRegex(killalot.KillalotError, "no DuckDNS token"):
+                killalot.duckdns_update(config, opener=opener)
+
+    def test_public_setup_renders_everything(self) -> None:
+        config = self.public_config()
+        config.duckdns_env.write_text("DUCKDNS_TOKEN=abc\n")
+        home = self.base / "home"
+        killalot.deploy(config, start_service=False, home=home)
+        config.proxy_dir.mkdir(parents=True, exist_ok=True)
+        fake = config.proxy_dir / "caddy"
+        fake.write_text("#!/bin/sh\necho dns.providers.duckdns\n")
+        fake.chmod(0o755)
+        result = killalot.public_setup(config, home=home, start=False, download=False)
+        caddyfile = Path(result["caddyfile"]).read_text()
+        self.assertIn("https://example.duckdns.org:49147", caddyfile)
+        self.assertIn("reverse_proxy 127.0.0.1:49148", caddyfile)
+        for unit in result["units"]:
+            self.assertNotRegex(Path(unit).read_text(), r"__[A-Z_]+__")
+        self.assertIn("duckdns-update", (home / ".config/systemd/user/killalot-duckdns.service").read_text())
+
+
 class CliTests(Fixture):
     def test_end_to_end_cli(self) -> None:
         code, out = self.run_cli("--json", "propose", "--project", str(self.ladder), "--title", "Update EXPERIMENTS.md", "--evidence", "JOURNAL.md")

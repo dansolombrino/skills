@@ -1,0 +1,14 @@
+# ReSirch Killalot public proxy. Rendered by `killalot public-setup`; do not edit the rendered copy.
+{
+	admin off
+	http_port __HTTP_PORT__
+	auto_https disable_redirects
+}
+
+https://__DOMAIN__:__PUBLIC_PORT__ {
+	tls {
+		dns duckdns {env.DUCKDNS_TOKEN}
+	}
+	encode gzip
+	reverse_proxy 127.0.0.1:__APP_PORT__
+}

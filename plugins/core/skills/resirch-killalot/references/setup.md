@@ -59,13 +59,36 @@ that `tailscale serve` marks with that identity, **and** that carry a paired dev
 
 ### Port
 
-ReSirch Killalot always uses **49147**, on both sides: the service listens on `127.0.0.1:49147`
-and `tailscale serve` publishes it as `https://<hub>.<tailnet>.ts.net:49147`. The port was
-chosen by the owner, and the hub's router forwards it. That forward currently reaches nothing:
-the service binds to localhost only, so it is reachable only over the tailnet, with Tailscale's
-HTTPS and identity. Opening it to the public internet on this port is a planned extension that
-needs its own TLS front (a domain plus an automatic-certificate proxy) and a device-cookie-only
-auth model. Until that is designed and built, never bind the service to a public address.
+ReSirch Killalot always answers on **49147**: that is the one address the owner opens, and the
+hub's router forwards it. What listens behind it depends on the access mode:
+
+- **`tailscale`** (the default): the app listens on `127.0.0.1:49147` and `tailscale serve`
+  publishes it as `https://<hub>.<tailnet>.ts.net:49147`, reachable only from the tailnet.
+- **`public`**: a TLS proxy (Caddy) owns `0.0.0.0:49147` and serves
+  `https://<name>.duckdns.org:49147`. The app hides on `127.0.0.1:49148`. Caddy's plain-HTTP
+  listener sits on 49180, which is not forwarded and never serves the app.
+
+The app itself never binds to anything but localhost; the config refuses any other address.
+
+### Public access (any browser, no Tailscale)
+
+Use this when a device cannot use Tailscale. The paired device cookie becomes the only key: there is
+no network identity in front of it. Clients that fail authentication ten times within ten minutes
+are locked out for fifteen. HTTPS comes from a Let's Encrypt certificate that Caddy obtains and
+renews through a DuckDNS DNS challenge, so no port other than 49147 is needed.
+
+1. Sign in at duckdns.org, add a subdomain, and keep its token **out of chats and repositories**:
+   `install -m 600 /dev/null ~/.config/resirch-killalot/duckdns.env && echo 'DUCKDNS_TOKEN=<token>' > ~/.config/resirch-killalot/duckdns.env`
+2. In the config, set `[web] access = "public"` and `[web] port = 49148`, and add
+   `[public] domain = "<name>.duckdns.org"` and `port = 49147`. Remove `public_base`; it is derived.
+3. If `tailscale serve` was publishing 49147, turn it off: `tailscale serve --https=49147 off`.
+4. `systemctl --user restart resirch-killalot.service`, then `killalot public-setup`. It downloads
+   Caddy with its DuckDNS module into `<store root>/proxy/`, renders the Caddyfile, installs
+   `killalot-caddy.service` and the five-minute `killalot-duckdns.timer` (which keeps the name on
+   the hub's current IP), and starts both.
+5. Forward TCP 49147 on the router to the hub. Then open `https://<name>.duckdns.org:49147/healthz`
+   from a phone on mobile data. Some routers cannot loop back to their own public address, so a
+   test from inside the home network may fail even when it works from outside.
 
 ## 4. Pair each device
 

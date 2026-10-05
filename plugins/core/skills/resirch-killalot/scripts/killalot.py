@@ -44,6 +44,14 @@ from urllib.parse import parse_qs, urlparse
 SCHEMA_VERSION = 1
 DEFAULT_CONFIG = "~/.config/resirch-killalot/config.toml"
 DEFAULT_PORT = 49147  # the hub's fixed Killalot port; see references/setup.md § Port
+PUBLIC_APP_PORT = 49148  # in public mode the app hides on localhost here; Caddy owns 49147
+PUBLIC_HTTP_PORT = 49180  # Caddy's plain-HTTP listener (never used for the app)
+ACCESS_MODES = ("tailscale", "public")
+FAILED_AUTH_LIMIT = 10  # failed attempts per client in FAILED_AUTH_WINDOW_S before a lockout
+FAILED_AUTH_WINDOW_S = 10 * 60
+LOCKOUT_S = 15 * 60
+CADDY_DOWNLOAD = "https://caddyserver.com/api/download?os=linux&arch=amd64&p=github.com%2Fcaddy-dns%2Fduckdns"
+PUBLIC_UNITS = ("killalot-caddy.service", "killalot-duckdns.service", "killalot-duckdns.timer")
 DEFAULT_MAX_DEPTH = 5
 DEFAULT_STALE_DAYS = 14
 DEFAULT_APPROVAL_TTL_H = 24
@@ -144,6 +152,9 @@ class Config:
     port: int = DEFAULT_PORT
     owner_login: str | None = None
     public_base: str | None = None
+    access: str = "tailscale"
+    public_domain: str | None = None
+    public_port: int = DEFAULT_PORT
     approval_ttl_h: int = DEFAULT_APPROVAL_TTL_H
     config_path: Path = field(default_factory=lambda: Path(DEFAULT_CONFIG).expanduser())
 
@@ -158,6 +169,14 @@ class Config:
     @property
     def app_dir(self) -> Path:
         return self.root / "app"
+
+    @property
+    def proxy_dir(self) -> Path:
+        return self.root / "proxy"
+
+    @property
+    def duckdns_env(self) -> Path:
+        return self.config_path.parent / "duckdns.env"
 
 
 def config_path_from_env(explicit: str | Path | None = None) -> Path:
@@ -192,15 +211,32 @@ def load_config(path: Path) -> Config:
     owner = web.get("owner_login")
     if owner is not None and (not isinstance(owner, str) or "@" not in owner):
         raise KillalotError(f"{path}: [web] owner_login must be the Tailscale login, like name@github")
+    bind = str(web.get("bind", "127.0.0.1"))
+    if bind not in ("127.0.0.1", "::1", "localhost"):
+        raise KillalotError(f"{path}: [web] bind must be localhost; the app is reached only through tailscale serve or the TLS proxy")
+    access = str(web.get("access", "tailscale"))
+    if access not in ACCESS_MODES:
+        raise KillalotError(f"{path}: [web] access must be one of {', '.join(ACCESS_MODES)}")
+    public = data.get("public") or {}
+    domain = public.get("domain")
+    public_port = public.get("port", DEFAULT_PORT)
+    if access == "public":
+        if not isinstance(domain, str) or not re.fullmatch(r"[a-z0-9-]+\.duckdns\.org", domain):
+            raise KillalotError(f"{path}: public access needs [public] domain = \"<name>.duckdns.org\"")
+        if port == public_port:
+            raise KillalotError(f"{path}: in public mode the app port ([web] port) must differ from [public] port, which the TLS proxy owns")
     return Config(
         root=root_path,
         project_roots=tuple(Path(r).expanduser() for r in roots),
         max_depth=int(projects.get("max_depth", DEFAULT_MAX_DEPTH)),
         stale_days=int(projects.get("stale_days", DEFAULT_STALE_DAYS)),
-        bind=str(web.get("bind", "127.0.0.1")),
+        bind=bind,
         port=port,
         owner_login=owner,
-        public_base=(web.get("public_base") or None),
+        public_base=(web.get("public_base") or (f"https://{domain}:{public_port}" if access == "public" else None)),
+        access=access,
+        public_domain=domain if access == "public" else None,
+        public_port=int(public_port),
         approval_ttl_h=int(approvals.get("ttl_hours", DEFAULT_APPROVAL_TTL_H)),
         config_path=path,
     )
@@ -1047,22 +1083,67 @@ def json_ready(value):
     return json.loads(json.dumps(value, default=str))
 
 
+class FailureLimiter:
+    """Counts failed authentications per client; a client over the limit is locked out for a while.
+    Device tokens and pairing codes are far too long to guess, so this only blunts scanners."""
+
+    def __init__(self, limit: int = FAILED_AUTH_LIMIT, window_s: int = FAILED_AUTH_WINDOW_S, lockout_s: int = LOCKOUT_S):
+        self.limit, self.window_s, self.lockout_s = limit, window_s, lockout_s
+        self.failures: dict[str, list[float]] = {}
+        self.locked: dict[str, float] = {}
+        self.lock = threading.Lock()
+
+    def blocked(self, client: str) -> bool:
+        with self.lock:
+            until = self.locked.get(client)
+            if until and until > time.monotonic():
+                return True
+            self.locked.pop(client, None)
+            return False
+
+    def fail(self, client: str) -> None:
+        now = time.monotonic()
+        with self.lock:
+            recent = [t for t in self.failures.get(client, []) if now - t < self.window_s] + [now]
+            self.failures[client] = recent
+            if len(recent) >= self.limit:
+                self.locked[client] = now + self.lockout_s
+                self.failures.pop(client, None)
+
+
 def make_handler(config: Config, state: dict | None = None):
     serve_state = state if state is not None else {}
+    limiter = serve_state.setdefault("limiter", FailureLimiter())
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args: object) -> None:  # quiet
             pass
 
         # ── auth ──
+        def _client(self) -> str:
+            peer = self.client_address[0]
+            forwarded = self.headers.get("X-Forwarded-For")
+            if forwarded and peer in ("127.0.0.1", "::1"):  # only the local proxy may speak for a client
+                return forwarded.split(",")[0].strip()
+            return peer
+
         def _identity_ok(self) -> bool:
+            if limiter.blocked(self._client()):
+                return False
+            if config.access == "public":
+                return True  # no network identity: the paired device cookie is the key
             login = self.headers.get(TAILSCALE_LOGIN_HEADER)
-            return bool(config.owner_login) and login is not None and hmac.compare_digest(login, config.owner_login)
+            ok = bool(config.owner_login) and login is not None and hmac.compare_digest(login, config.owner_login)
+            if not ok:
+                limiter.fail(self._client())
+            return ok
 
         def _device(self, conn) -> dict | None:
             cookie = SimpleCookie(self.headers.get("Cookie", ""))
             token = cookie[COOKIE_NAME].value if COOKIE_NAME in cookie else None
             device = device_for(conn, token)
+            if device is None:
+                limiter.fail(self._client())
             if device:
                 try:
                     conn.execute("UPDATE devices SET last_used_at=? WHERE id=?", (iso(utcnow()), device["id"]))
@@ -1080,7 +1161,10 @@ def make_handler(config: Config, state: dict | None = None):
                 self._send(200, "text/plain; charset=utf-8", b"ok\n")
                 return
             if not self._identity_ok():
-                self._send(401, "text/plain; charset=utf-8", b"ReSirch Killalot: reach this through tailscale serve, signed in as the owner.\n")
+                if limiter.blocked(self._client()):
+                    self._send(429, "text/plain; charset=utf-8", b"Too many failed attempts; try again later.\n")
+                else:
+                    self._send(401, "text/plain; charset=utf-8", b"ReSirch Killalot: reach this through tailscale serve, signed in as the owner.\n")
                 return
             if path in ("/manifest.webmanifest", "/icon.svg"):
                 body = asset(path.lstrip("/"))
@@ -1093,6 +1177,7 @@ def make_handler(config: Config, state: dict | None = None):
                     code = parse_qs(url.query).get("code", [""])[0]
                     paired = redeem_pairing(conn, code) if code else None
                     if not paired:
+                        limiter.fail(self._client())
                         self._send(403, "text/plain; charset=utf-8", b"This pairing link is invalid, used, or expired. Run `killalot device add` again.\n")
                         return
                     _, token = paired
@@ -1139,7 +1224,7 @@ def make_handler(config: Config, state: dict | None = None):
         def do_POST(self) -> None:  # noqa: N802
             url = urlparse(self.path)
             if not self._identity_ok():
-                self._send(401, "text/plain; charset=utf-8", b"unauthorized\n")
+                self._send(429 if limiter.blocked(self._client()) else 401, "text/plain; charset=utf-8", b"unauthorized\n")
                 return
             if self.headers.get(CSRF_HEADER) != "1" or not self.headers.get("Content-Type", "").startswith("application/json"):
                 self._json({"error": "missing CSRF header"}, 403)
@@ -1201,6 +1286,8 @@ def make_handler(config: Config, state: dict | None = None):
             self.send_header("Referrer-Policy", "no-referrer")
             if set_cookie:
                 self.send_header("Set-Cookie", set_cookie)
+            if config.access == "public":
+                self.send_header("Strict-Transport-Security", "max-age=31536000")
             self.end_headers()
             self.wfile.write(body)
 
@@ -1238,8 +1325,8 @@ def worker_tick(config: Config, serve_state: dict) -> None:
 
 
 def serve(config: Config, args: argparse.Namespace) -> int:
-    if not config.owner_login:
-        raise KillalotError("[web] owner_login is required: the web app only answers the owner's Tailscale identity")
+    if config.access == "tailscale" and not config.owner_login:
+        raise KillalotError("[web] owner_login is required: in tailscale access the web app only answers the owner's Tailscale identity")
     bind = args.bind or config.bind
     port = args.port or config.port
     stop = threading.Event()
@@ -1257,7 +1344,8 @@ def serve(config: Config, args: argparse.Namespace) -> int:
     connect(config).close()  # migrate before the first request
     threading.Thread(target=loop, daemon=True).start()
     server = ThreadingHTTPServer((bind, port), make_handler(config, serve_state))
-    print(f"resirch-killalot serving on http://{bind}:{port} for {config.owner_login}", flush=True)
+    who = config.owner_login if config.access == "tailscale" else f"paired devices via {config.public_base}"
+    print(f"resirch-killalot serving on http://{bind}:{port} ({config.access}) for {who}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -1343,6 +1431,94 @@ def wait_healthy(config: Config, attempts: int = 40) -> bool:
     return False
 
 
+# ───────────────────────────── public access (TLS proxy + DuckDNS) ─────────────────────────────
+
+
+def duckdns_token(config: Config) -> str:
+    token = os.environ.get("DUCKDNS_TOKEN")
+    if not token:
+        try:
+            for raw in config.duckdns_env.read_text().splitlines():
+                if raw.startswith("DUCKDNS_TOKEN="):
+                    token = raw.split("=", 1)[1].strip().strip("'\"")
+        except OSError:
+            pass
+    if not token or token == "PASTE_TOKEN":
+        raise KillalotError(f"no DuckDNS token: put DUCKDNS_TOKEN=<token> in {config.duckdns_env} (mode 600)")
+    return token
+
+
+def duckdns_update(config: Config, opener=urllib.request.urlopen) -> str:
+    """Point the DuckDNS name at this hub's current public IP (DuckDNS reads it from the request)."""
+    if not config.public_domain:
+        raise KillalotError("duckdns-update needs [web] access = \"public\" and [public] domain")
+    sub = config.public_domain.removesuffix(".duckdns.org")
+    url = f"https://www.duckdns.org/update?domains={sub}&token={duckdns_token(config)}&ip="
+    with opener(url, timeout=20) as response:
+        answer = response.read().decode().strip()
+    if answer != "OK":
+        raise KillalotError(f"DuckDNS refused the update ({answer}); check the domain and the token")
+    return answer
+
+
+def render(template: str, values: dict[str, object]) -> str:
+    for key, value in values.items():
+        template = template.replace(f"__{key}__", str(value))
+    left = re.search(r"__[A-Z_]+__", template)
+    if left:
+        raise KillalotError(f"unrendered placeholder in template: {left.group(0)}")
+    return template
+
+
+def ensure_caddy(config: Config, download: bool = True) -> Path:
+    caddy = config.proxy_dir / "caddy"
+    if not caddy.exists():
+        if not download:
+            raise KillalotError(f"no Caddy at {caddy}")
+        config.proxy_dir.mkdir(parents=True, exist_ok=True)
+        tmp = caddy.with_suffix(".download")
+        with urllib.request.urlopen(CADDY_DOWNLOAD, timeout=300) as response, tmp.open("wb") as handle:
+            shutil.copyfileobj(response, handle)
+        tmp.chmod(0o755)
+        os.replace(tmp, caddy)
+    modules = subprocess.run([str(caddy), "list-modules"], capture_output=True, text=True, timeout=60).stdout
+    if "dns.providers.duckdns" not in modules:
+        raise KillalotError(f"{caddy} lacks the DuckDNS DNS module; delete it and rerun public-setup")
+    return caddy
+
+
+def public_setup(config: Config, *, home: Path | None = None, start: bool = True, download: bool = True) -> dict:
+    """Render and start the TLS proxy and the DuckDNS updater. Run after `deploy` (they use app/current)."""
+    if config.access != "public":
+        raise KillalotError("public-setup needs [web] access = \"public\" in the config")
+    home = home or Path.home()
+    duckdns_token(config)
+    script = config.app_dir / "current" / "scripts" / "killalot.py"
+    if not script.exists():
+        raise KillalotError("deploy first: the updater runs the deployed release (app/current)")
+    caddy = ensure_caddy(config, download=download)
+    values = {"DOMAIN": config.public_domain, "PUBLIC_PORT": config.public_port, "APP_PORT": config.port,
+              "HTTP_PORT": PUBLIC_HTTP_PORT, "DUCKDNS_ENV": config.duckdns_env, "CADDY": caddy,
+              "CADDYFILE": config.proxy_dir / "Caddyfile", "KILLALOT_PY": script, "KILLALOT_CONFIG": config.config_path}
+    config.proxy_dir.mkdir(parents=True, exist_ok=True)
+    (config.proxy_dir / "Caddyfile").write_text(render((ASSETS / "Caddyfile.template").read_text(), values))
+    unit_dir = home / ".config" / "systemd" / "user"
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    for unit in PUBLIC_UNITS:
+        (unit_dir / unit).write_text(render((ASSETS / unit).read_text(), values))
+    if start:
+        duckdns_update(config)
+        for cmd in (["systemctl", "--user", "daemon-reload"],
+                    ["systemctl", "--user", "enable", "--now", "killalot-duckdns.timer"],
+                    ["systemctl", "--user", "enable", "killalot-caddy.service"],
+                    ["systemctl", "--user", "restart", "killalot-caddy.service"]):
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise KillalotError(f"{' '.join(cmd)} failed: {result.stderr.strip()}")
+    return {"url": config.public_base, "caddy": str(caddy), "caddyfile": str(config.proxy_dir / "Caddyfile"),
+            "units": [str(unit_dir / u) for u in PUBLIC_UNITS]}
+
+
 def doctor(config: Config) -> list[tuple[bool, str]]:
     checks: list[tuple[bool, str]] = []
     try:
@@ -1356,17 +1532,29 @@ def doctor(config: Config) -> list[tuple[bool, str]]:
         checks.append((False, f"store: {exc}"))
     for root in config.project_roots:
         checks.append((root.is_dir(), f"project root {root}"))
-    checks.append((bool(config.owner_login), f"[web] owner_login = {config.owner_login or 'unset'}"))
+    if config.access == "tailscale":
+        checks.append((bool(config.owner_login), f"[web] owner_login = {config.owner_login or 'unset'}"))
     on_path = shutil.which("killalot")
     checks.append((on_path is not None, f"killalot on PATH: {on_path or 'no — run `killalot.py deploy`'}"))
     active = subprocess.run(["systemctl", "--user", "is-active", SERVICE_NAME], capture_output=True, text=True).stdout.strip()
     checks.append((active == "active", f"{SERVICE_NAME}: {active or 'unknown'}"))
     checks.append((wait_healthy(config, attempts=2), f"http://127.0.0.1:{config.port}/healthz"))
+    if config.access == "tailscale":
+        try:
+            ts = subprocess.run(["tailscale", "serve", "status"], capture_output=True, text=True, timeout=5).stdout
+            checks.append((f":{config.port}" in ts, f"tailscale serve proxies 127.0.0.1:{config.port}"))
+        except (OSError, subprocess.TimeoutExpired):
+            checks.append((False, "tailscale not available"))
+        return checks
+    checks.append((config.duckdns_env.is_file() and "DUCKDNS_TOKEN=" in config.duckdns_env.read_text(), f"DuckDNS token in {config.duckdns_env}"))
+    for unit in ("killalot-caddy.service", "killalot-duckdns.timer"):
+        state = subprocess.run(["systemctl", "--user", "is-active", unit], capture_output=True, text=True).stdout.strip()
+        checks.append((state == "active", f"{unit}: {state or 'unknown'}"))
     try:
-        ts = subprocess.run(["tailscale", "serve", "status"], capture_output=True, text=True, timeout=5).stdout
-        checks.append((f":{config.port}" in ts, f"tailscale serve proxies 127.0.0.1:{config.port}"))
-    except (OSError, subprocess.TimeoutExpired):
-        checks.append((False, "tailscale not available"))
+        with urllib.request.urlopen(f"{config.public_base}/healthz", timeout=10) as response:
+            checks.append((response.status == 200, f"{config.public_base}/healthz over TLS"))
+    except OSError as exc:
+        checks.append((False, f"{config.public_base}/healthz: {exc} (from the hub this needs the router to loop back; test from the phone too)"))
     return checks
 
 
@@ -1484,7 +1672,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("deploy", help="install this release as the running service (run from the installed plugin)")
     p.add_argument("--no-service", action="store_true", help="copy and install files without touching systemd")
 
-    sub.add_parser("doctor", help="check config, store, PATH, service and tailscale serve")
+    sub.add_parser("doctor", help="check config, store, PATH, service and tailscale serve (or the public proxy)")
+
+    p = sub.add_parser("public-setup", help="(public access) install and start the TLS proxy and the DuckDNS updater; run after deploy")
+    p.add_argument("--no-start", action="store_true", help="render files only")
+    sub.add_parser("duckdns-update", help="(public access) point the DuckDNS name at this hub's current IP")
     return parser
 
 
@@ -1519,6 +1711,13 @@ def main(argv: list[str] | None = None) -> int:
             emit(args, result, lambda: print(f"deployed {result['version']} → {result['app']}\nwrapper {result['wrapper']}\nunit {result['unit']}"
                                              + ("" if result["healthy"] is None else f"\nhealthy: {result['healthy']}")))
             return 0 if result["healthy"] in (None, True) else 1
+        if args.command == "public-setup":
+            result = public_setup(config, start=not args.no_start)
+            emit(args, result, lambda: print(f"public at {result['url']}\ncaddy {result['caddy']}\nunits: {', '.join(result['units'])}"))
+            return 0
+        if args.command == "duckdns-update":
+            emit(args, {"answer": duckdns_update(config)}, lambda: print(f"{config.public_domain} → this hub's IP: OK"))
+            return 0
         if args.command == "doctor":
             checks = doctor(config)
             emit(args, [{"ok": ok, "check": text} for ok, text in checks], lambda: [print(("ok   " if ok else "FAIL ") + text) for ok, text in checks])

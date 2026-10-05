@@ -30,7 +30,7 @@ def load_project_init():
 class CoreContractTests(unittest.TestCase):
     def test_plugin_version_and_distributed_skills(self) -> None:
         manifest = json.loads((CORE / ".codex-plugin/plugin.json").read_text())
-        self.assertEqual(manifest["version"], "1.1.0")
+        self.assertEqual(manifest["version"], "1.2.0")
         claude_manifest = json.loads((CORE / ".claude-plugin/plugin.json").read_text())
         catalog = json.loads((ROOT / ".claude-plugin/marketplace.json").read_text())
         entry = next(plugin for plugin in catalog["plugins"] if plugin["name"] == "core")
