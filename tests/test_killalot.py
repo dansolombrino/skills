@@ -507,6 +507,12 @@ class WebTests(Fixture):
         status, body, _ = self.request("/api/devices")
         self.assertTrue(all(d["token_sha256"] is None for d in json.loads(body)["devices"]))
 
+    def test_page_flattens_nested_view_lists(self) -> None:
+        # Views return lists that contain lists of cards; replaceChildren must receive them flat,
+        # or the browser prints "[object HTMLDivElement]" instead of the cards (seen on iOS).
+        page = (SCRIPT.parents[1] / "assets" / "app.html").read_text()
+        self.assertIn("(await view()).flat(Infinity)", page)
+
     def test_add_park_and_digest_over_http(self) -> None:
         status, body, _ = self.request("/api/add", {"project": str(self.ladder), "title": "Email the advisor", "kind": "task", "due": "2d"})
         self.assertEqual(status, 200, body)

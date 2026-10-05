@@ -132,7 +132,7 @@ async function render() {
   main.replaceChildren(el("div", { class: "empty" }, "Loading…"));
   try {
     const view = { inbox: viewInbox, projects: viewProjects, project: viewProject, item: viewItem, digest: viewDigest, devices: viewDevices }[current.tab];
-    main.replaceChildren(...(await view()));
+    main.replaceChildren(...(await view()).flat(Infinity).filter((n) => n !== null && n !== undefined && n !== false));
   } catch (e) {
     main.replaceChildren(el("div", { class: "err" }, e.message));
   }

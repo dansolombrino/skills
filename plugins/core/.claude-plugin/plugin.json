@@ -1,6 +1,6 @@
 {
   "name": "core",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Always-on working discipline for every project: mirror intent and hold brainstorm phases until an explicit greenlight, integrate reference code only through approved deviations, tag each project with its categories so domain plugins such as research load only where they belong, and keep one cross-project list of work (ReSirch Killalot) that agents propose into and only the owner accepts.",
   "author": {
     "name": "Dan Solombrino",
