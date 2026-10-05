@@ -1,0 +1,4 @@
+# --- BEGIN project-init managed plugins ---
+[plugins."research@dansolombrino-skills"]
+enabled = false
+# --- END project-init managed plugins ---

@@ -1,0 +1,3 @@
+# Project categories. Written by project-init; change them with project-init so the
+# per-host plugin enablement stays in sync.
+categories = []
