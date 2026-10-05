@@ -525,7 +525,7 @@ class PublicModeTests(Fixture):
             roots = ["{self.roots}"]
             [web]
             access = "public"
-            port = 49148
+            port = 49149
             [public]
             domain = "example.duckdns.org"
             port = 49147
@@ -622,7 +622,7 @@ class PublicModeTests(Fixture):
         result = killalot.public_setup(config, home=home, start=False, download=False)
         caddyfile = Path(result["caddyfile"]).read_text()
         self.assertIn("https://example.duckdns.org:49147", caddyfile)
-        self.assertIn("reverse_proxy 127.0.0.1:49148", caddyfile)
+        self.assertIn("reverse_proxy 127.0.0.1:49149", caddyfile)
         for unit in result["units"]:
             self.assertNotRegex(Path(unit).read_text(), r"__[A-Z_]+__")
         self.assertIn("duckdns-update", (home / ".config/systemd/user/killalot-duckdns.service").read_text())

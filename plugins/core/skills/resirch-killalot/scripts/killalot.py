@@ -44,7 +44,7 @@ from urllib.parse import parse_qs, urlparse
 SCHEMA_VERSION = 1
 DEFAULT_CONFIG = "~/.config/resirch-killalot/config.toml"
 DEFAULT_PORT = 49147  # the hub's fixed Killalot port; see references/setup.md § Port
-PUBLIC_APP_PORT = 49148  # in public mode the app hides on localhost here; Caddy owns 49147
+PUBLIC_APP_PORT = 49149  # in public mode the app hides on localhost here; Caddy owns 49147
 PUBLIC_HTTP_PORT = 49180  # Caddy's plain-HTTP listener (never used for the app)
 ACCESS_MODES = ("tailscale", "public")
 FAILED_AUTH_LIMIT = 10  # failed attempts per client in FAILED_AUTH_WINDOW_S before a lockout

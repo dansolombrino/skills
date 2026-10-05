@@ -65,7 +65,7 @@ hub's router forwards it. What listens behind it depends on the access mode:
 - **`tailscale`** (the default): the app listens on `127.0.0.1:49147` and `tailscale serve`
   publishes it as `https://<hub>.<tailnet>.ts.net:49147`, reachable only from the tailnet.
 - **`public`**: a TLS proxy (Caddy) owns `0.0.0.0:49147` and serves
-  `https://<name>.duckdns.org:49147`. The app hides on `127.0.0.1:49148`. Caddy's plain-HTTP
+  `https://<name>.duckdns.org:49147`. The app hides on `127.0.0.1:49149`. Caddy's plain-HTTP
   listener sits on 49180, which is not forwarded and never serves the app.
 
 The app itself never binds to anything but localhost; the config refuses any other address.
@@ -79,7 +79,7 @@ renews through a DuckDNS DNS challenge, so no port other than 49147 is needed.
 
 1. Sign in at duckdns.org, add a subdomain, and keep its token **out of chats and repositories**:
    `install -m 600 /dev/null ~/.config/resirch-killalot/duckdns.env && echo 'DUCKDNS_TOKEN=<token>' > ~/.config/resirch-killalot/duckdns.env`
-2. In the config, set `[web] access = "public"` and `[web] port = 49148`, and add
+2. In the config, set `[web] access = "public"` and `[web] port = 49149`, and add
    `[public] domain = "<name>.duckdns.org"` and `port = 49147`. Remove `public_base`; it is derived.
 3. If `tailscale serve` was publishing 49147, turn it off: `tailscale serve --https=49147 off`.
 4. `systemctl --user restart resirch-killalot.service`, then `killalot public-setup`. It downloads
