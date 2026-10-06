@@ -56,7 +56,20 @@ label { display: block; font-size: 13px; color: var(--muted); margin: 8px 0 4px;
 .hist { font-size: 12.5px; color: var(--muted); }
 .hist div { padding: 2px 0; border-top: 1px dashed var(--line); }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-@media (max-width: 420px) { .grid2 { grid-template-columns: 1fr; } }
+.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.chip.p0 { background: var(--danger); color: var(--accent-ink); } .chip.p1 { color: var(--warn); font-weight: 600; } .chip.p3 { color: var(--muted); }
+.msg { border-radius: 12px; padding: 8px 12px; margin: 0 0 8px; max-width: 88%; white-space: pre-wrap; word-break: break-word; }
+.msg.me { background: var(--accent); color: var(--accent-ink); margin-left: auto; }
+.msg.bot { background: var(--panel); border: 1px solid var(--line); }
+.msg.sys { background: none; color: var(--muted); font-size: 13px; padding: 2px 4px; }
+.change { border-left: 3px solid var(--warn); }
+.change.done { border-left-color: var(--ok); opacity: .75; }
+.ask { display: flex; gap: 8px; align-items: flex-end; margin: 4px 0 12px; }
+.ask textarea { min-height: 44px; }
+.links div, .comments div { padding: 4px 0; border-top: 1px dashed var(--line); }
+.links div:first-child, .comments div:first-child { border-top: 0; }
+.link { color: var(--accent); cursor: pointer; }
+@media (max-width: 420px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -64,6 +77,7 @@ label { display: block; font-size: 13px; color: var(--muted); margin: 8px 0 4px;
   <h1>ReSirch Killalot <small id="who"></small></h1>
   <nav id="tabs">
     <button data-tab="inbox" class="on">Inbox</button>
+    <button data-tab="chat">Chat</button>
     <button data-tab="projects">Projects</button>
     <button data-tab="digest">Digest</button>
     <button data-tab="devices">Devices</button>
@@ -113,11 +127,19 @@ function when(isoText) {
   return span === "now" ? "now" : fut ? "in " + span : span + " ago";
 }
 const STATE_CHIP = { proposed: "warn", waiting: "danger", in_progress: "ok", snoozed: "", accepted: "", done: "ok", rejected: "", dropped: "" };
+const KINDS = ["task", "decision", "question", "reminder"];
+const LINK_TYPES = [["depends_on", "depends on"], ["parent_of", "parent of"], ["relates_to", "relates to"]];
+function prioChip(p) { return p === 2 || p === undefined ? null : el("span", { class: "chip p" + p }, "P" + p); }
+function store(key, value) {  // per-device convenience only; the page works without it
+  try { if (value === undefined) return JSON.parse(localStorage.getItem(key) || "null"); localStorage.setItem(key, JSON.stringify(value)); } catch (e) { return null; }
+}
 
 function itemCard(item, opts = {}) {
   const meta = el("div", { class: "meta" },
+    prioChip(item.priority),
     el("span", { class: "chip " + (STATE_CHIP[item.state] || "") }, item.state.replace("_", " ")),
     el("span", { class: "chip" }, item.kind),
+    item.blocked_by && item.blocked_by.length ? el("span", { class: "chip danger" }, "blocked by " + item.blocked_by.map((i) => "#" + i).join(", ")) : null,
     opts.hideProject ? null : el("span", {}, item.project_name || item.project.split("/").pop()),
     item.owner === "agent" ? el("span", {}, "· agent") : null,
     item.due_at ? el("span", {}, "· due " + when(item.due_at)) : null,
@@ -131,7 +153,7 @@ async function render() {
   for (const b of document.querySelectorAll("#tabs button")) b.classList.toggle("on", b.dataset.tab === current.tab || (current.tab === "project" && b.dataset.tab === "projects"));
   main.replaceChildren(el("div", { class: "empty" }, "Loading…"));
   try {
-    const view = { inbox: viewInbox, projects: viewProjects, project: viewProject, item: viewItem, digest: viewDigest, devices: viewDevices }[current.tab];
+    const view = { inbox: viewInbox, chat: viewChat, projects: viewProjects, project: viewProject, item: viewItem, digest: viewDigest, devices: viewDevices }[current.tab];
     main.replaceChildren(...(await view()).flat(Infinity).filter((n) => n !== null && n !== undefined && n !== false));
   } catch (e) {
     main.replaceChildren(el("div", { class: "err" }, e.message));
@@ -144,7 +166,10 @@ document.getElementById("tabs").addEventListener("click", (e) => { const t = e.t
 async function viewInbox() {
   const data = await api("/api/inbox");
   document.getElementById("who").textContent = "· " + data.device;
-  const out = [];
+  const box = el("textarea", { placeholder: "Tell Killalot… e.g. remind me Friday to rerun the ablation in ladder, P1" });
+  const send = () => { const text = box.value.trim(); if (text) go({ tab: "chat", say: text }); };
+  box.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); });
+  const out = [el("div", { class: "ask" }, box, el("button", { class: "b primary", onclick: send }, "Send"))];
   let total = 0;
   for (const [key, label] of data.buckets) {
     const items = data.inbox[key];
@@ -153,7 +178,64 @@ async function viewInbox() {
     out.push(items.length ? items.map((i) => itemCard(i)) : el("div", { class: "empty" }, "Nothing here."));
   }
   document.title = total ? `(${total}) ReSirch Killalot` : "ReSirch Killalot";
+  out.push(el("h2", {}, "Add"), addForm(null));
   return out;
+}
+
+// ── chat with the hub assistant: it stages changes, a tap here applies them ──
+const CHAT_KEY = "killalot.chat";
+function chatLog() { return store(CHAT_KEY) || []; }
+function saveChat(log) { store(CHAT_KEY, log.slice(-80)); }
+
+function changeCard(change, log) {
+  const card = el("div", { class: "card change" + (change.outcome ? " done" : "") }, el("div", {}, change.summary));
+  if (change.outcome) { card.append(el("div", { class: "meta" }, change.outcome)); return card; }
+  const resolve = async (confirm) => {
+    try {
+      const r = await api("/api/pending", { id: change.id, confirm });
+      change.outcome = r.outcome; saveChat(log); toast(r.outcome); render();
+    } catch (e) { toast(e.message); }
+  };
+  card.append(el("div", { class: "row" }, el("button", { class: "b primary", onclick: () => resolve(true) }, "Confirm"),
+    el("button", { class: "b", onclick: () => resolve(false) }, "Cancel")));
+  return card;
+}
+
+async function viewChat() {
+  const log = chatLog();
+  const box = el("textarea", { placeholder: "Add, change, link, prioritise, ask what's open…" });
+  const sendBtn = el("button", { class: "b primary" }, "Send");
+  const thread = el("div", {});
+  const paint = () => {
+    thread.replaceChildren(...log.map((m) => m.role === "change" ? changeCard(m, log) : el("div", { class: "msg " + m.role }, m.text)));
+    const open = log.filter((m) => m.role === "change" && !m.outcome);
+    if (open.length > 1) thread.append(el("div", { class: "row" }, el("button", { class: "b primary", onclick: async () => {
+      for (const c of open) { try { const r = await api("/api/pending", { id: c.id, confirm: true }); c.outcome = r.outcome; } catch (e) { c.outcome = e.message; } }
+      saveChat(log); render();
+    } }, `Confirm all ${open.length}`)));
+  };
+  const send = async (text) => {
+    text = (text || "").trim(); if (!text) return;
+    log.push({ role: "me", text }); log.push({ role: "sys", text: "thinking…" }); saveChat(log); paint();
+    sendBtn.disabled = true; box.value = "";
+    try {
+      const r = await api("/api/assistant", { text });
+      log.pop(); log.push({ role: "bot", text: r.reply });
+      for (const c of r.pending) log.push({ role: "change", id: c.id, summary: c.summary });
+    } catch (e) { log.pop(); log.push({ role: "sys", text: "error: " + e.message }); }
+    saveChat(log); sendBtn.disabled = false; paint(); window.scrollTo(0, document.body.scrollHeight);
+  };
+  sendBtn.onclick = () => send(box.value);
+  box.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(box.value); });
+  if (log.length && log[log.length - 1].text === "thinking…") log.pop();
+  paint();
+  const fresh = el("button", { class: "b", onclick: async () => {
+    if (!confirm("Start a fresh conversation? Unconfirmed changes are cancelled.")) return;
+    await api("/api/assistant/new", {}); saveChat([]); render();
+  } }, "New conversation");
+  if (current.say) { const say = current.say; current.say = null; history.replaceState(current, ""); setTimeout(() => send(say), 0); }
+  return [el("div", { class: "meta" }, "Changes apply only when you tap Confirm. Approvals stay on the item page."),
+    thread, el("div", { class: "ask" }, box, sendBtn), el("div", { class: "row" }, fresh)];
 }
 
 async function viewProjects() {
@@ -197,7 +279,7 @@ async function viewProject() {
     out.push(el("h2", {}, `${state.replace("_", " ")} (${groups[state].length})`), groups[state].map((i) => itemCard(i, { hideProject: true })));
   }
   if (!data.items.length) out.push(el("div", { class: "empty" }, "No open items."));
-  out.push(addForm(current.path));
+  out.push(el("h2", {}, "Add item"), addForm(current.path));
   return out;
 }
 
@@ -209,20 +291,46 @@ function parkForm(out, actions) {
     } }, "Park"), el("button", { class: "b", onclick: render }, "Cancel"))));
 }
 
+function prioSelect(value) {
+  return el("select", {}, [0, 1, 2, 3].map((p) => el("option", { value: p, selected: p === (value ?? 2) }, ["P0 drop everything", "P1 soon", "P2 normal", "P3 someday"][p])));
+}
 function addForm(project) {
   const title = el("input", { placeholder: "What needs doing" });
-  const kind = el("select", {}, ["task", "decision", "question", "reminder"].map((k) => el("option", { value: k }, k)));
+  const kind = el("select", {}, KINDS.map((k) => el("option", { value: k }, k)));
   const owner = el("select", {}, el("option", { value: "me" }, "me"), el("option", { value: "agent" }, "an agent"));
+  const prio = prioSelect(2);
   const due = el("input", { placeholder: "due: 2h, 3d, 2026-10-12 (optional)" });
   const body = el("textarea", { placeholder: "notes (optional)" });
-  return el("div", { class: "card" }, el("h2", { style: "margin-top:0" }, "Add item"), title,
-    el("div", { class: "grid2" }, el("div", {}, el("label", {}, "Kind"), kind), el("div", {}, el("label", {}, "Owner"), owner)),
+  const picker = project ? null : el("select", {}, el("option", { value: "" }, "Project…"));
+  if (picker) api("/api/projects").then((d) => d.projects.forEach((p) => picker.append(el("option", { value: p.path }, p.name)))).catch(() => {});
+  return el("div", { class: "card" }, picker, title,
+    el("div", { class: "grid3" }, el("div", {}, el("label", {}, "Kind"), kind), el("div", {}, el("label", {}, "Owner"), owner), el("div", {}, el("label", {}, "Priority"), prio)),
     el("label", {}, "Due"), due, el("label", {}, "Notes"), body,
     el("div", { class: "row" }, el("button", { class: "b primary", onclick: async () => {
+      const target = project || picker.value;
+      if (!target) return toast("Pick a project");
       if (!title.value.trim()) return toast("A title is required");
-      try { await api("/api/add", { project, title: title.value, kind: kind.value, owner: owner.value, due: due.value || null, body: body.value }); toast("Added"); render(); }
+      try { await api("/api/add", { project: target, title: title.value, kind: kind.value, owner: owner.value, priority: Number(prio.value), due: due.value || null, body: body.value }); toast("Added"); render(); }
       catch (e) { toast(e.message); }
     } }, "Add")));
+}
+
+function editForm(item, then) {
+  const title = el("input", { value: item.title });
+  const kind = el("select", {}, KINDS.map((k) => el("option", { value: k, selected: k === item.kind }, k)));
+  const owner = el("select", {}, ["me", "agent"].map((o) => el("option", { value: o, selected: o === item.owner }, o === "me" ? "me" : "an agent")));
+  const prio = prioSelect(item.priority);
+  const due = el("input", { value: item.due_at ? new Date(item.due_at).toLocaleString("sv").slice(0, 16) : "", placeholder: "2h, 3d, 2026-10-12 — empty clears" });
+  const body = el("textarea", {}, item.body || "");
+  const isApproval = item.kind === "approval";
+  return el("div", { class: "card" }, el("label", {}, "Title"), title,
+    isApproval ? null : el("div", { class: "grid3" }, el("div", {}, el("label", {}, "Kind"), kind), el("div", {}, el("label", {}, "Owner"), owner), el("div", {}, el("label", {}, "Priority"), prio)),
+    el("label", {}, "Due"), due, isApproval ? null : [el("label", {}, "Notes"), body],
+    el("div", { class: "row" }, el("button", { class: "b primary", onclick: async () => {
+      const edits = isApproval ? { due_at: due.value.trim() } : { title: title.value, kind: kind.value, owner: owner.value, priority: Number(prio.value), body: body.value, due_at: due.value.trim() };
+      try { await api("/api/action", { id: item.id, action: "edit", edits }); if (then) await then(); else { toast("Saved"); render(); } }
+      catch (e) { toast(e.message); }
+    } }, then ? "Save & accept" : "Save"), el("button", { class: "b", onclick: render }, "Cancel")));
 }
 
 async function act(id, action, extra = {}) {
@@ -231,10 +339,10 @@ async function act(id, action, extra = {}) {
 }
 
 async function viewItem() {
-  const { item, events } = await api("/api/item?id=" + current.id);
+  const { item, events, links, comments } = await api("/api/item?id=" + current.id);
   const from = current.from || { tab: "inbox" };
   const out = [el("button", { class: "back", onclick: () => go(from) }, "‹ Back"), itemCardStatic(item)];
-  if (item.body) out.push(el("div", { class: "card" }, item.body));
+  if (item.body) out.push(el("div", { class: "card", style: "white-space:pre-wrap" }, item.body));
   if (item.evidence.length) out.push(el("h2", {}, "Evidence"), el("div", { class: "card" }, item.evidence.map((e) => el("div", {}, "• " + e))));
   if (item.reject_reason) out.push(el("div", { class: "meta" }, "reason: " + item.reject_reason));
   if (item.answer) out.push(el("div", { class: "card" }, el("b", {}, "Answer: "), item.answer));
@@ -245,10 +353,40 @@ async function viewItem() {
     if (item.approved_until) out.push(el("div", { class: "meta" }, "approved until " + new Date(item.approved_until).toLocaleString()));
   }
   out.push(actionsFor(item));
+  out.push(el("h2", {}, `Links (${links.length})`), linksCard(item, links));
+  out.push(el("h2", {}, `Comments (${comments.length})`), commentsCard(item, comments));
   out.push(el("h2", {}, "History"), el("div", { class: "hist" }, events.map((ev) =>
     el("div", {}, `${new Date(ev.at).toLocaleString()} · ${ev.actor}${ev.via ? " (" + ev.via + ")" : ""} · ${ev.action}${ev.to_state ? " → " + ev.to_state : ""}`))));
   return out;
 }
+function linksCard(item, links) {
+  const list = el("div", { class: "links" }, links.length ? links.map((l) => el("div", {},
+    el("span", { class: "meta", style: "display:inline" }, l.role + " "),
+    el("span", { class: "link", onclick: () => go({ tab: "item", id: l.id, from: current }) }, `#${l.id} ${l.title}`),
+    el("span", { class: "meta", style: "display:inline" }, ` · ${l.state.replace("_", " ")} `),
+    el("button", { class: "back", style: "margin:0 0 0 6px", onclick: async () => {
+      try { await api("/api/unlink", l.outgoing ? { src: item.id, dst: l.id, type: l.type } : { src: l.id, dst: item.id, type: l.type }); render(); } catch (e) { toast(e.message); }
+    } }, "remove"))) : el("div", { class: "empty" }, "No links."));
+  const type = el("select", {}, LINK_TYPES.map(([v, label]) => el("option", { value: v }, "this " + label)));
+  const other = el("input", { placeholder: "#id", inputmode: "numeric" });
+  return el("div", { class: "card" }, list, el("div", { class: "grid2", style: "margin-top:8px" }, type, other),
+    el("div", { class: "row" }, el("button", { class: "b", onclick: async () => {
+      const dst = parseInt(other.value.replace("#", ""), 10); if (!dst) return toast("Which item? Give its #id");
+      try { await api("/api/link", { src: item.id, dst, type: type.value }); render(); } catch (e) { toast(e.message); }
+    } }, "Link")));
+}
+
+function commentsCard(item, comments) {
+  const text = el("textarea", { placeholder: "Add a comment (kept forever)" });
+  return el("div", { class: "card" }, el("div", { class: "comments" }, comments.length ? comments.map((c) => el("div", {},
+    el("div", { class: "meta" }, `${new Date(c.at).toLocaleString()} · ${c.actor}${c.via ? " (" + c.via + ")" : ""}`), el("div", { style: "white-space:pre-wrap" }, c.text)))
+    : el("div", { class: "empty" }, "No comments.")), text,
+    el("div", { class: "row" }, el("button", { class: "b", onclick: async () => {
+      if (!text.value.trim()) return;
+      try { await api("/api/comment", { id: item.id, text: text.value }); render(); } catch (e) { toast(e.message); }
+    } }, "Comment")));
+}
+
 function itemCardStatic(item) {
   const card = itemCard(item); card.classList.remove("click"); card.onclick = null;
   return el("div", {}, card);
@@ -271,10 +409,7 @@ function actionsFor(item) {
   }
   if (s === "proposed") {
     row.append(el("button", { class: "b primary", onclick: () => act(item.id, "accept") }, "Accept"));
-    row.append(el("button", { class: "b", onclick: () => {
-      const title = prompt("Title", item.title); if (title === null) return;
-      api("/api/action", { id: item.id, action: "edit", edits: { title } }).then(() => act(item.id, "accept")).catch((e) => toast(e.message));
-    } }, "Edit & accept"));
+    row.append(el("button", { class: "b", onclick: () => row.replaceWith(editForm(item, () => act(item.id, "accept"))) }, "Edit & accept"));
     if (k === "decision" || k === "question") row.append(prompted("Answer…", "answer", "answer", "Your answer"));
     row.append(prompted("Reject…", "reject", "reason", "Why? (kept so it never comes back)", "b danger"));
   }
@@ -288,6 +423,7 @@ function actionsFor(item) {
     for (const [label, until] of [["Snooze 1h", "1h"], ["1d", "1d"], ["1w", "1w"]]) row.append(el("button", { class: "b", onclick: () => act(item.id, "snooze", { until }) }, label));
   }
   if (["accepted", "in_progress", "waiting", "snoozed"].includes(s)) row.append(prompted("Drop…", "drop", "reason", "Why drop it? (optional, type - for none)", "b danger"));
+  if (["proposed", "accepted", "in_progress", "waiting", "snoozed"].includes(s)) row.append(el("button", { class: "b", onclick: () => row.replaceWith(editForm(item)) }, "Edit"));
   return row;
 }
 
@@ -316,10 +452,21 @@ async function viewDevices() {
       if (!confirm(`Revoke ${d.name}? It will need a new pairing link.`)) return;
       await api("/api/devices/revoke", { id: d.id }); toast("Revoked"); render();
     } }, "Revoke")))),
-    el("div", { class: "meta" }, "Pair a new device on the hub: killalot device add \"<name>\"")];
+    el("div", { class: "meta" }, "Pair a new device on the hub: killalot device add \"<name>\""),
+    el("h2", {}, "Connected chat apps"),
+    data.connections.length ? data.connections.map((c) => el("div", { class: "card" },
+      el("div", { class: "title" }, c.client_name),
+      el("div", { class: "meta" }, `connected ${when(c.created_at)} · last used ${when(c.last_used_at)}`, c.revoked_at ? el("span", { class: "chip danger" }, "revoked") : null),
+      c.revoked_at ? null : el("div", { class: "row" }, el("button", { class: "b danger", onclick: async () => {
+        if (!confirm(`Disconnect ${c.client_name}?`)) return;
+        await api("/api/connections/revoke", { id: c.id }); toast("Disconnected"); render();
+      } }, "Disconnect")))) : el("div", { class: "empty" }, "None yet."),
+    data.mcp_url ? el("div", { class: "meta" }, "To connect claude.ai or ChatGPT, add a custom connector with the URL ", el("code", {}, data.mcp_url)) : null];
 }
 
-history.replaceState(current, "");
+const deep = /^#item=(\d+)$/.exec(location.hash);  // links from Telegram notices
+if (deep) { current = { tab: "item", id: Number(deep[1]) }; history.replaceState(current, "", location.pathname); }
+else history.replaceState(current, "");
 render();
 </script>
 </body>

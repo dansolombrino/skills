@@ -12,6 +12,7 @@ import textwrap
 import threading
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import timedelta
@@ -446,7 +447,7 @@ class WebTests(Fixture):
                 return None
             cookie = err.headers.get("Set-Cookie", "")
             self.assertIn("HttpOnly", cookie)
-            self.assertIn("SameSite=Strict", cookie)
+            self.assertIn("SameSite=Lax", cookie)
             return cookie.split(";")[0].split("=", 1)[1]
         return None
 
@@ -520,8 +521,33 @@ class WebTests(Fixture):
         self.assertEqual(self.request("/api/digest", {})[0], 200)
         self.assertIsNotNone(killalot.get_meta(self.conn, "last_digest_at"))
 
+    def test_links_comments_and_detail_over_http(self) -> None:
+        a = killalot.add(self.conn, project=str(self.ladder), kind="task", title="A", via=VIA)
+        b = killalot.add(self.conn, project=str(self.ladder), kind="task", title="B", via=VIA)
+        self.assertEqual(self.request("/api/link", {"src": a, "dst": b, "type": "depends_on"})[0], 200)
+        self.assertEqual(self.request("/api/comment", {"id": a, "text": "hello"})[0], 200)
+        status, body, _ = self.request("/api/action", {"id": a, "action": "edit", "edits": {"priority": 1, "due_at": "2d"}})
+        self.assertEqual(status, 200, body)
+        self.assertEqual(self.request("/api/action", {"id": a, "action": "edit", "edits": {"state": "done"}})[0], 400)
+        detail = json.loads(self.request(f"/api/item?id={a}")[1])
+        self.assertEqual(detail["item"]["blocked_by"], [b])
+        self.assertEqual([c["text"] for c in detail["comments"]], ["hello"])
+        self.assertEqual(detail["item"]["priority"], 1)
 
-class PublicModeTests(Fixture):
+    def test_chat_routes_stay_in_the_device_conversation(self) -> None:
+        device = self.conn.execute("SELECT id FROM devices WHERE name='phone'").fetchone()["id"]
+        with mock.patch.object(killalot, "assistant_turn", return_value={"reply": "ok", "pending": []}) as turn:
+            status, body, _ = self.request("/api/assistant", {"text": "hi"})
+        self.assertEqual(status, 200, body)
+        self.assertEqual(turn.call_args.kwargs["conv"], f"web-d{device}")
+        mine = killalot.stage(self.conn, conv=f"web-d{device}", via=f"assistant:web/web-d{device}", name="add_item", args={"project": "ladder", "title": "Mine"})
+        theirs = killalot.stage(self.conn, conv="tg-1", via="assistant:telegram/tg-1", name="add_item", args={"project": "ladder", "title": "Theirs"})
+        self.assertEqual(self.request("/api/pending", {"id": theirs["change"], "confirm": True})[0], 400)
+        status, body, _ = self.request("/api/pending", {"id": mine["change"], "confirm": True})
+        self.assertEqual(json.loads(body)["outcome"], "applied")
+
+
+class PublicHelpers:
     def public_config(self, extra: str = "") -> object:
         path = self.base / "public.toml"
         path.write_text(textwrap.dedent(f"""
@@ -538,6 +564,15 @@ class PublicModeTests(Fixture):
         """) + extra)
         return killalot.load_config(path)
 
+    def serve(self, config):
+        server = killalot.ThreadingHTTPServer(("127.0.0.1", 0), killalot.make_handler(config))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_address[1]}"
+
+
+class PublicModeTests(PublicHelpers, Fixture):
     def test_config_rules(self) -> None:
         config = self.public_config()
         self.assertEqual(config.public_base, "https://example.duckdns.org:49147")
@@ -551,13 +586,6 @@ class PublicModeTests(Fixture):
             bad.write_text(f'[store]\nroot = "{self.base}/s"\n[projects]\nroots = ["{self.roots}"]\n' + body)
             with self.assertRaisesRegex(killalot.KillalotError, message):
                 killalot.load_config(bad)
-
-    def serve(self, config):
-        server = killalot.ThreadingHTTPServer(("127.0.0.1", 0), killalot.make_handler(config))
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
-        return f"http://127.0.0.1:{server.server_address[1]}"
 
     def get(self, url: str, cookie: str | None = None, client: str = "203.0.113.7"):
         headers = {"X-Forwarded-For": client}
@@ -634,6 +662,481 @@ class PublicModeTests(Fixture):
         self.assertIn("duckdns-update", (home / ".config/systemd/user/killalot-duckdns.service").read_text())
 
 
+class R3ItemTests(Fixture):
+    def add(self, title: str, project: Path | None = None, **kw) -> int:
+        return killalot.add(self.conn, project=str(project or self.ladder), kind=kw.pop("kind", "task"), title=title, via=VIA, **kw)
+
+    def test_v1_store_migrates_and_keeps_its_items(self) -> None:
+        old = self.base / "old"
+        old.mkdir()
+        raw = sqlite3.connect(old / "killalot.db", isolation_level=None)
+        for statement in killalot.split_sql(killalot.MIGRATIONS[0]):
+            raw.execute(statement)
+        raw.execute("INSERT INTO meta(key, value) VALUES ('schema_version', '1')")
+        raw.execute("INSERT INTO projects(path, name, first_seen, last_seen) VALUES ('/p', 'p', 'x', 'x')")
+        raw.execute("INSERT INTO items(project, kind, title, owner, state, origin, dedupe_key, created_at, updated_at) "
+                    "VALUES ('/p', 'task', 'Old one', 'me', 'accepted', 'me', 'task:old one', 'x', 'x')")
+        raw.close()
+        config = killalot.Config(root=old, project_roots=(self.roots,))
+        conn = killalot.connect(config)
+        self.addCleanup(conn.close)
+        self.assertEqual(killalot.get_meta(conn, "schema_version"), str(len(killalot.MIGRATIONS)))
+        item = killalot.get_item(conn, 1)
+        self.assertEqual((item["title"], item["priority"]), ("Old one", 2))
+
+    def test_priority_orders_lists_and_inbox_buckets(self) -> None:
+        low = self.propose("Someday thing", priority=3)
+        high = self.propose("Urgent thing", priority=0)
+        mid = self.propose("Normal thing")
+        self.assertEqual([i["id"] for i in killalot.inbox(self.conn)["proposals"]], [high, mid, low])
+        with self.assertRaisesRegex(killalot.KillalotError, "P0"):
+            self.propose("Bad", priority=7)
+        self.assertEqual(killalot.check_priority("p1"), 1)
+
+    def test_links_refuse_cycles_and_block_until_done(self) -> None:
+        a, b, c = self.add("Write paper"), self.add("Run ablation"), self.add("Get GPUs", project=self.lottery)
+        killalot.link(self.conn, a, b, "depends_on", actor="me", via=VIA)
+        killalot.link(self.conn, b, c, "depends_on", actor="agent", via=None)  # cross-project; agents may link
+        with self.assertRaisesRegex(killalot.KillalotError, "cycle"):
+            killalot.link(self.conn, c, a, "depends_on", actor="me", via=VIA)
+        with self.assertRaisesRegex(killalot.KillalotError, "itself"):
+            killalot.link(self.conn, a, a, "relates_to", actor="me", via=VIA)
+        with self.assertRaisesRegex(killalot.KillalotError, "already"):
+            killalot.link(self.conn, a, b, "depends_on", actor="me", via=VIA)
+        items = {i["id"]: i for i in killalot.list_items(self.conn)}
+        self.assertEqual((items[a]["blocked_by"], items[b]["blocked_by"]), ([b], [c]))
+        rows = {r["name"]: r for r in killalot.project_rows(self.conn, self.config)}
+        self.assertIsNone(rows["ladder"]["next"])  # both ladder items are blocked
+        killalot.act(self.conn, c, "done", actor="me", via=VIA)
+        self.assertEqual(killalot.blocked_by(self.conn, b), [])
+        self.assertEqual({(l["role"], l["id"]) for l in killalot.item_links(self.conn, b)}, {("needed by", a), ("depends on", c)})
+        killalot.unlink(self.conn, a, b, "depends_on", actor="me", via=VIA)
+        self.assertEqual(killalot.blocked_by(self.conn, a), [])
+        self.assertIn("unlink", [e["action"] for e in killalot.item_detail(self.conn, a)["events"]])
+
+    def test_a_subtask_has_one_parent(self) -> None:
+        epic, sub, other = self.add("Epic"), self.add("Sub"), self.add("Other")
+        killalot.link(self.conn, epic, sub, "parent_of", actor="me", via=VIA)
+        with self.assertRaisesRegex(killalot.KillalotError, "parent"):
+            killalot.link(self.conn, other, sub, "parent_of", actor="me", via=VIA)
+
+    def test_edit_only_touches_editable_fields(self) -> None:
+        item_id = self.propose()
+        for bad in ({"state": "done"}, {"approved_until": "2099-01-01"}, {"title=?, state": "x"}):
+            with self.assertRaisesRegex(killalot.KillalotError, "cannot edit"):
+                killalot.act(self.conn, item_id, "edit", actor="me", via=VIA, edits=bad)
+        self.assertEqual(killalot.get_item(self.conn, item_id)["state"], "proposed")
+        item = killalot.act(self.conn, item_id, "edit", actor="me", via=VIA, edits={"priority": "P1", "due_at": killalot.iso(killalot.utcnow())})
+        self.assertEqual(item["priority"], 1)
+        item = killalot.act(self.conn, item_id, "edit", actor="me", via=VIA, edits={"due_at": ""})
+        self.assertIsNone(item["due_at"])
+
+    def test_comments_are_events(self) -> None:
+        item_id = self.propose()
+        killalot.comment(self.conn, item_id, "check the seed first", actor="me", via=VIA)
+        killalot.comment(self.conn, item_id, "seed was fine", actor="agent", via=None)
+        detail = killalot.item_detail(self.conn, item_id)
+        self.assertEqual([c["text"] for c in detail["comments"]], ["check the seed first", "seed was fine"])
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.conn.execute("DELETE FROM events WHERE action='comment'")
+
+    def test_cli_priority_links_comments(self) -> None:
+        code, out = self.run_cli("--json", "add", "--project", str(self.ladder), "--title", "A", "--priority", "P1", "--via", VIA)
+        a = json.loads(out)["id"]
+        code, out = self.run_cli("--json", "add", "--project", str(self.ladder), "--title", "B", "--via", VIA)
+        b = json.loads(out)["id"]
+        self.assertEqual(self.run_cli("link", str(a), "depends_on", str(b), "--via", VIA)[0], 0)
+        self.assertEqual(self.run_cli("comment", str(a), "--text", "note", "--via", VIA)[0], 0)
+        self.assertEqual(self.run_cli("edit", str(b), "--priority", "P0", "--via", VIA)[0], 0)
+        code, out = self.run_cli("show", str(a))
+        self.assertIn("depends on #" + str(b), out)
+        self.assertIn("note", out)
+        self.assertIn("P1", out)
+        code, out = self.run_cli("list", "--project", "ladder")
+        self.assertIn(f"blocked by #{b}", out)
+
+
+class OpsTests(Fixture):
+    VIA_A = "assistant:web/web-d1"
+
+    def test_registry_never_approves_or_starts(self) -> None:
+        self.assertFalse({"approve", "start", "request_approval"} & set(killalot.OPS))
+        item_id, _ = killalot.request_approval(self.conn, project=str(self.ladder), title="Prune", evidence_text="[dry-run] x\n", command=None)
+        with self.assertRaisesRegex(killalot.KillalotError, "paired device"):
+            killalot.run_op(self.conn, self.config, "accept", {"id": item_id}, via="mcp:1")
+
+    def test_add_with_links_and_names(self) -> None:
+        dep = killalot.add(self.conn, project=str(self.lottery), kind="task", title="Get GPUs", via=VIA)
+        out = killalot.run_op(self.conn, self.config, "add_item", {"project": "ladder", "title": "Rerun ablation", "kind": "reminder",
+                                                                   "due": "2d", "priority": "P1", "depends_on": [dep]}, via="mcp:1")
+        new = out["added"]["id"]
+        self.assertEqual(killalot.blocked_by(self.conn, new), [dep])
+        self.assertEqual(killalot.get_item(self.conn, new)["priority"], 1)
+        event = self.conn.execute("SELECT via FROM events WHERE item=? AND action='create'", (new,)).fetchone()
+        self.assertEqual(event["via"], "mcp:1")
+        with self.assertRaisesRegex(killalot.KillalotError, "no project"):
+            killalot.run_op(self.conn, self.config, "add_item", {"project": "nope", "title": "x"}, via="mcp:1")
+        with self.assertRaisesRegex(killalot.KillalotError, "kind"):
+            killalot.run_op(self.conn, self.config, "add_item", {"project": "ladder", "title": "x", "kind": "approval"}, via="mcp:1")
+
+    def test_staged_change_applies_once_and_only_on_confirm(self) -> None:
+        staged = killalot.stage(self.conn, conv="web-d1", via=self.VIA_A, name="add_item", args={"project": "ladder", "title": "Email advisor"})
+        self.assertIn("Email advisor", staged["summary"])
+        self.assertEqual(killalot.list_items(self.conn), [])
+        first = killalot.resolve_pending(self.conn, self.config, staged["change"], True)
+        again = killalot.resolve_pending(self.conn, self.config, staged["change"], True)
+        self.assertEqual((first["outcome"], again["outcome"]), ("applied", "applied"))
+        self.assertEqual(len(killalot.list_items(self.conn)), 1)
+        other = killalot.stage(self.conn, conv="web-d1", via=self.VIA_A, name="add_item", args={"project": "ladder", "title": "Second"})
+        self.assertEqual(killalot.resolve_pending(self.conn, self.config, other["change"], False)["outcome"], "cancelled")
+        late = killalot.stage(self.conn, conv="web-d1", via=self.VIA_A, name="add_item", args={"project": "ladder", "title": "Late"})
+        self.conn.execute("UPDATE pending SET created_at=? WHERE id=?", (killalot.iso(killalot.utcnow() - timedelta(days=2)), late["change"]))
+        self.assertEqual(killalot.resolve_pending(self.conn, self.config, late["change"], True)["outcome"], "expired")
+        self.assertEqual(len(killalot.list_items(self.conn)), 1)
+        with self.assertRaisesRegex(killalot.KillalotError, "not a change"):
+            killalot.stage(self.conn, conv="web-d1", via=self.VIA_A, name="inbox", args={})
+
+    def test_staged_items_can_link_to_each_other(self) -> None:
+        first = killalot.stage(self.conn, conv="c", via=self.VIA_A, name="add_item", args={"project": "ladder", "title": "Rerun"})
+        second = killalot.stage(self.conn, conv="c", via=self.VIA_A, name="add_item",
+                                args={"project": "ladder", "title": "Write up", "depends_on": [f"change:{first['change']}"]})
+        self.assertIn(f"depends on change {first['change']}", second["summary"])
+        self.assertTrue(killalot.resolve_pending(self.conn, self.config, second["change"], True)["outcome"].startswith("failed: confirm change"))
+        again = killalot.stage(self.conn, conv="c", via=self.VIA_A, name="add_item",
+                               args={"project": "ladder", "title": "Write up", "depends_on": [f"change:{first['change']}"]})
+        killalot.resolve_pending(self.conn, self.config, first["change"], True)
+        self.assertEqual(killalot.resolve_pending(self.conn, self.config, again["change"], True)["outcome"], "applied")
+        items = {i["title"]: i for i in killalot.list_items(self.conn)}
+        self.assertEqual(items["Write up"]["blocked_by"], [items["Rerun"]["id"]])
+
+    def test_rejection_needs_reason_even_through_ops(self) -> None:
+        item_id = self.propose()
+        with self.assertRaisesRegex(killalot.KillalotError, "reason"):
+            killalot.run_op(self.conn, self.config, "reject", {"id": item_id}, via="mcp:1")
+
+    def test_mcp_protocol(self) -> None:
+        init = killalot.mcp_handle(self.config, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}}, via="mcp:1")
+        self.assertEqual(init["result"]["protocolVersion"], "2025-06-18")
+        self.assertIsNone(killalot.mcp_handle(self.config, {"jsonrpc": "2.0", "method": "notifications/initialized"}, via="mcp:1"))
+        tools = killalot.mcp_handle(self.config, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, via="mcp:1")["result"]["tools"]
+        self.assertIn("add_item", [t["name"] for t in tools])
+        call = {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "add_item", "arguments": {"project": "ladder", "title": "Staged"}}}
+        staged = killalot.mcp_handle(self.config, call, via=self.VIA_A, stage_conv="web-d1")["result"]
+        self.assertIn("staged", staged["content"][0]["text"])
+        self.assertEqual(killalot.list_items(self.conn), [])
+        direct = killalot.mcp_handle(self.config, call | {"id": 4}, via="mcp:1")["result"]
+        self.assertFalse(direct["isError"])
+        self.assertEqual(len(killalot.list_items(self.conn)), 1)
+        dup = killalot.mcp_handle(self.config, call | {"id": 5}, via="mcp:1")["result"]
+        self.assertTrue(dup["isError"])
+        self.assertIn("already tracked", dup["content"][0]["text"])
+        self.assertIn("error", killalot.mcp_handle(self.config, {"jsonrpc": "2.0", "id": 6, "method": "nope"}, via="mcp:1"))
+
+    def test_mcp_stdio(self) -> None:
+        lines = "\n".join(json.dumps(m) for m in (
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "list_projects", "arguments": {}}})) + "\n"
+        out = io.StringIO()
+        killalot.mcp_stdio(self.config, via=self.VIA_A, stage_conv="web-d1", stdin=io.StringIO(lines), stdout=out)
+        replies = [json.loads(x) for x in out.getvalue().splitlines()]
+        self.assertEqual([r["id"] for r in replies], [1, 2])
+        self.assertIn("ladder", replies[1]["result"]["content"][0]["text"])
+
+
+class AssistantTests(Fixture):
+    def runner(self, reply: str = "Staged it.", session: str = "sess-1", stage_title: str | None = None):
+        calls = []
+
+        def run(argv, **kw):
+            calls.append((argv, kw))
+            if stage_title:  # what the model does through mcp-stdio --stage
+                conn = killalot.connect(self.config)
+                killalot.stage(conn, conv="cli-x", via="assistant:cli/cli-x", name="add_item", args={"project": "ladder", "title": stage_title})
+                conn.close()
+            out = json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": reply, "session_id": session})
+            return subprocess.CompletedProcess(argv, 0, out, "")
+        return run, calls
+
+    def test_turn_stages_and_resumes(self) -> None:
+        run, calls = self.runner(stage_title="Rerun ablation")
+        result = killalot.assistant_turn(self.config, channel="cli", conv="cli-x", text="remind me to rerun the ablation", runner=run)
+        self.assertEqual(result["reply"], "Staged it.")
+        self.assertEqual([c["summary"] for c in result["pending"]], ["Add task to ladder: “Rerun ablation” · P2"])
+        argv, kw = calls[0]
+        self.assertNotIn("--resume", argv)
+        self.assertIn("--strict-mcp-config", argv)
+        self.assertEqual(argv[argv.index("--tools") + 1], "")
+        mcp = json.loads(argv[argv.index("--mcp-config") + 1])["mcpServers"]["killalot"]
+        self.assertIn("--stage", mcp["args"])
+        self.assertIn("assistant:cli/cli-x", mcp["args"])
+        self.assertIn("ladder", argv[argv.index("--append-system-prompt") + 1])
+        self.assertEqual(kw["input"], "remind me to rerun the ablation")
+        self.assertEqual(killalot.list_items(self.conn), [])  # nothing applied yet
+        killalot.resolve_pending(self.conn, self.config, result["pending"][0]["id"], True)
+        run2, calls2 = self.runner(reply="Done.")
+        killalot.assistant_turn(self.config, channel="cli", conv="cli-x", text="thanks", runner=run2)
+        argv2, kw2 = calls2[0]
+        self.assertEqual(argv2[argv2.index("--resume") + 1], "sess-1")
+        self.assertIn("applied", kw2["input"])  # the model learns what the owner tapped
+
+    def test_failures_are_plain_errors(self) -> None:
+        def missing(argv, **kw):
+            raise FileNotFoundError(argv[0])
+        with self.assertRaisesRegex(killalot.KillalotError, "not installed"):
+            killalot.assistant_turn(self.config, channel="cli", conv="cli-y", text="hi", runner=missing)
+
+        def broken(argv, **kw):
+            return subprocess.CompletedProcess(argv, 0, json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True}), "")
+        with self.assertRaisesRegex(killalot.KillalotError, "failed"):
+            killalot.assistant_turn(self.config, channel="cli", conv="cli-y", text="hi", runner=broken)
+
+    def test_codex_output(self) -> None:
+        stdout = "\n".join(json.dumps(e) for e in ({"type": "thread.started", "thread_id": "t-9"},
+                                                    {"type": "item.completed", "item": {"type": "agent_message", "text": "Which project?"}}))
+        self.assertEqual(killalot.parse_backend_output("codex-jsonl", stdout), ("Which project?", "t-9"))
+
+
+class FakeTelegram:
+    """Records every Bot API call; answers like Telegram does."""
+
+    def __init__(self):
+        self.calls: list[tuple[str, dict]] = []
+        self.next_id = 100
+
+    def opener(self, req, timeout):
+        method = req.full_url.rsplit("/", 1)[1]
+        params = json.loads(req.data.decode())
+        self.calls.append((method, params))
+        if method == "sendMessage":
+            self.next_id += 1
+        result = {"message_id": self.next_id} if method == "sendMessage" else ([] if method == "getUpdates" else True)
+
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+        return Response(json.dumps({"ok": True, "result": result}).encode())
+
+    def sent(self) -> list[dict]:
+        return [p for m, p in self.calls if m == "sendMessage"]
+
+
+class TelegramTests(Fixture):
+    CHAT = 4242
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.fake = FakeTelegram()
+        self.tg = killalot.Telegram("123:abc", self.fake.opener)
+
+    def msg(self, text: str, chat: int | None = None, reply_to: int | None = None) -> dict:
+        message = {"message_id": 1, "chat": {"id": chat or self.CHAT}, "text": text}
+        if reply_to:
+            message["reply_to_message"] = {"message_id": reply_to}
+        return {"update_id": 1, "message": message}
+
+    def link(self) -> None:
+        code = killalot.create_telegram_link(self.conn)
+        killalot.telegram_handle(self.config, self.tg, self.msg(f"/start {code}"))
+        self.assertEqual(killalot.telegram_chat(self.conn), self.CHAT)
+
+    def test_binding_needs_the_code_and_other_chats_are_ignored(self) -> None:
+        killalot.create_telegram_link(self.conn)
+        killalot.telegram_handle(self.config, self.tg, self.msg("/start wrong"))
+        self.assertIsNone(killalot.telegram_chat(self.conn))
+        self.link()
+        asked = []
+        killalot.telegram_handle(self.config, self.tg, self.msg("add something", chat=999), ask=lambda *a: asked.append(a))
+        killalot.telegram_handle(self.config, self.tg, self.msg("add something"), ask=lambda *a: asked.append(a))
+        self.assertEqual([a[3] for a in asked], ["add something"])
+
+    def test_notices_once_with_buttons_and_floods_collapse(self) -> None:
+        self.propose("Already open")
+        self.link()  # what was open before linking is not news
+        self.assertEqual(killalot.telegram_notify(self.config, self.tg), 0)
+        item_id = self.propose("New proposal")
+        self.assertEqual(killalot.telegram_notify(self.config, self.tg), 1)
+        self.assertEqual(killalot.telegram_notify(self.config, self.tg), 0)  # never re-sent
+        notice = self.fake.sent()[-1]
+        self.assertIn("New proposal", notice["text"])
+        data = [b.get("callback_data") for row in notice["reply_markup"]["inline_keyboard"] for b in row]
+        self.assertIn(f"a:{item_id}", data)
+        approval, _ = killalot.request_approval(self.conn, project=str(self.ladder), title="Prune", evidence_text="[dry-run] x\n", command=None)
+        killalot.telegram_notify(self.config, self.tg)
+        buttons = [b for row in self.fake.sent()[-1]["reply_markup"]["inline_keyboard"] for b in row]
+        self.assertTrue(all("url" in b for b in buttons))  # approvals only open the web page
+        for i in range(killalot.TELEGRAM_FLOOD + 1):
+            self.propose(f"Flood {i}")
+        before = len(self.fake.sent())
+        killalot.telegram_notify(self.config, self.tg)
+        self.assertEqual(len(self.fake.sent()), before + 1)
+        self.assertIn("/inbox", self.fake.sent()[-1]["text"])
+
+    def test_buttons_act_as_the_owner(self) -> None:
+        self.link()
+        item_id = self.propose()
+        cb = {"update_id": 2, "callback_query": {"id": "c1", "data": f"a:{item_id}", "message": {"message_id": 5, "chat": {"id": self.CHAT}, "text": "x"}}}
+        killalot.telegram_handle(self.config, self.tg, cb)
+        self.assertEqual(killalot.get_item(self.conn, item_id)["state"], "accepted")
+        event = self.conn.execute("SELECT via FROM events WHERE item=? AND action='accept'", (item_id,)).fetchone()
+        self.assertEqual(event["via"], f"telegram:{self.CHAT}")
+        other = self.propose("Reject me")
+        killalot.telegram_handle(self.config, self.tg, cb | {"callback_query": cb["callback_query"] | {"data": f"r:{other}"}})
+        prompt_id = self.fake.next_id  # the ForceReply prompt just sent
+        killalot.telegram_handle(self.config, self.tg, self.msg("not needed", reply_to=prompt_id))
+        item = killalot.get_item(self.conn, other)
+        self.assertEqual((item["state"], item["reject_reason"]), ("rejected", "not needed"))
+        intruder = {"update_id": 3, "callback_query": {"id": "c2", "data": f"d:{item_id}", "message": {"message_id": 6, "chat": {"id": 1}, "text": "x"}}}
+        killalot.telegram_handle(self.config, self.tg, intruder)
+        self.assertEqual(killalot.get_item(self.conn, item_id)["state"], "accepted")
+
+    def test_confirm_button_applies_a_staged_change(self) -> None:
+        self.link()
+        staged = killalot.stage(self.conn, conv=f"tg-{self.CHAT}", via=f"assistant:telegram/tg-{self.CHAT}", name="add_item",
+                                args={"project": "ladder", "title": "From Telegram"})
+        cb = {"update_id": 4, "callback_query": {"id": "c3", "data": f"pc:{staged['change']}", "message": {"message_id": 7, "chat": {"id": self.CHAT}, "text": "x"}}}
+        killalot.telegram_handle(self.config, self.tg, cb)
+        self.assertEqual([i["title"] for i in killalot.list_items(self.conn)], ["From Telegram"])
+
+    def test_commands(self) -> None:
+        self.link()
+        self.propose()
+        for command, expect in (("/inbox", "Proposals"), ("/projects", "ladder"), ("/digest", "Digest since")):
+            killalot.telegram_handle(self.config, self.tg, self.msg(command))
+            self.assertIn(expect, self.fake.sent()[-1]["text"], command)
+
+    def test_ask_relays_reply_and_changes(self) -> None:
+        self.link()
+        with mock.patch.object(killalot, "assistant_turn", return_value={"reply": "Which project?", "pending": [{"id": 9, "summary": "Add task"}]}):
+            killalot.telegram_ask(self.config, self.tg, self.CHAT, "add a task")
+        texts = [m["text"] for m in self.fake.sent()]
+        self.assertIn("Which project?", texts)
+        self.assertEqual(self.fake.sent()[-1]["reply_markup"]["inline_keyboard"][0][0]["callback_data"], "pc:9")
+
+
+class ConnectorTests(PublicHelpers, Fixture):
+    REDIRECT = "https://claude.ai/api/mcp/auth_callback"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.pconfig = self.public_config()
+        self.pconn = killalot.connect(self.pconfig)
+        self.addCleanup(self.pconn.close)
+        killalot.scan(self.pconn, self.pconfig)
+        self.url = self.serve(self.pconfig)
+        self.token = killalot.redeem_pairing(self.pconn, killalot.create_pairing(self.pconn, "mac"))[1]
+
+    def call(self, path, body=None, form=False, headers=None, cookie=None):
+        hdrs = {"X-Forwarded-For": "203.0.113.50", **(headers or {})}
+        if cookie:
+            hdrs["Cookie"] = f"{killalot.COOKIE_NAME}={cookie}"
+        data = None
+        if body is not None:
+            if form:
+                data = urllib.parse.urlencode(body).encode()
+                hdrs["Content-Type"] = "application/x-www-form-urlencoded"
+            else:
+                data = json.dumps(body).encode()
+                hdrs["Content-Type"] = "application/json"
+
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *args, **kwargs):
+                return None
+        req = urllib.request.Request(self.url + path, data=data, headers=hdrs, method="POST" if body is not None else "GET")
+        try:
+            with urllib.request.build_opener(NoRedirect).open(req, timeout=5) as res:
+                return res.status, res.read(), res.headers
+        except urllib.error.HTTPError as err:
+            return err.code, err.read(), err.headers
+
+    def connect_app(self) -> dict:
+        import base64
+        import hashlib
+        status, body, _ = self.call("/oauth/register", {"redirect_uris": [self.REDIRECT], "client_name": "Claude"})
+        self.assertEqual(status, 201, body)
+        client = json.loads(body)["client_id"]
+        verifier = "v" * 64
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        query = urllib.parse.urlencode({"response_type": "code", "client_id": client, "redirect_uri": self.REDIRECT, "code_challenge": challenge,
+                                        "code_challenge_method": "S256", "state": "st"})
+        status, body, _ = self.call("/oauth/authorize?" + query)
+        self.assertEqual(status, 401)
+        self.assertIn(b"Pair and continue", body)  # unpaired browser: offered a pairing code
+        status, body, _ = self.call("/oauth/authorize?" + query, cookie=self.token)
+        self.assertEqual(status, 200)
+        nonce = body.decode().split('name="consent" value="')[1].split('"')[0]
+        status, _, headers = self.call("/oauth/authorize", {"consent": nonce, "decision": "allow"}, form=True, cookie=self.token)
+        self.assertEqual(status, 303)
+        location = urllib.parse.urlparse(headers["Location"])
+        params = urllib.parse.parse_qs(location.query)
+        self.assertEqual(params["state"], ["st"])
+        code = params["code"][0]
+        bad = self.call("/oauth/token", {"grant_type": "authorization_code", "code": code, "client_id": client, "redirect_uri": self.REDIRECT,
+                                         "code_verifier": "w" * 64}, form=True)
+        self.assertEqual(bad[0], 400)  # wrong verifier, and the code is now spent
+        return {"client": client, "verifier": verifier, "challenge": challenge, "query": query}
+
+    def tokens(self, app) -> dict:
+        query = app["query"]
+        status, body, _ = self.call("/oauth/authorize?" + query, cookie=self.token)
+        nonce = body.decode().split('name="consent" value="')[1].split('"')[0]
+        _, _, headers = self.call("/oauth/authorize", {"consent": nonce, "decision": "allow"}, form=True, cookie=self.token)
+        code = urllib.parse.parse_qs(urllib.parse.urlparse(headers["Location"]).query)["code"][0]
+        status, body, _ = self.call("/oauth/token", {"grant_type": "authorization_code", "code": code, "client_id": app["client"],
+                                                     "redirect_uri": self.REDIRECT, "code_verifier": app["verifier"]}, form=True)
+        self.assertEqual(status, 200, body)
+        return json.loads(body)
+
+    def mcp(self, access: str, message: dict):
+        return self.call("/mcp", message, headers={"Authorization": f"Bearer {access}", "Accept": "application/json, text/event-stream"})
+
+    def test_metadata_and_registration_rules(self) -> None:
+        status, body, _ = self.call("/.well-known/oauth-authorization-server")
+        self.assertEqual(json.loads(body)["code_challenge_methods_supported"], ["S256"])
+        status, body, _ = self.call("/.well-known/oauth-protected-resource/mcp")
+        self.assertEqual(json.loads(body)["resource"], "https://example.duckdns.org:49147/mcp")
+        status, body, _ = self.call("/oauth/register", {"redirect_uris": ["https://evil.example/cb"]})
+        self.assertEqual(status, 400)
+        status, _, headers = self.call("/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        self.assertEqual(status, 401)
+        self.assertIn("resource_metadata=", headers["WWW-Authenticate"])
+
+    def test_full_flow_tools_refresh_and_revoke(self) -> None:
+        app = self.connect_app()
+        tok = self.tokens(app)
+        status, body, _ = self.mcp(tok["access_token"], {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        self.assertEqual(status, 200)
+        self.assertIn("add_item", [t["name"] for t in json.loads(body)["result"]["tools"]])
+        call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "add_item", "arguments": {"project": "ladder", "title": "From Claude"}}}
+        status, body, _ = self.mcp(tok["access_token"], call)
+        self.assertFalse(json.loads(body)["result"]["isError"], body)
+        row = self.pconn.execute("SELECT via FROM events WHERE action='create' ORDER BY id DESC LIMIT 1").fetchone()
+        self.assertTrue(row["via"].startswith("mcp:"))
+        self.assertEqual(self.mcp(tok["access_token"], {"jsonrpc": "2.0", "method": "notifications/initialized"})[0], 202)
+        status, body, _ = self.call("/oauth/token", {"grant_type": "refresh_token", "refresh_token": tok["refresh_token"], "client_id": app["client"]}, form=True)
+        fresh = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(self.mcp(tok["access_token"], {"jsonrpc": "2.0", "id": 3, "method": "ping"})[0], 401)  # rotated away
+        self.assertEqual(self.mcp(fresh["access_token"], {"jsonrpc": "2.0", "id": 3, "method": "ping"})[0], 200)
+        killalot.revoke_connection(self.pconn, killalot.connection_rows(self.pconn)[0]["id"], "terminal")
+        self.assertEqual(self.mcp(fresh["access_token"], {"jsonrpc": "2.0", "id": 4, "method": "ping"})[0], 401)
+
+    def test_revoking_the_device_cuts_its_connections(self) -> None:
+        tok = self.tokens(self.connect_app())
+        device = self.pconn.execute("SELECT id FROM devices WHERE name='mac'").fetchone()["id"]
+        killalot.revoke_device(self.pconn, device, "terminal")
+        self.assertEqual(self.mcp(tok["access_token"], {"jsonrpc": "2.0", "id": 1, "method": "ping"})[0], 401)
+
+    def test_off_in_tailscale_mode(self) -> None:
+        base = self.serve(self.config)
+        with self.assertRaises(urllib.error.HTTPError) as err:
+            urllib.request.urlopen(base + "/.well-known/oauth-authorization-server", timeout=5)
+        self.assertEqual(err.exception.code, 404)
+
+
 class CliTests(Fixture):
     def test_end_to_end_cli(self) -> None:
         code, out = self.run_cli("--json", "propose", "--project", str(self.ladder), "--title", "Update EXPERIMENTS.md", "--evidence", "JOURNAL.md")
@@ -672,7 +1175,8 @@ class DeployTests(Fixture):
         self.assertIn(str(current / "scripts" / "killalot.py"), wrapper)
         self.assertIn(str(self.config_path), wrapper)
         unit = (home / ".config/systemd/user" / killalot.SERVICE_NAME).read_text()
-        self.assertNotIn("__KILLALOT", unit)
+        self.assertNotRegex(unit, r"__[A-Z_]+__")
+        self.assertIn(f"PATH={home}/.local/bin:", unit)  # the assistant backend is found from the service
         self.assertIn(f"{current}/scripts/killalot.py serve", unit)
         # the deployed copy knows its version without the plugin manifest
         out = subprocess.run([sys.executable, "-c", f"import importlib.util,sys;s=importlib.util.spec_from_file_location('k','{current}/scripts/killalot.py');m=importlib.util.module_from_spec(s);sys.modules['k']=m;s.loader.exec_module(m);print(m.plugin_version())"],

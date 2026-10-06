@@ -98,7 +98,8 @@ killalot device add "phone"
 
 Open the printed link on that device within ten minutes. It works once. On a phone, add the page
 to the home screen to use it like an app. `killalot device list` shows the paired devices;
-`killalot device revoke <id>` (or the Devices tab) cuts one off immediately.
+`killalot device revoke <id>` (or the Devices tab) cuts one off immediately. A paired device's
+cookie is renewed each time the app opens.
 
 ## 5. Session-start hooks
 
@@ -108,6 +109,60 @@ tagged project a session starts in, and prints nothing anywhere else.
 - **Claude Code** runs it as soon as the plugin is installed.
 - **Codex** shows it as a new hook needing review: trust it once in the hooks review. It may ask
   again after a core update.
+
+## 6. Talk to the list: the hub assistant
+
+The web app's **Chat** tab, the "Tell Killalot…" box on the inbox, and Telegram hand your words
+to a headless agent on the hub. Its only tools are the list's operations (read, add, edit,
+prioritise, link, comment, accept, reject, answer, snooze, drop, mark done, park). Every change it
+makes is **staged**: you see it under the reply with Confirm and Cancel, and nothing changes until
+you tap. It asks when the project, date or kind is unclear, and conversations continue until you
+start a new one. It never approves and never starts work in a project.
+
+```toml
+[assistant]
+backend = "claude"     # or "codex"; the CLI must be installed and signed in on the hub
+# command = "/abs/path/to/claude"   # if the service's PATH does not find it
+# model = "<model id>"              # optional
+timeout_s = 180
+```
+
+The service runs it as you, so it uses your existing Claude Code (or Codex) sign-in and plan.
+Try it from the terminal first: `killalot assistant ask "what is open in <project>?"`, then
+`killalot assistant pending` and `killalot assistant confirm <id>`.
+
+## 7. Telegram
+
+1. In Telegram, talk to @BotFather, `/newbot`, and copy the token. Keep it **out of chats and
+   repositories**:
+   `install -m 600 /dev/null ~/.config/resirch-killalot/telegram.token && echo '<token>' > ~/.config/resirch-killalot/telegram.token`
+2. Add to the config: `[telegram]` with `bot_token_file = "~/.config/resirch-killalot/telegram.token"`,
+   then `systemctl --user restart resirch-killalot.service`.
+3. `killalot telegram link` prints `/start <code>`. Within ten minutes, send it to your bot from
+   your own Telegram account. From then on the bot answers only that chat.
+
+The bot sends each new proposal, item waiting on you, due reminder and approval once, with buttons
+(Accept, Reject…, Answer…, Done, Snooze, Open). More than five at once arrive as one summary.
+Approvals only get an Open button: you approve on the web page that shows the whole dry-run.
+Commands: `/inbox`, `/projects`, `/digest` (moves the digest mark), `/new` (fresh conversation).
+Anything else you write goes to the assistant. `killalot telegram status` and `unlink` manage it.
+
+## 8. Connect a chat app (claude.ai, ChatGPT)
+
+Needs public access (section 3). The app becomes a client of the list: it reads it and makes
+changes as you, applied at once (the chat app's own tool-approval prompt is the confirmation). It
+can never approve.
+
+- **claude.ai**: Settings → Connectors → Add custom connector, URL
+  `https://<name>.duckdns.org:49147/mcp`. Add it in a browser you paired (section 4); the consent
+  page answers only a paired browser. If it is not paired, the page asks for a pairing code from
+  `killalot device add "<name>"`. Connectors added on the web are available in the mobile app.
+- **ChatGPT**: Settings → Apps & Connectors → Advanced → Developer mode, then create a connector
+  with the same URL.
+
+Only the redirect URLs in `[mcp] redirect_uris` may register (the defaults cover claude.ai and
+ChatGPT). `killalot connection list` and `killalot connection revoke <id>` (or the Devices tab)
+manage connections; revoking the device that approved a connection ends it too.
 
 ## Backups
 

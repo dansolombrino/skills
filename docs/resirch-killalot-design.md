@@ -6,7 +6,11 @@ Status (2026-10-05):
 - Design (§1–§12), tool selection (§13) and the implementation plan (§14–§21): approved.
 - **R1 is live** (core 1.1.0 → 1.2.2): store, CLI, session-start hook on both hosts, web app, seeding.
   Access switched from Tailscale to public HTTPS after go-live; see §22.
-- **R2 is next**: Telegram, supervisor questions, prune approvals, rig-board compute column.
+- **R3 (core 1.3.0)**: priorities, links, comments; a hub assistant the owner talks to in plain
+  words from the web app and Telegram; the Telegram bot (R2's notifications folded in); a remote
+  MCP connector for chat apps. See §23.
+- **Still open from R2**: supervisor questions, prune approvals (research 9.1.0), rig-board
+  compute column.
 
 Code: `plugins/core/skills/resirch-killalot/`. Setup and ports: its `references/setup.md`.
 
@@ -599,3 +603,57 @@ They follow the `test_plot_server.py` idioms: load with `spec_from_file_location
   until daily use says otherwise.
 - **Devices paired:** the owner's iPhone and Mac.
 - **Follow-ups** are tracked as ReSirch Killalot items on this repository, not here.
+
+---
+
+# 23. R3: talk to the list (core 1.3.0, 2026-10-05)
+
+The owner asked to manage the list in plain words, with back-and-forth, from three places: a chat
+app (claude.ai or ChatGPT), Telegram, and the web app on phone and desk. They also asked for
+priorities, links between items, comments and editing.
+
+- **D17. Priorities, links and comments.** Daily use showed the need that L72 left open
+  ("Add more fields only if daily use shows they're needed").
+  - `priority` is P0–P3 with a default of P2. The inbox keeps the §3 buckets and sorts by priority,
+    then due, then age inside each.
+  - `links(src, dst, type)` has three types: `depends_on`, `parent_of` and `relates_to`. Links may
+    cross projects and are soft-removed. Cycles, self-links and a second parent are refused. An
+    item with an open `depends_on` target is *blocked*: it shows a chip and is skipped as a
+    project's next action.
+  - Comments are `comment` events, append-only like all history. Agents may link and comment;
+    neither decides anything.
+  - Edits now go through an allow-list (`EDITABLE`). Before this, `POST /api/action` passed any
+    key into an `UPDATE`, which could reach `state` or the approval columns.
+- **D18. The hub assistant acts for the owner, on a tap.** Telegram and the web chat hand the
+  owner's words to a headless Claude Code (`claude -p --resume`, or `codex exec` by config).
+  - Its only tools are the operation registry (`OPS`). It reaches them through
+    `killalot mcp-stdio --stage`. Built-in tools are off and no other MCP servers are loaded.
+  - Every write is staged in `pending` and applies only on the owner's Confirm tap, with
+    `via=assistant:<channel>/<conversation>`. This enforces "confirm before writing" in code, not
+    in the prompt. Text that an agent planted in a proposal cannot change anything on its own.
+  - Staged items can link to each other (`change:N`); the link resolves when its target is
+    confirmed.
+  - The assistant manages the list only. It never approves and never starts or executes project
+    work, so D9 and D14 stand.
+- **D19. Chat apps connect through MCP with OAuth bound to a paired device.**
+  - `/mcp` is Streamable HTTP with JSON responses and is on only in public access.
+  - OAuth 2.1 runs with dynamic registration limited to `[mcp] redirect_uris`, mandatory PKCE
+    S256, one-hour access tokens and rotating refresh tokens.
+  - The consent page answers only a paired device's cookie, or pairs the browser with a code from
+    `device add`. Tokens act with `via=mcp:<id>` and are listed and revocable; revoking their
+    device ends them.
+  - The device cookie moved from `SameSite=Strict` to `Lax`, because the consent page is reached
+    by a cross-site redirect. API writes still need the `X-Killalot` header and a JSON body. Old
+    cookies are re-issued as Lax when the app opens.
+  - Writes from a chat app apply at once; the app's own tool-approval prompt is the confirmation.
+- **D20. R2's Telegram bot was folded into R3.**
+  - It runs as a long-polling thread in `serve`, bound to one chat with `telegram link` plus
+    `/start <code>`.
+  - Notices are sent once per dedupe key (`notices` table): proposals, waiting items, due items
+    and approvals. More than five at once become one summary. Items open when the chat is linked
+    are not sent.
+  - Buttons accept, reject (the reason comes through a ForceReply), answer, mark done, snooze and
+    open. Approvals only open the web page.
+  - Commands: `/inbox`, `/projects`, `/digest`, `/new`. Any other text goes to the assistant.
+  - Supervisor questions and the prune flow remain R2 items.
+

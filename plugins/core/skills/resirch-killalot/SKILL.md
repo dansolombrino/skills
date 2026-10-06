@@ -1,6 +1,6 @@
 ---
 name: resirch-killalot
-description: Keep the owner's single cross-project list of work (ReSirch Killalot) for every project tagged with .project.toml - tasks, decisions, approvals, questions and reminders that agents only propose and the owner alone accepts, rejects, answers or approves. Use when the user asks what is open, pending, waiting on them, or on their plate in this project or across projects, asks for an inbox, digest, todo, reminder, or project overview, wants to park or unpark a project, says to do, start, finish, accept, reject or answer an item, when a session ends with work left undone, when a journal entry says something is not done, when a decision is left open, or when a prune or other risky action needs the owner's approval. Do not use for run status or GPU occupancy.
+description: Keep the owner's single cross-project list of work (ReSirch Killalot) for every project tagged with .project.toml - tasks, decisions, approvals, questions and reminders that agents only propose and the owner alone accepts, rejects, answers or approves. Use when the user asks what is open, pending, waiting on them, or on their plate in this project or across projects, asks for an inbox, digest, todo, reminder, or project overview, wants to park or unpark a project, says to do, start, finish, accept, reject or answer an item, wants to prioritise, link (depends on, subtask of, related to) or comment on items, asks how to manage the list from Telegram, the web app or a chat app, when a session ends with work left undone, when a journal entry says something is not done, when a decision is left open, or when a prune or other risky action needs the owner's approval. Do not use for run status or GPU occupancy.
 ---
 
 # resirch-killalot
@@ -23,6 +23,11 @@ command reports no config or no store, say so and stop; do not invent one.
   closed `rejected` / `dropped`. Every change is an event; history is never rewritten.
 - **Agents only propose.** Only the owner accepts, rejects, edits, drops, snoozes, answers,
   parks or unparks. Accepting means "it is on the list" — never that the work may start.
+- **Priority** `P0` (drop everything) to `P3` (someday), default `P2`. **Links** between any two
+  items, across projects: `depends_on` (blocked until the other is done), `parent_of` (subtask),
+  `relates_to`. **Comments** are notes on an item, kept forever.
+- **The owner talks to the list in plain words** from Telegram, the web app's chat, or a connected
+  chat app; changes made there are the owner's own (setup reference, sections 6–8).
 - **Approvals bind to evidence.** An approval stores the full dry-run and its fingerprint. The
   owner approves it only from a paired device, after seeing the whole dry-run; it expires; and
   an executor must re-run the dry-run and pass `check-approval` before acting.
@@ -55,6 +60,10 @@ Rules:
 - `--owner me` for work only the owner can do (read, decide, write); the default `agent` is work
   an agent would do once accepted.
 - One item per owed outcome; no item for trivia or for work finished in this session.
+- `--priority P0..P3` suggests how urgent it is (default P2); the owner can change it.
+- Bookkeeping an agent may do without asking: link items (`killalot link <a> depends_on|parent_of|relates_to <b>`)
+  and note findings on an item (`killalot comment <id> --text "..."`). Neither accepts, starts or
+  closes anything.
 
 ## Executing an accepted item
 
@@ -76,6 +85,7 @@ run it on their behalf with `--via session:<host>/<session id>`:
 killalot accept 12 --via session:<host>/<id>
 killalot reject 13 --reason "<the owner's reason>" --via session:<host>/<id>
 killalot answer 14 --text "<the owner's answer>" --via session:<host>/<id>
+killalot edit 15 --priority P1 --due 2026-10-16 --via session:<host>/<id>
 killalot park <project> --reason "<why>" --revisit 2w --via session:<host>/<id>
 ```
 
@@ -97,10 +107,11 @@ paired device, so send the owner to the item in the web app. The CLI refuses `ap
 
 - `killalot projects` — one line per project: open items, next action, last activity, `STALE`
   (no activity for the configured days while items are open) or `PARKED`.
-- `killalot inbox` — what waits on the owner, in order: blocked on you, decisions, proposals, due.
+- `killalot inbox` — what waits on the owner, in order: blocked on you, decisions, proposals, due;
+  highest priority first inside each.
 - `killalot digest` — everything since the last digest the owner asked for. It moves the mark;
   use `--peek` to look without moving it. Run it only when the owner asks for a digest.
-- `killalot show <id>` — one item with its evidence and history.
+- `killalot show <id>` — one item with its links, comments, evidence and history.
 
 Staleness is never pushed; it shows in the overview and the digest. Parking is the owner's
 deliberate choice; activity in a parked project only suggests unparking.
@@ -119,6 +130,8 @@ Turn the work already buried in the projects into proposals:
 ## Hard limits
 
 - Never edit the store by hand, never copy it, never work around a refusal from `killalot`.
+- Never confirm a change the hub assistant staged (`killalot assistant confirm`): that tap is the
+  owner's own.
 - Never accept, reject or answer without the owner's explicit words; never approve at all.
 - Never start an item without the owner's yes in this session.
 - Never put secrets in an item, its evidence, or a dry-run filed for approval.
