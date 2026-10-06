@@ -160,6 +160,17 @@ can never approve.
 - **ChatGPT**: Settings → Apps & Connectors → Advanced → Developer mode, then create a connector
   with the same URL.
 
+**Chat apps connect only to port 443.** If the router cannot forward 443 (for example, an ISP that
+shares one IPv4 among customers and gives each a port block), publish the app on 443 with
+Tailscale Funnel and tell Killalot that address. The web app and Telegram keep the public address.
+
+1. `tailscale funnel --bg --https=443 http://127.0.0.1:<[web] port>` (the first time it prints a
+   link to allow Funnel for this machine in the tailnet policy).
+2. In the config: `[mcp]` with `public_base = "https://<hub>.<tailnet>.ts.net"`, then restart the
+   service.
+3. Use `https://<hub>.<tailnet>.ts.net/mcp` as the connector URL. The consent page there is a new
+   site for the browser: pair it once with the code from `killalot device add "<name>"`.
+
 Only the redirect URLs in `[mcp] redirect_uris` may register (the defaults cover claude.ai and
 ChatGPT). `killalot connection list` and `killalot connection revoke <id>` (or the Devices tab)
 manage connections; revoking the device that approved a connection ends it too.

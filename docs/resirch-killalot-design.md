@@ -660,3 +660,11 @@ priorities, links between items, comments and editing.
   (`/mcp`, `/oauth/register`, `/oauth/token`, `/.well-known/oauth-*`) answer CORS preflights and
   carry `Access-Control-Allow-Origin` for the chat apps' origins only, never with credentials. The
   rest of the app stays same-origin.
+- **1.3.2:** claude.ai's connector check never reached port 49147: it connects only to 443. The
+  owner's ISP (iliad) shares one IPv4 among customers and gives each a port block starting at
+  40960, so 443 cannot be forwarded. The connector therefore gets its own origin
+  (`[mcp] public_base`), served on 443 by Tailscale Funnel (`https://rig-4090.tail48a89.ts.net`).
+  The web app and Telegram stay on DuckDNS. The earlier Tailscale trouble (§22, D16) was the
+  iPhone not resolving `*.ts.net` inside the tailnet; Funnel names resolve through public DNS, and
+  only the chat app's servers use them. Asking iliad for a full-stack IPv4 would allow 443 on the
+  router later.

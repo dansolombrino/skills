@@ -1146,6 +1146,14 @@ class ConnectorTests(PublicHelpers, Fixture):
         with self.assertRaises(urllib.error.HTTPError):
             urllib.request.urlopen(req, timeout=5)
 
+    def test_connector_can_live_on_its_own_origin(self) -> None:
+        config = self.public_config('[mcp]\npublic_base = "https://hub.example.ts.net/"\n')
+        self.assertEqual(config.connector_base, "https://hub.example.ts.net")
+        resource, server = killalot.oauth_metadata(config)
+        self.assertEqual((resource["resource"], server["token_endpoint"]), ("https://hub.example.ts.net/mcp", "https://hub.example.ts.net/oauth/token"))
+        with self.assertRaisesRegex(killalot.KillalotError, "https origin"):
+            self.public_config('[mcp]\npublic_base = "http://plain.example"\n')
+
     def test_off_in_tailscale_mode(self) -> None:
         base = self.serve(self.config)
         with self.assertRaises(urllib.error.HTTPError) as err:

@@ -192,6 +192,7 @@ class Config:
     assistant_model: str | None = None
     assistant_timeout_s: int = ASSISTANT_TIMEOUT_S
     mcp_redirect_uris: tuple[str, ...] = DEFAULT_REDIRECT_URIS
+    mcp_public_base: str | None = None  # where chat apps reach the connector, if not the web app's address
     config_path: Path = field(default_factory=lambda: Path(DEFAULT_CONFIG).expanduser())
 
     @property
@@ -213,6 +214,13 @@ class Config:
     @property
     def duckdns_env(self) -> Path:
         return self.config_path.parent / "duckdns.env"
+
+    @property
+    def connector_base(self) -> str | None:
+        """The connector's public origin: [mcp] public_base (e.g. a port-443 Tailscale Funnel when the
+        ISP shares the IPv4 and 443 cannot be forwarded), else the public web address."""
+        base = self.mcp_public_base or (self.public_base if self.access == "public" else None)
+        return base.rstrip("/") if base else None
 
     @property
     def assistant_dir(self) -> Path:
@@ -277,6 +285,9 @@ def load_config(path: Path) -> Config:
     redirects = mcp.get("redirect_uris", list(DEFAULT_REDIRECT_URIS))
     if not isinstance(redirects, list) or not all(isinstance(u, str) and u.startswith("https://") for u in redirects):
         raise KillalotError(f"{path}: [mcp] redirect_uris must be a list of https URLs")
+    mcp_base = mcp.get("public_base")
+    if mcp_base is not None and (not isinstance(mcp_base, str) or not re.fullmatch(r"https://[A-Za-z0-9.-]+(:\d+)?", mcp_base.rstrip("/"))):
+        raise KillalotError(f"{path}: [mcp] public_base must be an https origin, like https://host.example")
     return Config(
         root=root_path,
         project_roots=tuple(Path(r).expanduser() for r in roots),
@@ -296,6 +307,7 @@ def load_config(path: Path) -> Config:
         assistant_model=assistant.get("model") or None,
         assistant_timeout_s=int(assistant.get("timeout_s", ASSISTANT_TIMEOUT_S)),
         mcp_redirect_uris=tuple(redirects),
+        mcp_public_base=mcp_base.rstrip("/") if mcp_base else None,
         config_path=path,
     )
 
@@ -2355,7 +2367,7 @@ CONSENT_TTL_S = 10 * 60
 
 
 def oauth_metadata(config: Config) -> tuple[dict, dict]:
-    base = (config.public_base or "").rstrip("/")
+    base = config.connector_base or ""
     resource = {"resource": f"{base}/mcp", "authorization_servers": [base], "bearer_methods_supported": ["header"],
                 "scopes_supported": ["killalot"], "resource_name": "ReSirch Killalot"}
     server = {"issuer": base, "authorization_endpoint": f"{base}/oauth/authorize", "token_endpoint": f"{base}/oauth/token",
@@ -2674,7 +2686,7 @@ def make_handler(config: Config, state: dict | None = None):
                 elif path == "/api/devices":
                     rows = [dict(r) | {"token_sha256": None} for r in conn.execute("SELECT * FROM devices ORDER BY id")]
                     self._json({"devices": rows, "current": device["id"], "connections": connection_rows(conn),
-                                "mcp_url": f"{config.public_base}/mcp" if config.access == "public" else None})
+                                "mcp_url": f"{config.connector_base}/mcp" if config.connector_base else None})
                 else:
                     self._send(404, "text/plain; charset=utf-8", b"not found\n")
             except KillalotError as exc:
@@ -2689,7 +2701,7 @@ def make_handler(config: Config, state: dict | None = None):
             return path.startswith("/.well-known/oauth-") or path in ("/mcp", "/oauth/register", "/oauth/token")
 
         def do_OPTIONS(self) -> None:  # noqa: N802 - CORS preflight from a chat app's page
-            if not self._is_connector_path() or config.access != "public":
+            if not self._is_connector_path() or not config.connector_base:
                 self._send(404, "text/plain; charset=utf-8", b"not found\n")
                 return
             self._send(204, "text/plain; charset=utf-8", b"", headers={
@@ -2706,7 +2718,7 @@ def make_handler(config: Config, state: dict | None = None):
 
         def _cors(self) -> None:
             origin = (self.headers.get("Origin") or "").rstrip("/")
-            if config.access == "public" and origin in CONNECTOR_ORIGINS and self._is_connector_path():
+            if config.connector_base and origin in CONNECTOR_ORIGINS and self._is_connector_path():
                 self.send_header("Access-Control-Allow-Origin", origin)
                 self.send_header("Vary", "Origin")
                 self.send_header("Access-Control-Expose-Headers", "WWW-Authenticate, Mcp-Session-Id")
@@ -2794,7 +2806,7 @@ def make_handler(config: Config, state: dict | None = None):
         # ── connected chat apps: OAuth and /mcp (public access only) ──
         def _connector(self, url, raw: bytes | None) -> None:
             client = self._client()
-            if config.access != "public" or not config.public_base:
+            if not config.connector_base:
                 self._send(404, "text/plain; charset=utf-8", b"connectors need public access (see setup.md)\n")
                 return
             if limiter.blocked(client):
@@ -2885,12 +2897,12 @@ def make_handler(config: Config, state: dict | None = None):
             token = token_for(conn, auth[7:].strip() if auth.lower().startswith("bearer ") else None)
             if token is None:
                 limiter.fail(self._client())
-                meta = f"{config.public_base}/.well-known/oauth-protected-resource"
+                meta = f"{config.connector_base}/.well-known/oauth-protected-resource"
                 self._send(401, "application/json", b'{"error":"invalid_token"}',
                            headers={"WWW-Authenticate": f'Bearer resource_metadata="{meta}"'})
                 return
             origin = self.headers.get("Origin")
-            if origin and origin.rstrip("/") not in (config.public_base.rstrip("/"), *CONNECTOR_ORIGINS):
+            if origin and origin.rstrip("/") not in (config.connector_base, *CONNECTOR_ORIGINS):
                 self._json({"error": "origin not allowed"}, 403)
                 return
             via = f"mcp:{token['id']}"
