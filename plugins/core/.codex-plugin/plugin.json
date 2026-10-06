@@ -1,6 +1,6 @@
 {
   "name": "core",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "Always-on working discipline for every project: mirror intent and hold brainstorm phases until an explicit greenlight, integrate reference code only through approved deviations, tag each project with its categories so domain plugins such as research load only where they belong, and keep one cross-project list of work (ReSirch Killalot) that agents propose into, only the owner accepts, and the owner manages in plain words from Telegram, the web app, or a connected chat app.",
   "author": {
     "name": "Dan Solombrino",

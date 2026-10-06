@@ -2894,9 +2894,11 @@ def make_handler(config: Config, state: dict | None = None):
 
         def _mcp(self, conn, body) -> None:
             auth = self.headers.get("Authorization", "")
-            token = token_for(conn, auth[7:].strip() if auth.lower().startswith("bearer ") else None)
+            bearer = auth[7:].strip() if auth.lower().startswith("bearer ") else None
+            token = token_for(conn, bearer)
             if token is None:
-                limiter.fail(self._client())
+                if bearer:  # no token at all is how every client starts discovery; only a wrong one counts
+                    limiter.fail(self._client())
                 meta = f"{config.connector_base}/.well-known/oauth-protected-resource"
                 self._send(401, "application/json", b'{"error":"invalid_token"}',
                            headers={"WWW-Authenticate": f'Bearer resource_metadata="{meta}"'})

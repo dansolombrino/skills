@@ -1146,6 +1146,14 @@ class ConnectorTests(PublicHelpers, Fixture):
         with self.assertRaises(urllib.error.HTTPError):
             urllib.request.urlopen(req, timeout=5)
 
+    def test_discovery_without_a_token_never_locks_out(self) -> None:
+        for _ in range(killalot.FAILED_AUTH_LIMIT + 2):
+            self.assertEqual(self.call("/mcp", {"jsonrpc": "2.0", "id": 1, "method": "ping"})[0], 401)
+        self.assertEqual(self.call("/.well-known/oauth-authorization-server")[0], 200)  # not locked out
+        for _ in range(killalot.FAILED_AUTH_LIMIT):
+            self.call("/mcp", {"jsonrpc": "2.0", "id": 1, "method": "ping"}, headers={"Authorization": "Bearer forged"})
+        self.assertEqual(self.call("/.well-known/oauth-authorization-server")[0], 429)
+
     def test_connector_can_live_on_its_own_origin(self) -> None:
         config = self.public_config('[mcp]\npublic_base = "https://hub.example.ts.net/"\n')
         self.assertEqual(config.connector_base, "https://hub.example.ts.net")
