@@ -635,6 +635,15 @@ priorities, links between items, comments and editing.
     confirmed.
   - The assistant manages the list only. It never approves and never starts or executes project
     work, so D9 and D14 stand.
+  - Core 1.4.0 confines it for the case where someone else holds the channel. It sees and stages
+    only `ASSISTANT_OPS` (read, add, edit, link, unlink, comment); the owner's decisions stay on
+    the buttons and the web app, and a change staged under older rules fails on Confirm. Claude
+    runs with `--setting-sources ""` (none of the owner's settings, hooks, plugins, CLAUDE.md or
+    bypass mode), `--system-prompt` replacing the default and `--max-turns`. Codex runs under its
+    own `CODEX_HOME` with `--ignore-user-config`, a read-only sandbox and every non-MCP feature off
+    except the code-mode isolate it needs to call tools. Off-topic messages get one fixed refusal
+    line; messages are capped at 2000 characters and `[assistant] daily_limit` a day. Conversations
+    are tagged with `ASSISTANT_PROFILE`, so none resumes under older rules.
 - **D19. Chat apps connect through MCP with OAuth bound to a paired device.**
   - `/mcp` is Streamable HTTP with JSON responses and is on only in public access.
   - OAuth 2.1 runs with dynamic registration limited to `[mcp] redirect_uris`, mandatory PKCE

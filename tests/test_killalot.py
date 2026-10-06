@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import dataclasses
 import io
 import json
 import multiprocessing
@@ -832,6 +833,30 @@ class OpsTests(Fixture):
         self.assertIn("already tracked", dup["content"][0]["text"])
         self.assertIn("error", killalot.mcp_handle(self.config, {"jsonrpc": "2.0", "id": 6, "method": "nope"}, via="mcp:1"))
 
+    def test_the_hub_assistant_sees_and_stages_only_its_narrow_set(self) -> None:
+        listed = killalot.mcp_handle(self.config, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, via=self.VIA_A, stage_conv="web-d1")
+        self.assertEqual({t["name"] for t in listed["result"]["tools"]}, set(killalot.ASSISTANT_OPS))
+        everything = killalot.mcp_handle(self.config, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, via="mcp:1")
+        self.assertIn("accept", [t["name"] for t in everything["result"]["tools"]])  # chat apps keep the full set
+        item_id = self.propose()
+        for name, args in (("accept", {"id": item_id}), ("reject", {"id": item_id, "reason": "no"}), ("drop", {"id": item_id}),
+                           ("mark_done", {"id": item_id}), ("park", {"project": "ladder"})):
+            call = {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": name, "arguments": args}}
+            self.assertIn("unknown tool", killalot.mcp_handle(self.config, call, via=self.VIA_A, stage_conv="web-d1")["error"]["message"])
+            with self.assertRaisesRegex(killalot.KillalotError, "owner's own decision"):
+                killalot.stage(self.conn, conv="web-d1", via=self.VIA_A, name=name, args=args)
+        self.assertEqual(killalot.pending_rows(self.conn), [])
+        self.assertEqual(killalot.get_item(self.conn, item_id)["state"], "proposed")
+
+    def test_a_change_staged_under_older_rules_never_applies(self) -> None:
+        item_id = self.propose()
+        with killalot.Tx(self.conn):
+            cur = self.conn.execute("INSERT INTO pending(conv, via, op, args, summary, created_at) VALUES (?,?,?,?,?,?)",
+                                    ("web-d1", self.VIA_A, "accept", json.dumps({"id": item_id}), "Accept", killalot.iso(killalot.utcnow())))
+        result = killalot.resolve_pending(self.conn, self.config, cur.lastrowid, True)
+        self.assertTrue(result["outcome"].startswith("failed:"))
+        self.assertEqual(killalot.get_item(self.conn, item_id)["state"], "proposed")
+
     def test_mcp_stdio(self) -> None:
         lines = "\n".join(json.dumps(m) for m in (
             {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
@@ -870,7 +895,12 @@ class AssistantTests(Fixture):
         mcp = json.loads(argv[argv.index("--mcp-config") + 1])["mcpServers"]["killalot"]
         self.assertIn("--stage", mcp["args"])
         self.assertIn("assistant:cli/cli-x", mcp["args"])
-        self.assertIn("ladder", argv[argv.index("--append-system-prompt") + 1])
+        rules = argv[argv.index("--system-prompt") + 1]
+        self.assertIn("ladder", rules)
+        self.assertIn(killalot.ASSISTANT_REFUSAL, rules)
+        self.assertNotIn("--append-system-prompt", argv)
+        self.assertEqual(argv[argv.index("--setting-sources") + 1], "")  # none of the owner's settings, hooks or CLAUDE.md
+        self.assertEqual(argv[argv.index("--max-turns") + 1], str(killalot.ASSISTANT_MAX_TURNS))
         self.assertEqual(kw["input"], "remind me to rerun the ablation")
         self.assertEqual(killalot.list_items(self.conn), [])  # nothing applied yet
         killalot.resolve_pending(self.conn, self.config, result["pending"][0]["id"], True)
@@ -890,6 +920,35 @@ class AssistantTests(Fixture):
             return subprocess.CompletedProcess(argv, 0, json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True}), "")
         with self.assertRaisesRegex(killalot.KillalotError, "failed"):
             killalot.assistant_turn(self.config, channel="cli", conv="cli-y", text="hi", runner=broken)
+
+    def test_caps_and_older_sessions(self) -> None:
+        run, calls = self.runner()
+        with self.assertRaisesRegex(killalot.KillalotError, "too long"):
+            killalot.assistant_turn(self.config, channel="cli", conv="cli-c", text="x" * (killalot.ASSISTANT_MAX_CHARS + 1), runner=run)
+        with killalot.Tx(self.conn):  # a conversation from before the narrow rules
+            self.conn.execute("INSERT INTO conversations(key, channel, backend, session_id, created_at, last_at) VALUES (?,?,?,?,?,?)",
+                              ("cli-c", "cli", "claude", "old-sess", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"))
+        killalot.assistant_turn(self.config, channel="cli", conv="cli-c", text="hi", runner=run)
+        self.assertNotIn("--resume", calls[-1][0])
+        killalot.assistant_turn(self.config, channel="cli", conv="cli-c", text="again", runner=run)
+        self.assertEqual(calls[-1][0][calls[-1][0].index("--resume") + 1], "sess-1")
+        limited = dataclasses.replace(self.config, assistant_daily_limit=2)
+        with self.assertRaisesRegex(killalot.KillalotError, "daily limit"):
+            killalot.assistant_turn(limited, channel="cli", conv="cli-c", text="one more", runner=run)
+        self.assertEqual(len(calls), 2)
+
+    def test_codex_is_confined_too(self) -> None:
+        codex = dataclasses.replace(self.config, assistant_backend="codex")
+        for session in (None, "t-1"):
+            argv, kind = killalot.assistant_command(codex, conv="tg-1", via="assistant:telegram/tg-1", session_id=session, rules="RULES")
+            self.assertEqual(kind, "codex-jsonl")
+            self.assertIn("--ignore-user-config", argv)  # none of the owner's MCP servers or settings
+            flags = {argv[i + 1] for i, a in enumerate(argv) if a == "-c"}
+            for want in ('sandbox_mode="read-only"', 'approval_policy="never"', 'web_search="disabled"', 'developer_instructions="RULES"',
+                         "features.shell_tool=false", "features.unified_exec=false", "features.browser_use=false"):
+                self.assertIn(want, flags)
+        self.assertEqual(killalot.assistant_env(codex)["CODEX_HOME"], str(codex.codex_home))
+        self.assertNotIn("CODEX_HOME", killalot.assistant_env(self.config))
 
     def test_codex_output(self) -> None:
         stdout = "\n".join(json.dumps(e) for e in ({"type": "thread.started", "thread_id": "t-9"},

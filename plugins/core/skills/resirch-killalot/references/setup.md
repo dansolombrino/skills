@@ -113,11 +113,26 @@ tagged project a session starts in, and prints nothing anywhere else.
 ## 6. Talk to the list: the hub assistant
 
 The web app's **Chat** tab, the "Tell Killalot…" box on the inbox, and Telegram hand your words
-to a headless agent on the hub. Its only tools are the list's operations (read, add, edit,
-prioritise, link, comment, accept, reject, answer, snooze, drop, mark done, park). Every change it
-makes is **staged**: you see it under the reply with Confirm and Cancel, and nothing changes until
-you tap. It asks when the project, date or kind is unclear, and conversations continue until you
-start a new one. It never approves and never starts work in a project.
+to a headless agent on the hub. Whoever holds one of those channels reaches it, so it is confined
+in code, not only by its instructions:
+
+- **List only.** Of the list's operations it sees just reading, add, edit, link, unlink and
+  comment. Accept, reject, answer, snooze, drop, done and park stay yours: the buttons, `/inbox` and
+  the web app. Every change it makes is **staged**: you see it under the reply with Confirm and
+  Cancel, and nothing changes until you tap. It never approves and never starts work in a project.
+- **Nothing else.** It has no shell, files, web or other connectors, and it does not load your own
+  settings, hooks, plugins or CLAUDE.md / AGENTS.md. Claude runs with no built-in tools and no
+  setting sources. Codex runs under its own Codex home with the shell, apps, plugins, browser and
+  agents turned off and a read-only sandbox; it keeps only Codex's code-mode isolate (no files, no
+  network), which it needs to call the list's tools.
+- **On topic.** Anything that is not about the list (questions, maths, code, chat) gets one fixed
+  line: "I only keep your ReSirch Killalot list…".
+- **Capped.** At most 2000 characters a message, 8 model turns a message (Claude), and
+  `daily_limit` messages a day across all channels; past that, the buttons and the web app still
+  work.
+
+It asks when the project, date or kind is unclear, and conversations continue until you start a
+new one. When these rules change, open conversations start fresh.
 
 ```toml
 [assistant]
@@ -125,9 +140,12 @@ backend = "claude"     # or "codex"; the CLI must be installed and signed in on 
 # command = "/abs/path/to/claude"   # if the service's PATH does not find it
 # model = "<model id>"              # optional
 timeout_s = 180
+daily_limit = 150      # messages a day, all channels together
 ```
 
-The service runs it as you, so it uses your existing Claude Code (or Codex) sign-in and plan.
+The service runs it as you. Claude uses your existing Claude Code sign-in and plan. Codex runs
+under its own home, `<store>/assistant/codex-home`, so sign it in there once:
+`CODEX_HOME=<store>/assistant/codex-home codex login` (`killalot doctor` checks it).
 Try it from the terminal first: `killalot assistant ask "what is open in <project>?"`, then
 `killalot assistant pending` and `killalot assistant confirm <id>`.
 
