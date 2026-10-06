@@ -656,4 +656,7 @@ priorities, links between items, comments and editing.
     open. Approvals only open the web page.
   - Commands: `/inbox`, `/projects`, `/digest`, `/new`. Any other text goes to the assistant.
   - Supervisor questions and the prune flow remain R2 items.
-
+- **1.3.1:** claude.ai checks a new connector from the browser, so the connector endpoints
+  (`/mcp`, `/oauth/register`, `/oauth/token`, `/.well-known/oauth-*`) answer CORS preflights and
+  carry `Access-Control-Allow-Origin` for the chat apps' origins only, never with credentials. The
+  rest of the app stays same-origin.

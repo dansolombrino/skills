@@ -1130,6 +1130,22 @@ class ConnectorTests(PublicHelpers, Fixture):
         killalot.revoke_device(self.pconn, device, "terminal")
         self.assertEqual(self.mcp(tok["access_token"], {"jsonrpc": "2.0", "id": 1, "method": "ping"})[0], 401)
 
+    def test_cors_for_chat_app_pages_only(self) -> None:
+        req = urllib.request.Request(self.url + "/mcp", method="OPTIONS", headers={"Origin": "https://claude.ai", "Access-Control-Request-Method": "POST"})
+        with urllib.request.urlopen(req, timeout=5) as res:
+            self.assertEqual(res.status, 204)
+            self.assertEqual(res.headers["Access-Control-Allow-Origin"], "https://claude.ai")
+            self.assertIn("Authorization", res.headers["Access-Control-Allow-Headers"])
+            self.assertIsNone(res.headers["Access-Control-Allow-Credentials"])
+        status, _, headers = self.call("/mcp", {"jsonrpc": "2.0", "id": 1, "method": "ping"}, headers={"Origin": "https://claude.ai"})
+        self.assertEqual((status, headers["Access-Control-Allow-Origin"]), (401, "https://claude.ai"))
+        self.assertIn("WWW-Authenticate", headers["Access-Control-Expose-Headers"])
+        status, _, headers = self.call("/mcp", {"jsonrpc": "2.0", "id": 1, "method": "ping"}, headers={"Origin": "https://evil.example"})
+        self.assertIsNone(headers["Access-Control-Allow-Origin"])
+        req = urllib.request.Request(self.url + "/api/inbox", method="OPTIONS", headers={"Origin": "https://claude.ai"})
+        with self.assertRaises(urllib.error.HTTPError):
+            urllib.request.urlopen(req, timeout=5)
+
     def test_off_in_tailscale_mode(self) -> None:
         base = self.serve(self.config)
         with self.assertRaises(urllib.error.HTTPError) as err:

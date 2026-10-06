@@ -79,6 +79,9 @@ DEFAULT_REDIRECT_URIS = (
     "https://chatgpt.com/connector_platform_oauth_redirect",
 )
 MCP_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
+# Chat apps whose web pages may call the connector endpoints from the browser (CORS). Bearer tokens
+# only: cookies are never allowed cross-origin.
+CONNECTOR_ORIGINS = ("https://claude.ai", "https://claude.com", "https://chatgpt.com")
 EVIDENCE_TEXT_MAX = 1_000_000
 SERVICE_NAME = "resirch-killalot.service"
 COOKIE_NAME = "killalot_device"
@@ -2681,6 +2684,33 @@ def make_handler(config: Config, state: dict | None = None):
             finally:
                 conn.close()
 
+        def _is_connector_path(self) -> bool:
+            path = urlparse(self.path).path
+            return path.startswith("/.well-known/oauth-") or path in ("/mcp", "/oauth/register", "/oauth/token")
+
+        def do_OPTIONS(self) -> None:  # noqa: N802 - CORS preflight from a chat app's page
+            if not self._is_connector_path() or config.access != "public":
+                self._send(404, "text/plain; charset=utf-8", b"not found\n")
+                return
+            self._send(204, "text/plain; charset=utf-8", b"", headers={
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept, Mcp-Protocol-Version, Mcp-Session-Id, Last-Event-ID",
+                "Access-Control-Max-Age": "600"})
+
+        def do_HEAD(self) -> None:  # noqa: N802 - reachability probes
+            code = 200 if urlparse(self.path).path == "/healthz" or self._is_connector_path() else 404
+            self.send_response(code)
+            self.send_header("Content-Length", "0")
+            self._cors()
+            self.end_headers()
+
+        def _cors(self) -> None:
+            origin = (self.headers.get("Origin") or "").rstrip("/")
+            if config.access == "public" and origin in CONNECTOR_ORIGINS and self._is_connector_path():
+                self.send_header("Access-Control-Allow-Origin", origin)
+                self.send_header("Vary", "Origin")
+                self.send_header("Access-Control-Expose-Headers", "WWW-Authenticate, Mcp-Session-Id")
+
         def do_POST(self) -> None:  # noqa: N802
             url = urlparse(self.path)
             if url.path in public_paths:
@@ -2860,7 +2890,7 @@ def make_handler(config: Config, state: dict | None = None):
                            headers={"WWW-Authenticate": f'Bearer resource_metadata="{meta}"'})
                 return
             origin = self.headers.get("Origin")
-            if origin and origin.rstrip("/") not in (config.public_base.rstrip("/"), "https://claude.ai", "https://claude.com", "https://chatgpt.com"):
+            if origin and origin.rstrip("/") not in (config.public_base.rstrip("/"), *CONNECTOR_ORIGINS):
                 self._json({"error": "origin not allowed"}, 403)
                 return
             via = f"mcp:{token['id']}"
@@ -2883,6 +2913,7 @@ def make_handler(config: Config, state: dict | None = None):
             self.send_header("Referrer-Policy", "no-referrer")
             for key, value in (headers or {}).items():
                 self.send_header(key, value)
+            self._cors()
             if set_cookie:
                 self.send_header("Set-Cookie", set_cookie)
             if config.access == "public":
