@@ -30,7 +30,7 @@ def load_project_init():
 class CoreContractTests(unittest.TestCase):
     def test_plugin_version_and_distributed_skills(self) -> None:
         manifest = json.loads((CORE / ".codex-plugin/plugin.json").read_text())
-        self.assertEqual(manifest["version"], "1.4.0")
+        self.assertEqual(manifest["version"], "1.5.0")
         claude_manifest = json.loads((CORE / ".claude-plugin/plugin.json").read_text())
         catalog = json.loads((ROOT / ".claude-plugin/marketplace.json").read_text())
         entry = next(plugin for plugin in catalog["plugins"] if plugin["name"] == "core")
@@ -44,7 +44,6 @@ class CoreContractTests(unittest.TestCase):
                 "intent-gate",
                 "intent-mirror",
                 "project-init",
-                "resirch-killalot",
             },
         )
 
@@ -90,30 +89,6 @@ class CoreContractTests(unittest.TestCase):
         self.assertIn("If a new deviation becomes necessary, stop before applying it", skill)
         self.assertIn("any unapproved deviation remains", skill)
         self.assertIn("$integrate-reference-code", metadata)
-
-    def test_resirch_killalot_keeps_the_owner_gates(self) -> None:
-        skill_root = CORE / "skills/resirch-killalot"
-        skill = " ".join((skill_root / "SKILL.md").read_text().split())
-        metadata = (skill_root / "agents/openai.yaml").read_text()
-        self.assertIn("$resirch-killalot", metadata)
-        for phrase in (
-            "Agents only propose.",
-            "Only the owner accepts",
-            "Start an item only on the owner's yes",
-            "never that the **how** is approved",
-            "**Never approve**",
-            "approvals are given only from a paired device",
-            "check-approval",
-            "Evidence is required",
-            "never propose it again",
-            "Never edit the store by hand",
-            "Never accept anything.",
-        ):
-            self.assertIn(phrase, skill, phrase)
-        hooks = json.loads((CORE / "hooks/hooks.json").read_text())
-        command = hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"]
-        self.assertIn("${CLAUDE_PLUGIN_ROOT}/skills/resirch-killalot/scripts/killalot.py", command)
-        self.assertTrue(command.endswith("hook session-start"))
 
     def test_intent_gate_family_is_congruent(self) -> None:
         skills_root = CORE / "skills"

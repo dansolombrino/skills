@@ -6,9 +6,7 @@ Skills are organized as domain plugins: one plugin per domain, each containing r
 installed as a unit. Two plugins exist:
 
 - **core** — always on in every project: intent gating (`intent-mirror`, `intent-gate`,
-  `brainstorm-hold`), `integrate-reference-code`, `project-init`, and `resirch-killalot` (ReSirch
-  Killalot: one cross-project list of work that agents propose into and only the owner accepts,
-  with a session-start hook and a phone-ready web app; setup in its `references/setup.md`).
+  `brainstorm-hold`), `integrate-reference-code`, and `project-init`.
 - **research** — Research 2.0 GPU experiment workflow. Off by default; enabled per project.
 
 Both hosts read the same `SKILL.md` files. Only the manifests differ, so a skill is written once
