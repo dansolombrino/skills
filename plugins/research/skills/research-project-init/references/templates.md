@@ -441,8 +441,12 @@ both skills' doctor checks before remote dispatch.
 
 ## Python environment
 
-Create `pyproject.toml` with the project metadata, dependencies, exact
-`[tool.uv].required-version = "==X.Y.Z"`, and `python-preference = "managed"`. Include pytest as a
+Create `pyproject.toml` with the project metadata, exact
+`[tool.uv].required-version = "==X.Y.Z"`, and `python-preference = "managed"`. The runtime
+dependencies are exactly `dependencies = ["torch"]`: torch is the fixed framework of every Research
+2.0 project, the GPU smoke below needs it in the lock, and `uv lock` pins its exact version. Do not
+ask the user which framework or packages to install, and add nothing else at scaffold time; the
+project adds further packages later with `uv add`. Include pytest as a
 dev dependency (`[dependency-groups] dev = ["pytest>=8"]`) so the optional `tests/` tree is
 runnable from the start. Add it now, not later: it participates in the installed-environment
 fingerprint that `environment-sync` uses as its cross-rig parity gate, so introducing it
@@ -1121,9 +1125,8 @@ def guard_run_config(
 ## code/common/environment_smoke.py
 
 This is the default `gpu_smoke` target in `sync.toml`. It must perform a real device operation
-through the project's locked framework, so a rig that imports but cannot compute fails the gate.
-Adapt the framework call when the project is not torch-based, but keep it bounded and non-zero on
-failure.
+through the locked torch, so a rig that imports but cannot compute fails the gate. Write it
+verbatim.
 
 ```python
 """Bounded GPU smoke: prove the locked runtime can actually compute on a device."""
