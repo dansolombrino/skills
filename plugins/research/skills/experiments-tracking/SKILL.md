@@ -17,14 +17,14 @@ in every engineering mode and does not require a narrative or scientific decisio
 - Ground truth is NOT the md — it is the three on-disk signals (hierarchy in `conventions.md`): the per-run status first proves the current wave's Git revision/tag and environment fingerprint; after that, the **expected final artifact** is golden for completion — or, on a rig with offload, the `<artifact>.offloaded.json` receipt `rig-sync` left in its place, which names the checksum-verified hub copy — followed by `.status.json` state/timing/progress and the latest run log. A missing `.status.json`/dir means the run never started (or its outputs were deleted ⇒ it is no longer done).
 - **One (run, wave) = one table row = one line.** A run re-launched in a later wave gets a **new row**, never an in-place update — the table itself carries the execution history. One line per row keeps parallel-session git merges clean.
 - A row's run identity is semantic: the ordered `RUN_ID_PARAMS` values, independent of whether
-  `RUN_ID_PATH_LAYOUT` is `segments-v1` or a legacy `nested`, `collapsed-v1`, or `hashed-v1`. Read
+  `RUN_ID_PATH_LAYOUT` is `segments-v2` or a legacy `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1`. Read
   the experiment's recorded selection and consume the exact checkpoint, evaluation, status, and
   final-artifact paths materialized in the generated wave record. Never derive identity from path
   segment count, reconstruct an artifact path from the flat id, or treat the layouts as different
-  runs. Under `segments-v1`, the row's `run_id` cell is the `run_id_name` rendering, identical to
+  runs. Under `segments-v2`, the row's `run_id` cell is the `run_id_name` rendering, identical to
   the run's `scripts/`, `logs/`, `checkpoints/`, and `evaluations/` folders and its wandb run name;
   under a legacy pin, scripts, logs, and wandb remain keyed by the unchanged flat rendering.
-  Resolve every hash (a `segments-v1` group hash or a `hashed-v1` `rid-`) through the run's
+  Resolve every hash (a `segments-v2` group hash or a `hashed-v1` `rid-`) through the run's
   `.run_id.json` or the experiment's `evaluations/<experiment_path>/RUN_ID_MAP.json`; never
   recompute or guess it. The map is rebuilt once per wave, so for a run of a wave still in flight
   read its `.run_id.json`.
@@ -38,10 +38,10 @@ in every engineering mode and does not require a narrative or scientific decisio
 ## Format
 
 One section per `NNN_experiment`; its preamble restates both authoritative source decisions: the
-ordered `RUN_ID_PARAMS` and the literal `RUN_ID_PATH_LAYOUT` (`segments-v1`, or a legacy
+ordered `RUN_ID_PARAMS` and the literal `RUN_ID_PATH_LAYOUT` (`segments-v2`, or a legacy
 `nested`, `collapsed-v1`, or `hashed-v1`). The table has **one column per run_id param** (dict
 form — never a single flat-string column replacing them), then placement, status, and timing.
-Under `segments-v1` the preamble adds the recorded `RUN_ID_SEGMENTS` and
+Under `segments-v2` the preamble adds the recorded `RUN_ID_SEGMENTS` and
 `run_id map: evaluations/<experiment_path>/RUN_ID_MAP.json`, and the table adds a `run_id` column
 (the rendered name) and one column per hash group right after the param columns, so params,
 rendered identity, and hashes are readable side by side. Under legacy `hashed-v1` the preamble
@@ -51,7 +51,7 @@ durable experiment metadata, not a run-row identity field:
 ```markdown
 ## 000_grokking
 run_id params: model, lr, wd, seed   (mirrors RUN_ID_PARAMS in code/000_grokking/train.py)
-run_id path layout: segments-v1   (mirrors RUN_ID_PATH_LAYOUT in code/000_grokking/train.py)
+run_id path layout: segments-v2   (mirrors RUN_ID_PATH_LAYOUT in code/000_grokking/train.py)
 run_id segments: [("model",), ({"optim_params": ("lr", "wd")}, "seed")]   (mirrors RUN_ID_SEGMENTS in code/000_grokking/train.py)
 run_id map: evaluations/000_grokking/RUN_ID_MAP.json
 smoke command: <environment.name>/bin/python code/000_grokking/train.py smoke=true steps=1 seed=smoke
@@ -122,7 +122,7 @@ an active-run field.
 
 `RUN_ID_PARAMS` may change only while no checkpoint, evaluation, or plot output and no wave README
 or script exists. After the first such surface, any identity-schema or `RUN_ID_SEGMENTS` change under
-`segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1` requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the
+`segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1` requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the
 established tree. The recorded `RUN_ID_PATH_LAYOUT` is immutable after the same boundary, and exact
 wave paths remain authoritative. A layout mismatch or mixed checkpoint/evaluation tree blocks
 reconciliation and routes changed work to a new numbered sub-experiment; never move, rename, or

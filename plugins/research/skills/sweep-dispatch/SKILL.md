@@ -25,13 +25,14 @@ config param added/changed since this experiment's last runs, must be in `RUN_ID
 **halt** and route through `experiment-design` before generating anything — otherwise new runs
 collide with old artifacts: overwritten, or silently skipped as "done". `RUN_ID_PARAMS` may change
 only while no checkpoint, evaluation, or plot output and no wave README or script exists. After the
-first such surface, any identity-schema change under `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1`
+first such surface, any identity-schema change under `segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1`
 (including any change to `RUN_ID_SEGMENTS`) requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the established tree. The artifact
 guard is only sound under this gate: `guard_run_config` catches collisions after Python starts, but
 an artifact-skipped run never enters Python.
-1b. **helper safety check** — verify `code/common/run_id.py` provides the canonical percent-encoded
+1b. **helper safety check** — verify `code/common/run_id.py` provides the canonical safe-character
 `run_id_path(cfg, params, *, layout='nested', segments=None)`/`run_id_name`/`run_id_flat`
-renderers with `segments-v1` support, `check_run_id_plan`, `preflight_run_id_path`, the
+renderers with `segments-v2` support (lists joined with `-`, unsafe values refused, never
+escaped), `check_run_id_plan`, `preflight_run_id_path`, the
 `.run_id.json`/`RUN_ID_MAP.json` writer (plus legacy `hashed-v1` support when the experiment pins
 that layout) with atomic identity writes and a `guard_run_config` that never scans other runs or
 rewrites the map (a per-run map rebuild is quadratic in the wave and cannot finish at scale), `hydra_override_arg`, and
@@ -40,12 +41,13 @@ the single config resolver
 resolved config is unfixable after the fact). Any older helper makes the project
 unsupported; halt without upgrading it in place.
 1c. **run-path layout check** — read the experiment's literal `RUN_ID_PATH_LAYOUT`; it must be
-`segments-v1` (with the experiment's recorded `RUN_ID_SEGMENTS`) or a legacy `nested`,
-`collapsed-v1`, or `hashed-v1` pin. Treat that record as pinned for the project, pass it to the canonical
+`segments-v2` (with the experiment's recorded `RUN_ID_SEGMENTS`) or a legacy `segments-v1`,
+`nested`, `collapsed-v1`, or `hashed-v1` pin. Treat that record as pinned for the project, pass it to the canonical
 `run_id_path` helper, and resolve the checkpoint and evaluation run directories before generating
-the wave. They must use the same selected layout. `plots/` is not run-scoped. Under `segments-v1`,
+the wave. They must use the same selected layout. `plots/` is not run-scoped. Under `segments-v2`,
 run `check_run_id_plan(<planned cfgs>, RUN_ID_PARAMS, RUN_ID_SEGMENTS, <evaluations experiment dir>,
-path_roots=(<checkpoints experiment dir>, <scripts experiment dir>, <logs experiment dir>))` over
+path_roots=(<checkpoints experiment dir>, <scripts experiment dir>, <logs experiment dir>),
+layout=RUN_ID_PATH_LAYOUT)` over
 the whole wave on the hub before generating anything; any overflow, duplicate, path collision, or
 group-hash collision blocks dispatch and routes back to `experiment-design`. Never infer the layout from directory depth, reconstruct it from a
 flat id, or silently adopt a different layout. A missing, unsupported, or mixed layout blocks
@@ -148,7 +150,7 @@ scripts/NNN_exp/_lanes/wave_<wave_id>/
   `88` rather than dying mid-checkpoint and leaving a truncated artifact that looks real. It
   captures its own timestamped log under the mirror path in `logs/`, named after the lane that
   ran it.
-- The run folder comes from `code/common/run_id.py`. Under `segments-v1` it is the same
+- The run folder comes from `code/common/run_id.py`. Under `segments-v2` it is the same
   `run_id_path(..., segments=RUN_ID_SEGMENTS)` directories as `evaluations/`, and the wandb run
   name, EXPERIMENTS.md `run_id` column, and Slurm job-name suffix are `run_id_name(...)`, so every
   surface shows one identity. Under a legacy pin the selected `RUN_ID_PATH_LAYOUT` never changes

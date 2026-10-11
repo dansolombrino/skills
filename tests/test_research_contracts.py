@@ -70,7 +70,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "9.0.2")
+        self.assertEqual(manifest["version"], "9.1.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -563,18 +563,18 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("Inspect checkpoints, evaluations, plots, and wave records", design_schema)
         self.assertIn("If none exists, update `RUN_ID_PARAMS`", design_schema)
         self.assertIn("normally before the first launch", design_schema)
-        self.assertIn("immutable under every layout (`segments-v1`, `nested`, `collapsed-v1`, `hashed-v1`)", design_schema)
+        self.assertIn("immutable under every layout (`segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, `hashed-v1`)", design_schema)
         self.assertIn("Never change the identity schema in place", design_schema)
         self.assertRegex(design_schema, r"(?i)create a new numbered sub-experiment")
 
         self.assertIn("Before any checkpoint, evaluation, or plot output or wave README/script exists", conventions)
         self.assertIn("After any one of those surfaces exists", conventions)
-        self.assertIn("immutable under every layout (`segments-v1`, `nested`, `collapsed-v1`, `hashed-v1`)", conventions)
+        self.assertIn("immutable under every layout (`segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, `hashed-v1`)", conventions)
         self.assertIn("new numbered sub-experiment", conventions)
-        self.assertIn("any identity-schema change under `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1` (including any change to `RUN_ID_SEGMENTS`) requires a new numbered sub-experiment", dispatch)
+        self.assertIn("any identity-schema change under `segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1` (including any change to `RUN_ID_SEGMENTS`) requires a new numbered sub-experiment", dispatch)
 
         def schema_decision(layout: str, surfaces: set[str]) -> str:
-            if layout not in {"segments-v1", "nested", "collapsed-v1", "hashed-v1"}:
+            if layout not in {"segments-v2", "segments-v1", "nested", "collapsed-v1", "hashed-v1"}:
                 raise ValueError("unsupported layout")
             return (
                 "update-before-first-launch"
@@ -582,7 +582,7 @@ class ResearchContractTests(unittest.TestCase):
                 else "new-numbered-sub-experiment"
             )
 
-        for layout in ("segments-v1", "nested", "collapsed-v1"):
+        for layout in ("segments-v2", "segments-v1", "nested", "collapsed-v1"):
             with self.subTest(layout=layout, surfaces="none"):
                 self.assertEqual(schema_decision(layout, set()), "update-before-first-launch")
             for surface in ("checkpoint", "evaluation", "plot", "wave"):
@@ -612,7 +612,7 @@ class ResearchContractTests(unittest.TestCase):
             re.MULTILINE,
         )
         layout_match = re.search(
-            r"^run_id path layout:\s*(?P<layout>segments-v1|nested|collapsed-v1|hashed-v1)\s+"
+            r"^run_id path layout:\s*(?P<layout>segments-v2|segments-v1|nested|collapsed-v1|hashed-v1)\s+"
             r"\(mirrors RUN_ID_PATH_LAYOUT in (?P<source>[^)]+)\)$",
             example,
             re.MULTILINE,
@@ -665,6 +665,7 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("authoritative literal", agents)
         self.assertIn("header mirrors the experiment .py's ordered RUN_ID_PARAMS", experiments)
         self.assertIn("exact literal pin", experiments)
+        self.assertIn("`RUN_ID_PATH_LAYOUT: segments-v2`", experiments)
         self.assertIn("`RUN_ID_PATH_LAYOUT: segments-v1`", experiments)
         self.assertIn("RUN_ID_SEGMENTS", experiments)
         self.assertIn("`RUN_ID_PATH_LAYOUT: nested`", experiments)
@@ -706,7 +707,7 @@ class ResearchContractTests(unittest.TestCase):
             proposed: str,
             existing_surfaces: dict[str, tuple[str, ...]],
         ) -> str:
-            if proposed not in {"segments-v1", "nested", "collapsed-v1", "hashed-v1"}:
+            if proposed not in {"segments-v2", "segments-v1", "nested", "collapsed-v1", "hashed-v1"}:
                 raise ValueError("unsupported layout")
             if not any(existing_surfaces.values()):
                 return proposed
@@ -983,7 +984,7 @@ class ResearchContractTests(unittest.TestCase):
             with self.subTest(contract=name):
                 self.assertRegex(section, r"every (?:run_id )?election")
                 self.assertRegex(section, r"neither (?:engineering|automatic) mode may decide any step")
-                self.assertIn("segments-v1", section)
+                self.assertIn("segments-v2", section)
                 # The four steps, in order.
                 steps = [
                     section.index("full picture"),
@@ -1043,12 +1044,12 @@ class ResearchContractTests(unittest.TestCase):
         )
         # A group hash depends only on its own params.
         self.assertEqual(
-            group_hash(cfg, "optim_params", ("lr", "wd")),
-            group_hash({**cfg, "seed": 9, "model": "x"}, "optim_params", ("lr", "wd")),
+            group_hash(cfg, "optim_params", ("lr", "wd"), layout="segments-v1"),
+            group_hash({**cfg, "seed": 9, "model": "x"}, "optim_params", ("lr", "wd"), layout="segments-v1"),
         )
         self.assertNotEqual(
-            group_hash(cfg, "optim_params", ("lr", "wd")),
-            group_hash({**cfg, "wd": 0.02}, "optim_params", ("lr", "wd")),
+            group_hash(cfg, "optim_params", ("lr", "wd"), layout="segments-v1"),
+            group_hash({**cfg, "wd": 0.02}, "optim_params", ("lr", "wd"), layout="segments-v1"),
         )
         # nested and collapsed are special cases of segments-v1 with no groups.
         self.assertEqual(
@@ -1073,10 +1074,10 @@ class ResearchContractTests(unittest.TestCase):
             [(), ("model", "seed", "lr", "wd")],
         ):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
-                validate(params, bad)
+                validate(params, bad, layout="segments-v1")
         with self.assertRaisesRegex(ValueError, "requires the experiment's RUN_ID_SEGMENTS"):
             run_id_path(cfg, params, layout="segments-v1")
-        with self.assertRaisesRegex(ValueError, "only applies to segments-v1"):
+        with self.assertRaisesRegex(ValueError, "only applies to segments"):
             run_id_path(cfg, params, layout="nested", segments=segments)
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1108,21 +1109,21 @@ class ResearchContractTests(unittest.TestCase):
             # The plan check passes for fresh runs and rejects duplicates.
             fresh = {**cfg, "seed": 5}
             self.assertEqual(
-                check_run_id_plan([fresh], params, segments, root),
+                check_run_id_plan([fresh], params, segments, root, layout="segments-v1"),
                 [run_id_path(fresh, params, layout="segments-v1", segments=segments)],
             )
             with self.assertRaisesRegex(RuntimeError, "planned twice"):
-                check_run_id_plan([fresh, dict(fresh)], params, segments, root)
+                check_run_id_plan([fresh, dict(fresh)], params, segments, root, layout="segments-v1")
 
             # Force a group-hash collision: different optimizer values, same hash.
             real_hash = namespace["run_id_group_hash"]
-            namespace["run_id_group_hash"] = lambda c, n, g: digest
+            namespace["run_id_group_hash"] = lambda c, n, g, **_: digest
             try:
                 clash = {**cfg, "wd": 0.5}
                 with self.assertRaisesRegex(RuntimeError, "group hash collision"):
-                    check_run_id_plan([{**clash, "seed": 7}], params, segments, root)
+                    check_run_id_plan([{**clash, "seed": 7}], params, segments, root, layout="segments-v1")
                 with self.assertRaisesRegex(RuntimeError, "run_id path collision"):
-                    check_run_id_plan([clash], params, segments, root)
+                    check_run_id_plan([clash], params, segments, root, layout="segments-v1")
                 # The O(1) guard cannot see another run's groups; the once-per-wave
                 # map rebuild catches a clash that bypassed the plan check.
                 clash_dir = root / run_id_path({**clash, "seed": 6}, params, layout="segments-v1", segments=segments)
@@ -1143,7 +1144,49 @@ class ResearchContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "overflows"):
                 preflight(root, Path("x" * 256))
             with self.assertRaisesRegex(ValueError, "overflows"):
-                check_run_id_plan([{**cfg, "model": "m" * 300}], params, segments, root)
+                check_run_id_plan([{**cfg, "model": "m" * 300}], params, segments, root, layout="segments-v1")
+
+    def test_segments_v2_renders_only_safe_characters(self) -> None:
+        import hashlib
+
+        namespace: dict[str, object] = {}
+        exec(compile(run_id_template(), "run_id.py", "exec"), namespace)
+        run_id_path = namespace["run_id_path"]
+        run_id_name = namespace["run_id_name"]
+        check_run_id_plan = namespace["check_run_id_plan"]
+        validate = namespace["validate_run_id_segments"]
+
+        params = ["model", "hidden", "betas", "lr", "seed"]
+        segments = [("model",), ("hidden", "betas"), ({"optim_params": ("lr",)}, "seed")]
+        cfg = {"model": "vit-b_16", "hidden": [64, 128], "betas": (0.9, 0.999), "lr": 1e-3, "seed": 0}
+        digest = hashlib.sha256("segments-v2\0optim_params\0lr=0.001".encode()).hexdigest()[:16]
+
+        path = run_id_path(cfg, params, layout="segments-v2", segments=segments)
+        self.assertEqual(
+            path.parts,
+            ("model=vit-b_16", "hidden=64-128,betas=0.9-0.999", f"optim_params={digest},seed=0"),
+        )
+        self.assertEqual(run_id_name(cfg, params, layout="segments-v2", segments=segments), path.as_posix())
+        self.assertRegex(path.as_posix(), r"^[A-Za-z0-9._=,/-]+$")
+        # The same run under the legacy pin keeps its percent-encoded directory.
+        self.assertIn(
+            "hidden=%5B64%2C128%5D",
+            run_id_path(cfg, params, layout="segments-v1", segments=segments).as_posix(),
+        )
+
+        # Anything that would need escaping is refused, never escaped.
+        for bad in ([-1, 2], ["a-b"], [], [[1]], {"k": 1}, "a b", "a/b", "x%y", "~x", "a,b"):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "hash group"):
+                run_id_path({**cfg, "hidden": bad}, params, layout="segments-v2", segments=segments)
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, "hash group"):
+            check_run_id_plan([{**cfg, "hidden": [-1, 2]}], params, segments, Path(tmp))
+        # ...and renders once its param sits in a hash group.
+        grouped = [("model",), ({"arch": ("hidden",)}, "betas"), ({"optim_params": ("lr",)}, "seed")]
+        rendered = run_id_path({**cfg, "hidden": [-1, 2]}, params, layout="segments-v2", segments=grouped)
+        self.assertRegex(rendered.parts[1], r"^arch=[0-9a-f]{16},betas=0\.9-0\.999$")
+        # Group names are held to the same alphabet.
+        with self.assertRaises(ValueError):
+            validate(params, [("model", "hidden", "betas"), ({"optim~params": ("lr",)}, "seed")])
 
     def test_run_id_guard_is_o1_per_run_and_writes_atomically(self) -> None:
         namespace: dict[str, object] = {}
@@ -1158,11 +1201,11 @@ class ResearchContractTests(unittest.TestCase):
         cfg = {"model": "mlp", "lr": 0.1, "seed": 0}
 
         def run_dir(root, c):
-            return root / run_id_path(c, params, layout="segments-v1", segments=segments)
+            return root / run_id_path(c, params, layout="segments-v2", segments=segments)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "evaluations" / "001_scale"
-            kwargs = {"layout": "segments-v1", "segments": segments, "experiment_root": root}
+            kwargs = {"layout": "segments-v2", "segments": segments, "experiment_root": root}
 
             # The guard never reads another run: a torn sibling record cannot crash it.
             torn = run_dir(root, {**cfg, "seed": 99})
@@ -1172,24 +1215,24 @@ class ResearchContractTests(unittest.TestCase):
             self.assertFalse((root / "RUN_ID_MAP.json").exists())
             # The once-per-wave rescans still see it and fail loudly.
             with self.assertRaises(json.JSONDecodeError):
-                write_run_id_map(root, layout="segments-v1")
+                write_run_id_map(root, layout="segments-v2")
             with self.assertRaises(json.JSONDecodeError):
                 check_run_id_plan([{**cfg, "seed": 1}], params, segments, root)
             (torn / ".run_id.json").unlink()
 
             # A stale map never hides a collision from the plan check: it rescans records.
-            write_run_id_map(root, layout="segments-v1")
+            write_run_id_map(root, layout="segments-v2")
             guard_run_config({**cfg, "seed": 2}, params, run_dir(root, {**cfg, "seed": 2}), **kwargs)
             real_hash = namespace["run_id_group_hash"]
             existing = real_hash(cfg, "optim", ("lr",))
-            namespace["run_id_group_hash"] = lambda c, n, g: existing
+            namespace["run_id_group_hash"] = lambda c, n, g, **_: existing
             try:
                 with self.assertRaisesRegex(RuntimeError, "run_id path collision"):
                     check_run_id_plan([{**cfg, "lr": 0.5, "seed": 2}], params, segments, root)
             finally:
                 namespace["run_id_group_hash"] = real_hash
 
-            write_run_id_map(root, layout="segments-v1")
+            write_run_id_map(root, layout="segments-v2")
             leftovers = [p.name for p in root.rglob("*") if ".tmp." in p.name]
             self.assertEqual(leftovers, [])
 
@@ -1664,8 +1707,8 @@ class ResearchContractTests(unittest.TestCase):
             '"<0 | the granted set>"': '"0"',
             '"<wave_id>"': f'"{wave}"',
             '"<flat run_id>"': '"seed=0"',
-            '"<run_id_name: the rendered run_id under segments-v1; the flat run_id under a legacy pin>"': '"seed=0"',
-            '"<segments-v1, or a legacy nested | collapsed-v1 | hashed-v1, copied from the experiment record>"': '"nested"',
+            '"<run_id_name: the rendered run_id under segments-v2; the flat run_id under a legacy pin>"': '"seed=0"',
+            '"<segments-v2, or a legacy segments-v1 | nested | collapsed-v1 | hashed-v1, copied from the experiment record>"': '"nested"',
             '"<exact checkpoint directory resolved by canonical run_id_path>"': f'"checkpoints/000_x/{wave}"',
             '"<exact evaluation directory resolved by canonical run_id_path>"': f'"evaluations/000_x/{wave}"',
             '"logs/<NNN_exp>/<run_id folder>/wave_<wave_id>"': f'"logs/000_x/seed=0/wave_{wave}"',

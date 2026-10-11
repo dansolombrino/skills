@@ -10,7 +10,7 @@ wave-isolation contract in conventions); nothing is ever executed from the main 
 
 Committed at `scripts/<NNN_exp>/<run_id folder>/wave_<wave_id>/wave.sh` and executed
 as `.waves/<wave_id>/scripts/...` from the project root (the rendered
-`run_id_path` directories under `segments-v1`; `<run_id_flat>` under a legacy pin). It is the only
+`run_id_path` directories under `segments-v2`; `<run_id_flat>` under a legacy pin). It is the only
 per-run script kind. It names **no rig and no GPU**: the lane that claims it supplies `LANE_RIG`
 and `LANE_GPUS` (and its rig's `MIN_FREE_KIB`/`QUOTA_FS`), which is what lets the wave's queue
 hand any run to whichever lane is free first. The artifact guard travels with each run, which is
@@ -32,9 +32,9 @@ cd "$PROJECT_ROOT" || exit 1
 WAVE_TREE="$PROJECT_ROOT/.waves/$WAVE_ID"
 
 RUN_ID_FLAT="<flat run_id>"
-RUN_ID_NAME="<run_id_name: the rendered run_id under segments-v1; the flat run_id under a legacy pin>"
-RUN_ID_PATH_LAYOUT="<segments-v1, or a legacy nested | collapsed-v1 | hashed-v1, copied from the experiment record>"
-# RUN_ID_SEGMENTS: <segments-v1 only: the experiment's recorded spec, copied verbatim>
+RUN_ID_NAME="<run_id_name: the rendered run_id under segments-v2; the flat run_id under a legacy pin>"
+RUN_ID_PATH_LAYOUT="<segments-v2, or a legacy segments-v1 | nested | collapsed-v1 | hashed-v1, copied from the experiment record>"
+# RUN_ID_SEGMENTS: <segments-v2/segments-v1 only: the experiment's recorded spec, copied verbatim>
 CHECKPOINT_DIR="<exact checkpoint directory resolved by canonical run_id_path>"
 EVAL_DIR="<exact evaluation directory resolved by canonical run_id_path>"
 STATUS_PATH="$EVAL_DIR/.status.json"
@@ -190,8 +190,8 @@ Notes:
 - The overrides list is the FULL run_id (and any non-default fixed params) — explicit, so the
   script is meaningful standalone. Produce each array token with
   `code/common/run_id.py::hydra_override_arg`; never interpolate raw config values into shell.
-- Read the experiment's literal `RUN_ID_PATH_LAYOUT` (`segments-v1` with its `RUN_ID_SEGMENTS`, or a
-  legacy `nested`, `collapsed-v1`, or `hashed-v1`). After `check_run_id_plan` passed for the whole
+- Read the experiment's literal `RUN_ID_PATH_LAYOUT` (`segments-v2` with its `RUN_ID_SEGMENTS`, or a
+  legacy `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1`). After `check_run_id_plan` passed for the whole
   wave, produce the checkpoint and evaluation suffix once with canonical
   `run_id_path(cfg, params, layout=RUN_ID_PATH_LAYOUT, segments=RUN_ID_SEGMENTS)`, and materialize the resulting exact
   `CHECKPOINT_DIR`, `EVAL_DIR`, `STATUS_PATH`, and `ARTIFACT` in the generated script. The
@@ -199,7 +199,7 @@ Notes:
   path, infer slash depth, or reconstruct a path from `RUN_ID_FLAT`. Plot outputs are the
   exception: they are not run-scoped, carry no run_id segments, and never go through the helper.
 - Produce `<flat run_id>` with canonical `run_id_flat` and `<run_id_name>` with canonical
-  `run_id_name` at generation time. Under `segments-v1` the run folder in `scripts/` and `logs/` is
+  `run_id_name` at generation time. Under `segments-v2` the run folder in `scripts/` and `logs/` is
   the same suffix as `EVAL_DIR`, and wandb and Slurm names use `RUN_ID_NAME`; under a legacy pin
   scripts, logs, and wandb names remain flat and unchanged.
 - The artifact guard runs **before** anything else, so relaunching a lane after
@@ -292,7 +292,7 @@ moving work to a freer rig, ...>
 This run: `model=mlp/optim_params=b4c2e09f6dbe6b4b,seed=0` → rig-4090, gpu 0.
 Full run_id: `model=mlp,lr=0.001,wd=0.01,beta1=0.9,seed=0`.
 
-Run path layout: `segments-v1`, segments `[("model",), ({"optim_params": ("lr", "wd", "beta1")}, "seed")]`.
+Run path layout: `segments-v2`, segments `[("model",), ({"optim_params": ("lr", "wd", "beta1")}, "seed")]`.
 
 Checkpoint directory: `checkpoints/000_grokking/model=mlp/optim_params=b4c2e09f6dbe6b4b,seed=0`.
 Evaluation directory: `evaluations/000_grokking/model=mlp/optim_params=b4c2e09f6dbe6b4b,seed=0`.
@@ -307,7 +307,7 @@ from the same selected `RUN_ID_PATH_LAYOUT` and `RUN_ID_SEGMENTS`; for legacy `n
 Monitoring and recovery consume these recorded paths verbatim and never infer a layout from slash
 depth. `RUN_ID_PARAMS` may change only while no checkpoint or evaluation and no wave
 README or script exists. After the first such surface, any identity-schema or segment change under
-`segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1` requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the
+`segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1` requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the
 established tree. The experiment's layout is likewise immutable after that boundary. A mismatch or
 mixed tree blocks the wave and routes changed work to a new numbered sub-experiment; never move,
 rename, or rewrite the old README, script, log, or artifact paths.

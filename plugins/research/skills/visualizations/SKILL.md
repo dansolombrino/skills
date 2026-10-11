@@ -26,7 +26,7 @@ the user. Plot communication approval is always user-owned and overrides the mod
 - Input: **`evaluations/` only**. Read the producer's recorded experiment-wide
   `RUN_ID_PATH_LAYOUT` and resolve inputs with
   `run_id_path(..., layout=RUN_ID_PATH_LAYOUT)` from the canonical helper, passing
-  `segments=RUN_ID_SEGMENTS` when the pin is `segments-v1`; a group hash is resolved to its params
+  `segments=RUN_ID_SEGMENTS` when the pin is `segments-v2`; a group hash is resolved to its params
   through `RUN_ID_MAP.json`, never recomputed by hand. Never infer layout from
   slash depth or force `nested`. Viz never reads checkpoints or recomputes; if a quantity is absent
   from evaluations, the producer experiment must export it first.

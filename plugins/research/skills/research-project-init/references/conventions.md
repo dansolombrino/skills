@@ -176,33 +176,39 @@ The per-experiment **ordered** set of config params that uniquely identifies a r
   In auto mode, elect and record the smallest ordered identity that prevents collisions inside the
   approved engineering envelope. The path rendering below is always the user's decision.
 - Authoritative record: constants in the experiment's `.py` that the path-building code actually
-  uses — `RUN_ID_PARAMS`, `RUN_ID_PATH_LAYOUT`, and (for `segments-v1`) `RUN_ID_SEGMENTS`;
+  uses — `RUN_ID_PARAMS`, `RUN_ID_PATH_LAYOUT`, and (for `segments-v2`) `RUN_ID_SEGMENTS`;
   mirrored in the experiment's EXPERIMENTS.md section header.
 - Config yamls stay pure hydra params — **no run_id metadata in yaml**.
 - Renderings via `code/common/run_id.py`:
   - **path form** (`run_id_path`) → used under `checkpoints/` and `evaluations/`, and by plotting
     code to **read** them; `plots/` output paths never use it. Every experiment records one
     authoritative `RUN_ID_PATH_LAYOUT` beside `RUN_ID_PARAMS` and passes it as the keyword-only
-    `layout` argument. New experiments always record `"segments-v1"` and pass
+    `layout` argument. New experiments always record `"segments-v2"` and pass
     `segments=RUN_ID_SEGMENTS`: an ordered list of segments, one directory each; items inside a
     segment are joined with `,`; an item is either an explicit param rendered as its
-    percent-encoded `key=value`, or a user-named hash group rendered as `name=<16 hex>`, e.g.
-    `model=mlp/optim_params=b4c2e09f6dbe6b4b,seed=0/`. Keys and values are percent-encoded by the
-    shared helper so `/`, spaces, commas, shell metacharacters, and structured values cannot alter
-    the hierarchy. A group hash is the first 16 hex digits of sha256 over `segments-v1`, the group
-    name, and the group's ordered pairs, so identical group values hash identically everywhere.
-  - **run name** (`run_id_name`) → the `segments-v1` path form as one POSIX string. It is the
+    `key=value`, or a user-named hash group rendered as `name=<16 hex>`, e.g.
+    `model=mlp/hidden=64-128/optim_params=b4c2e09f6dbe6b4b,seed=0/`.
+  - **Safe characters only.** Every proposed or rendered run path uses only `A-Z a-z 0-9 . _ -`
+    inside keys and values, plus the structural `=`, `,`, and `/`; nothing is ever percent-encoded
+    or otherwise escaped. A list renders its items joined with `-` (`[64, 128]` → `64-128`). A
+    value with no such rendering — a space, `/`, a dict, an empty or nested list, or a list item
+    containing `-` such as a negative number — is refused by the helper and must be placed in a
+    hash group at the election; never rename or rewrite the value to make it fit.
+  - A group hash is the first 16 hex digits of sha256 over `segments-v2`, the group name, and the
+    group's ordered lossless (percent-encoded) pairs, so identical group values hash identically
+    everywhere; the encoded form never appears in a path.
+  - **run name** (`run_id_name`) → the `segments-v2` path form as one POSIX string. It is the
     WandB run name, the EXPERIMENTS.md `run_id` column, and the Slurm job-name suffix, so every
     surface shows the identity the directories show.
   - **run folder** (`<run_id folder>`) → the run-scoped folder under `scripts/` and `logs/`: the
-    same `run_id_path` directories as `evaluations/` under `segments-v1`, `<run_id_flat>` under a
+    same `run_id_path` directories as `evaluations/` under `segments-v2`, `<run_id_flat>` under a
     legacy pin.
   - **flat form** (`run_id_flat`) — e.g. `model=mlp,lr=1e-3,seed=0` → the complete, lossless
     identity string with every param explicit. It is recorded in `.run_id.json`,
     `RUN_ID_MAP.json`, and the WandB config under every layout. Legacy pins also use it as the run
     folder and WandB run name. One run name ≡ one wandb run, 1:1; it maps to one EXPERIMENTS.md
     row **per wave** the run took part in (see below).
-- **Never lossy, never silently colliding.** Under `segments-v1`, `guard_run_config` atomically
+- **Never lossy, never silently colliding.** Under `segments-v2`, `guard_run_config` atomically
   writes `.run_id.json` (`{layout, segments, path, run_id_flat, run_id, groups}`) into every run
   directory and hard-fails when that directory already records a different run; its I/O is O(1)
   per run and it never scans other runs or writes the map. `check_run_id_plan` rescans every
@@ -214,7 +220,9 @@ The per-experiment **ordered** set of config params that uniquely identifies a r
   the checks make any collision stop the work instead of overwriting or skipping. The map is a
   derived index that any rig may regenerate; the run's `.run_id.json` and `.run_config.json` remain
   the identity record.
-- **Legacy pins.** `nested` (`model=mlp/lr=1e-3/seed=0/`), `collapsed-v1`
+- **Legacy pins.** `segments-v1` is the segments layout with percent-encoded pairs (a list
+  rendered as `hidden=%5B64%2C128%5D`) and group hashes over `segments-v1`; every `segments-v2`
+  rule above except the safe-character rendering applies to it. `nested` (`model=mlp/lr=1e-3/seed=0/`), `collapsed-v1`
   (`model=mlp,lr=1e-3,seed=0/`), and `hashed-v1` (`rid-<16 hex>` of the collapsed string, with its
   own `.run_id.json` and `by_hash` map) stay valid only for experiments that already recorded
   them. The helper keeps rendering them unchanged; never offer them to a new experiment.
@@ -238,7 +246,7 @@ even when the all-explicit path fits; neither engineering mode may decide any st
    representative run with the same byte report and repeat any step until the user approves a
    rendering that overflows nothing.
 
-Record the approval as `RUN_ID_PATH_LAYOUT = "segments-v1"` plus `RUN_ID_SEGMENTS`. Never silently
+Record the approval as `RUN_ID_PATH_LAYOUT = "segments-v2"` plus `RUN_ID_SEGMENTS`. Never silently
 hash: no hash exists outside a user-approved group (or a pinned legacy `hashed-v1`), and no ad-hoc
 truncation, dropped param, shortened pair, or fallback exists.
 
@@ -256,7 +264,7 @@ Layout election is available only while the experiment has no checkpoint, evalua
 output and no wave record. Inspect those surfaces before running the dialogue. Once any such
 output or wave README/script exists, `RUN_ID_PATH_LAYOUT` and `RUN_ID_SEGMENTS` are immutable:
 preserve the literal pin, segment spec, and checked-in renderer, and never propose, approve, or
-perform an in-place path-layout change, regrouping, or move from a legacy pin to `segments-v1`.
+perform an in-place path-layout change, regrouping, or move from a legacy pin to `segments-v2`.
 
 An existing project with outputs is pinned to its checked-in renderer even when it predates the
 explicit constant; never reinterpret it through the helper default. If the checked-in renderer is
@@ -328,7 +336,7 @@ worse, being skipped by an artifact-guarded wave script as "already done".
   dialogue for `RUN_ID_SEGMENTS`. Update the constants and EXPERIMENTS.md section header before
   the first launch.
 - **After any one of those surfaces exists** — `RUN_ID_PARAMS` and `RUN_ID_SEGMENTS` are
-  immutable under every layout (`segments-v1`, `nested`, `collapsed-v1`, `hashed-v1`). Never change
+  immutable under every layout (`segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, `hashed-v1`). Never change
   the identity schema in place. Create a new numbered sub-experiment with the re-elected params and
   its own pinned layout and segments; leave the established experiment and all of
   its records untouched.

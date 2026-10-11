@@ -36,9 +36,13 @@ Integrity gates and protected choices never become delegable.
 2. In manual mode, iterate until the user approves. In auto mode, elect the smallest ordered subset
    that prevents collisions, record the reasoning in the handoff/decision register, and proceed.
 3. Elect the path rendering with the user at **every election**. New experiments always use the
-   `segments-v1` layout: an ordered list of segments, one directory each, whose items are joined
+   `segments-v2` layout: an ordered list of segments, one directory each, whose items are joined
    with `,`; an item is either one explicit param (`lr=0.001`) or a user-named **hash group** of
-   one or more params (`optim_params=<16 hex>`). Neither engineering mode may decide any step
+   one or more params (`optim_params=<16 hex>`). Every proposed path uses only
+   `A-Z a-z 0-9 . _ -` plus the structural `=`, `,`, `/`: a list renders joined with `-`
+   (`hidden=64-128`), and any value with no such rendering (spaces, `/`, dicts, a list item with
+   `-`, e.g. a negative number) must go in a hash group — never propose an escaped path such as
+   `%5B…%5D`. Neither engineering mode may decide any step
    below on its own, and none of them is skipped because the path happens to fit. Run the
    dialogue in this order and wait for the user after each step:
    1. **Full picture.** Show the complete all-explicit checkpoint and evaluation path templates
@@ -56,8 +60,8 @@ Integrity gates and protected choices never become delegable.
       paths for a representative run with the same byte report, and loop back to any step until
       the user approves a rendering that overflows nothing.
    Never silently hash, truncate, drop params, fall back, or accept an ambiguous mapping.
-   **Collision guarantee.** A group renders as the first 16 hex of sha256 over `segments-v1`, the
-   group name, and the group's ordered percent-encoded `key=value` pairs, so identical group values
+   **Collision guarantee.** A group renders as the first 16 hex of sha256 over `segments-v2`, the
+   group name, and the group's ordered lossless (percent-encoded) `key=value` pairs, so identical group values
    hash identically in every run. A 64-bit truncation is never assumed collision-free: the helper
    writes the full mapping `{layout, segments, path, run_id_flat, run_id dict, groups}` to
    `.run_id.json` inside every run directory and hard-fails when a directory's record names a
@@ -70,7 +74,7 @@ Integrity gates and protected choices never become delegable.
    renaming, or rewriting a directory. The map is a derived index, never the identity source, so a
    hash can always be read back into its params at a glance and vice versa.
 4. Record `RUN_ID_PARAMS = [...]`, the one authoritative experiment-wide
-   `RUN_ID_PATH_LAYOUT = "segments-v1"`, and the approved `RUN_ID_SEGMENTS = [...]` beside them in
+   `RUN_ID_PATH_LAYOUT = "segments-v2"`, and the approved `RUN_ID_SEGMENTS = [...]` beside them in
    the experiment's `.py`; mirror all three and the `RUN_ID_MAP.json` path in the experiment's
    EXPERIMENTS.md section header. Make ALL run-scoped paths and names go through
    `code/common/run_id.py`: checkpoints, evaluations, and the `scripts/` and `logs/` run folders use
@@ -85,10 +89,11 @@ Integrity gates and protected choices never become delegable.
    different config), and atomically writes `.run_id.json`; it never touches `RUN_ID_MAP.json`,
    which the wave's end rebuilds once.
 
-**Legacy pins.** `nested`, `collapsed-v1`, and `hashed-v1` remain valid `RUN_ID_PATH_LAYOUT`
-literals only for experiments that already recorded them; the helper keeps rendering them
-unchanged, with `run_id_flat` naming for scripts, logs, and WandB. Never offer them to a new
-experiment.
+**Legacy pins.** `segments-v1` (the percent-encoded segments layout), `nested`, `collapsed-v1`,
+and `hashed-v1` remain valid `RUN_ID_PATH_LAYOUT` literals only for experiments that already
+recorded them; the helper keeps rendering them unchanged. `segments-v1` follows every
+`segments-v2` rule except the safe-character rendering; the others use `run_id_flat` naming for
+scripts, logs, and WandB. Never offer them to a new experiment.
 
 ## 2b. run_id evolution — config changes to an EXISTING experiment
 
@@ -101,17 +106,17 @@ Any change that adds/removes/renames a behavior-affecting config param (integrat
    If none exists, update `RUN_ID_PARAMS` and the EXPERIMENTS.md section header normally before the
    first launch, re-running the full section 2 rendering dialogue for `RUN_ID_SEGMENTS`.
 3. Once any checkpoint, evaluation, or plot output or wave README/script exists,
-   `RUN_ID_PARAMS` and `RUN_ID_SEGMENTS` are immutable under every layout (`segments-v1`, `nested`, `collapsed-v1`, `hashed-v1`). Never change the identity
+   `RUN_ID_PARAMS` and `RUN_ID_SEGMENTS` are immutable under every layout (`segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, `hashed-v1`). Never change the identity
    schema in place. Create a new numbered sub-experiment with the re-elected params and its own
    pinned layout and segments; leave the old experiment and all of its records untouched.
 
 ## 2c. layout immutability for an EXISTING experiment
 
 Inspect checkpoints, evaluations, plots, and wave records before running the rendering dialogue.
-If none exists, run section 2 in full and record the approved `segments-v1` spec. Once any output
+If none exists, run section 2 in full and record the approved `segments-v2` spec. Once any output
 or wave record exists, preserve the checked-in renderer, `RUN_ID_PATH_LAYOUT`, and
 `RUN_ID_SEGMENTS` forever. Never propose or perform an in-place layout change, including moving a
-legacy `nested`, `collapsed-v1`, or `hashed-v1` experiment to `segments-v1` or regrouping its
+legacy `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1` experiment to `segments-v2` or regrouping its
 segments. To use another rendering, create a new numbered sub-experiment and leave the old
 experiment untouched.
 
