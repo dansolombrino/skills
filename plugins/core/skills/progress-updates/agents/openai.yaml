@@ -1,0 +1,4 @@
+interface:
+  display_name: "Progress Updates"
+  short_description: "Timed status and ETA tables for long-running tasks"
+  default_prompt: "Use $progress-updates to post a status and ETA table every 5 minutes while this transfer runs."

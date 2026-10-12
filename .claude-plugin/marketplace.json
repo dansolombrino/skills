@@ -10,8 +10,8 @@
     {
       "name": "core",
       "source": "./plugins/core",
-      "description": "Always-on working discipline for every project: mirror intent and hold brainstorm phases until an explicit greenlight, integrate reference code only through approved deviations, and tag each project with its categories so domain plugins such as research load only where they belong.",
-      "version": "1.5.0",
+      "description": "Always-on working discipline for every project: mirror intent and hold brainstorm phases until an explicit greenlight, integrate reference code only through approved deviations, post timed status and ETA tables for long-running tasks, and tag each project with its categories so domain plugins such as research load only where they belong.",
+      "version": "1.6.0",
       "category": "Developer Tools"
     },
     {

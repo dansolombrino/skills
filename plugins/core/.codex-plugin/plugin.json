@@ -1,7 +1,7 @@
 {
   "name": "core",
-  "version": "1.5.0",
-  "description": "Always-on working discipline for every project: mirror intent and hold brainstorm phases until an explicit greenlight, integrate reference code only through approved deviations, and tag each project with its categories so domain plugins such as research load only where they belong.",
+  "version": "1.6.0",
+  "description": "Always-on working discipline for every project: mirror intent and hold brainstorm phases until an explicit greenlight, integrate reference code only through approved deviations, post timed status and ETA tables for long-running tasks, and tag each project with its categories so domain plugins such as research load only where they belong.",
   "author": {
     "name": "Dan Solombrino",
     "email": "dansolombrino@gmail.com",
@@ -15,13 +15,15 @@
     "reference-code",
     "adaptation",
     "project-init",
-    "project-categories"
+    "project-categories",
+    "progress",
+    "eta"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Core",
-    "shortDescription": "Intent gating, reference integration, project tags",
-    "longDescription": "Skills that belong in every project. Mirror the user's request back before acting, and hold brainstorm phases with no plan or code until an explicit greenlight. Integrate reference implementations through protected, user-approved deviations. Tag a project with its categories in .project.toml and generate each host's per-project plugin enablement from it, so domain plugins such as research load only in the projects that use them.",
+    "shortDescription": "Intent gating, reference code, progress updates, tags",
+    "longDescription": "Skills that belong in every project. Mirror the user's request back before acting, and hold brainstorm phases with no plan or code until an explicit greenlight. Integrate reference implementations through protected, user-approved deviations. Post a fixed status and ETA table on a timed cadence for transfers, downloads, runs, and other long-running tasks. Tag a project with its categories in .project.toml and generate each host's per-project plugin enablement from it, so domain plugins such as research load only in the projects that use them.",
     "developerName": "Dan Solombrino",
     "category": "Developer Tools",
     "capabilities": [
