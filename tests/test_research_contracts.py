@@ -70,7 +70,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "9.1.0")
+        self.assertEqual(manifest["version"], "9.2.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -288,6 +288,23 @@ class ResearchContractTests(unittest.TestCase):
 
         # plots/ stays gitignored, so the file must describe its own provenance.
         self.assertIn("gitignored", visualization)
+
+    def test_every_plot_carries_both_download_buttons_without_approval(self) -> None:
+        skills = ROOT / "plugins/research/skills"
+        visualization = (skills / "visualizations/SKILL.md").read_text()
+        asset = (skills / "visualizations/assets/plot-download.js").read_text()
+        browser = (skills / "visualizations/assets/plot-browser.html").read_text()
+
+        # Whole file and trimmed selection, both under the leaf name, never gated.
+        self.assertIn("Two download buttons, always.", visualization)
+        self.assertIn("assets/plot-download.js", visualization)
+        self.assertIn("need no proposal or approval", visualization)
+        for needle in ("All runs", "Selection", "data-plot-leaf", "plotSelectedRuns", "plot-data"):
+            self.assertIn(needle, asset)
+        # The shared file must not keep the viewer's injected <base>.
+        self.assertIn("base[data-plot-browser]", asset)
+        self.assertIn("<base data-plot-browser", browser)
+        self.assertIn('id="download"', browser)
 
     def test_run_id_path_layout_renderings_are_compatible_and_lossless(self) -> None:
         namespace: dict[str, object] = {}

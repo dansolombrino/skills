@@ -102,6 +102,17 @@ network, no server, and no sibling files:
   file. Never propose committing plot output, and never downsample data to shrink a file.
 - **Selection first, figure second.** The page lets the user choose among the run_id params the
   file covers, then renders the figure for that selection.
+- **Two download buttons, always.** Every plot carries an "All runs" button that saves the whole
+  file and a "Selection" button that saves a trimmed self-contained file holding only the runs the
+  current view shows; both save under the leaf filename. Inline this skill's
+  `assets/plot-download.js` verbatim as the first `<script>` in `<head>` — the plotting script
+  carries its text as a constant, never a path into the skill install — and meet the page
+  contract in its header: `data-plot-leaf` on `<html>`, every per-run datum under the `runs`
+  object of the `plot-data` JSON block keyed by run_id with `<` escaped, a
+  `window.plotSelectedRuns()` returning the run_ids in view, and rendering only from
+  `DOMContentLoaded` or later. The buttons are fixed page furniture, not part of the
+  communication specification: they need no proposal or approval, and the user cannot decline
+  them. An existing plotter that lacks them gains them with its next approved edit.
 - **Offer the affordances the figure's shape earns**: a series toggle whenever it carries two or
   more line series, and a slider or stepper whenever it spans an ordered dimension such as layer,
   epoch, step, or checkpoint. Propose each one in the specification; the user approves or declines.
@@ -147,8 +158,9 @@ network, no server, and no sibling files:
   identical to the previously explicitly approved concrete path.
 - After rendering, open the file and verify that the accepted text is present, legible, and
   unchanged in the page's default view, that every approved affordance actually works, and that
-  the approved strings are present in the HTML source, and that the page and plot area
-  are white. Do not silently repair wording, placement,
+  the approved strings are present in the HTML source, that the page and plot area
+  are white, and that both download buttons save a file that reopens offline — the selection
+  file holding only the runs in view. Do not silently repair wording, placement,
   or title arrangement; propose any correction and reopen the approval gate before editing.
 - **Hand the user each rendered file as a URL.** Run this skill's
   `scripts/plot_server.py url <file>` on the rendering machine for every leaf written. When the

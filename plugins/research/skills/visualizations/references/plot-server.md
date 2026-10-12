@@ -17,15 +17,16 @@ a systemd user service, on the machine where plots are rendered (`rig-4090`).
 - `/` is the plot browser (`assets/plot-browser.html`, read on every request): a project picker,
   the project's `plots/` as a folder tree (single-child folder chains merged into one row) or as a
   newest-first list, a filter box, and the selected plot beside it with its breadcrumb, render time,
-  size, reload, copy-link and open-alone buttons. The list hides and shows from the header
-  button or `b`. Opening a plot shows a progress panel: the download (MB of the uncompressed size,
+  size, reload, copy-link, download and open-alone buttons. Download (or `d`) saves the plot file
+  exactly as rendered, under its leaf name, ready to send to someone. The list hides and shows
+  from the header button or `b`. Opening a plot shows a progress panel: the download (MB of the uncompressed size,
   percent, speed, time left), then the browser drawing it (elapsed time). The page downloads the
   file once and hands those bytes to the plot frame, with a `<base>` so the plot's relative links
-  still resolve on the server. The address bar carries `#p=<project>&f=<plot>`,
-  so a copied link reopens the same view. A green dot marks plots new or re-rendered since this
+  still resolve on the server; the base is marked so the plot's own download buttons leave it
+  out. The address bar carries `#p=<project>&f=<plot>`, so a copied link reopens the same view. A green dot marks plots new or re-rendered since this
   browser last opened them, the list rescans every 30 s, and an open plot that gets re-rendered
   offers a reload. Keys: `/` filter, `↑`/`↓` or `j`/`k` previous/next plot, `Esc` clear, `r` reload,
-  `b` show/hide the list.
+  `d` download, `b` show/hide the list.
   On a narrow screen the list slides in from the menu button. View preferences stay in the browser.
   Without the page file, `/` falls back to the plain list, which is always at `/plain`.
 - `/api/projects` and `/api/files?project=<absolute project path>` are the JSON behind the page.

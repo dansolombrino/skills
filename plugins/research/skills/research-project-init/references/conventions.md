@@ -115,7 +115,8 @@ Experiments are named `NNN_[experiment_name]` (three-digit zero-padded), optiona
 Call this complete numbered leaf hierarchy `<experiment_path>`; never shorten it to the parent
 experiment when the producer is a sub-experiment. A visualization with exactly one producer lives
 at `visualizations/<experiment_path>/<script_stem>.py` and writes only below
-`plots/<experiment_path>/<script_stem>/`, one self-contained interactive HTML file per figure.
+`plots/<experiment_path>/<script_stem>/`, one self-contained interactive HTML file per figure,
+each carrying "All runs" and "Selection" download buttons so it can be sent on as a file.
 Run_id selection lives inside that file, never in its path, so no `key=value` segment ever appears
 under `plots/`. For example:
 
