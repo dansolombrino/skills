@@ -485,5 +485,48 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(self.cli("waves")[1], "")
 
 
+FAKE_SSH = """#!/bin/sh
+# stands in for ssh + sshd: drop the options and the host, run the one command string as sshd would
+for last; do :; done
+exec sh -c "$last"
+"""
+
+
+class ShellOverStdinTest(unittest.TestCase):
+    """A probe over ~100 live runs is >128 KiB; as one argv string exec failed with E2BIG."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        bin_dir = Path(self.tmp.name) / "bin"
+        write(bin_dir / "ssh", FAKE_SSH, executable=True)
+        self.ssh_base = [str(bin_dir / "ssh"), "-o", "BatchMode=yes", "peer"]
+
+    def machine(self, local: bool):
+        return rigsync.Machine(name="hub" if local else "peer", ssh="peer", hostname=None, repo_path=Path(self.tmp.name), local=local)
+
+    def big_probe(self) -> str:
+        runs = [{"token": f"t{i:04d}", "artifact": f"runs/{'x' * 120}/{i}.pt", "status_path": f"runs/{'y' * 120}/{i}.json"} for i in range(400)]
+        return supervisor.SLURM_PROBE.split("echo __RUNS__")[0].replace("squeue", ": squeue").replace("sacct", ": sacct") + 'echo __RUNS__; cd "$3" || exit 3; ' + supervisor.runs_section(runs) + 'read stolen; echo "args=$1|$2|$#"; echo __END__'
+
+    def test_script_past_the_per_argument_limit_runs_on_hub_and_peer(self) -> None:
+        script = self.big_probe()
+        self.assertGreater(len(script.encode()), 128 * 1024 + 1024)
+        for local in (True, False):
+            with self.subTest(local=local), mock.patch.object(rigsync, "ssh_base", return_value=self.ssh_base):
+                result = supervisor.sh(self.machine(local), script, "wave id", "2026-10-14T10:00:00", self.tmp.name)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.count("\t-\t"), 400)
+                # `read` inside the script gets /dev/null, never the rest of the script
+                self.assertIn("args=wave id|2026-10-14T10:00:00|3", result.stdout)
+                self.assertTrue(result.stdout.rstrip().endswith("__END__"))
+
+    def test_exit_code_and_quoted_arguments_survive(self) -> None:
+        for local in (True, False):
+            with self.subTest(local=local), mock.patch.object(rigsync, "ssh_base", return_value=self.ssh_base):
+                result = supervisor.sh(self.machine(local), 'printf "%s|" "$@"; exit 7', "a b", "it's", "$HOME")
+                self.assertEqual((result.returncode, result.stdout), (7, "a b|it's|$HOME|"))
+
+
 if __name__ == "__main__":
     unittest.main()

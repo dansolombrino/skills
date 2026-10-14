@@ -539,8 +539,14 @@ def _text(value: object) -> str:
 
 
 def sh(machine, script: str, *args: str, check: bool = False) -> subprocess.CompletedProcess:
-    """Run a shell snippet on a rig (or here, for the hub) and hand back text, not bytes."""
-    result = rigsync.remote(machine, ["sh", "-c", script, "supervisor", *args], check=check)
+    """Run a shell snippet on a rig (or here, for the hub) and hand back text, not bytes.
+
+    The snippet goes over stdin, not argv: a probe over ~100 live runs outgrows the kernel's
+    128 KiB per-argument limit and exec fails with E2BIG. The brace group is parsed whole before
+    it runs, and its `</dev/null` keeps any command inside from eating the rest of the script.
+    """
+    piped = "{\n" + script + "\n} </dev/null\n"
+    result = rigsync.remote(machine, ["sh", "-s", "--", *args], check=check, input_bytes=piped.encode())
     return subprocess.CompletedProcess(result.args, result.returncode, _text(result.stdout), _text(result.stderr))
 
 
