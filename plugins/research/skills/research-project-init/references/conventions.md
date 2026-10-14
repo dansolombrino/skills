@@ -696,17 +696,18 @@ is missing, stop rather than promise supervision nobody will deliver.
   return to the user. Every kill first proves the process is this wave's own.
 - The chat's part is a fixed ten-minute printout anchored to the confirmed launch time, emitted
   even when nothing changed, using the host's scheduled wake-up — never a blocking shell `sleep`.
-  It pastes the supervisor's script-rendered table verbatim: one row per GPU, never free-form
-  prose. Urgent completion, failure, hang, rig-down, and recovery messages never reset the fixed
+  It pastes the supervisor's script-rendered printout verbatim: the wave ETA first, one line per
+  rig when there are several, and a warning line only for what needs a look — never free-form
+  prose. The per-GPU table is shown only on request. Urgent completion, failure, hang, rig-down, and recovery messages never reset the fixed
   schedule. When the wave becomes terminal, report immediately and stop; do not wait for a tick.
 - Every message opens with `Status written <timestamp> —`, where `<timestamp>` is generated
   immediately before sending in the legible local form `YYYY-MM-DD at HH:MM` (for example
   `Status written 2026-09-21 at 09:10 —`); machine-readable ISO timestamps stay in the files.
-  Report each status observation's heartbeat age too, so message time and data freshness cannot
-  be confused.
-- Show done/running/queued/failed counts, every active run's progress and estimated completion,
-  each lane's next run and the time it is expected to fall free, and the estimated completion of
-  the wave. Label estimates and their basis; say `ETA unavailable` when no sound basis exists.
+- Lead with the estimated completion of the wave and the done count; per rig, show when it is
+  expected to fall free; flag a stale heartbeat, a blocked or down lane, a failure, or an open
+  question on its own line. Per-run progress, heartbeat ages, each lane's next run, and the
+  estimate basis belong to the per-GPU table, shown on request. Say `ETA unavailable` when no
+  sound basis exists.
 - Treat a schema-v2 heartbeat older than three minutes as stale. Diagnose rig/session/process
   health before trusting its ETA or declaring a hang. Legacy statuses remain readable, but a
   future launch must first upgrade target experiment code to schema-v2 structured telemetry.

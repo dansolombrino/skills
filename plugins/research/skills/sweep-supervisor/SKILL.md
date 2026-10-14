@@ -1,6 +1,6 @@
 ---
 name: sweep-supervisor
-description: Supervise a dispatched Research 2.0 wave from the hub without depending on any open chat - a hub service feeds each GPU lane from one pull queue so load balances itself, relaunches lanes after a rig fault, offloads disk-constrained rigs, keeps the fleet board current, renders a per-GPU status and ETA table, and wakes a fresh unattended agent every ten minutes and on every failure to judge what rules cannot (diagnose failures, move or steal runs across GPUs and rigs, fetch datasets, fix walltimes, ask the user without blocking). Use when a wave is running or about to be launched, when the user asks for status, ETA, a ten-minute update, to monitor or babysit a sweep, to rebalance GPUs, to recover after a crash or reboot, to answer a supervisor question, or when woken as the unattended supervisor agent for a tick. Do not use to design, generate, or authorize a wave (sweep-dispatch), or for fleet-wide GPU occupancy across projects (rig-board).
+description: Supervise a dispatched Research 2.0 wave from the hub without depending on any open chat - a hub service feeds each GPU lane from one pull queue so load balances itself, relaunches lanes after a rig fault, offloads disk-constrained rigs, keeps the fleet board current, renders a short ETA printout (per-GPU table on request), and wakes a fresh unattended agent every ten minutes and on every failure to judge what rules cannot (diagnose failures, move or steal runs across GPUs and rigs, fetch datasets, fix walltimes, ask the user without blocking). Use when a wave is running or about to be launched, when the user asks for status, ETA, a ten-minute update, to monitor or babysit a sweep, to rebalance GPUs, to recover after a crash or reboot, to answer a supervisor question, or when woken as the unattended supervisor agent for a tick. Do not use to design, generate, or authorize a wave (sweep-dispatch), or for fleet-wide GPU occupancy across projects (rig-board).
 ---
 
 # sweep-supervisor
@@ -22,7 +22,8 @@ so install them from the same plugin.
 SUPERVISOR=/absolute/path/to/sweep-supervisor/scripts/supervisor.py
 python3 "$SUPERVISOR" check                                   # agent profile, board root, cadence
 python3 "$SUPERVISOR" --root <project root> register --wave <wave_id> --manifest <file> --dry-run
-python3 "$SUPERVISOR" --root <project root> table --wave <wave_id>          # the status report
+python3 "$SUPERVISOR" --root <project root> table --wave <wave_id>          # the chat printout: ETA, one line per rig
+python3 "$SUPERVISOR" --root <project root> table --wave <wave_id> --full   # the per-GPU table
 python3 "$SUPERVISOR" --root <project root> ledger --wave <wave_id>         # what happened since the last tick
 python3 "$SUPERVISOR" --root <project root> answer --wave <wave_id> --id q1 --text "<the user's answer>"
 python3 "$SUPERVISOR" waves                                   # every wave the service is supervising
@@ -36,7 +37,7 @@ python3 "$SUPERVISOR" waves                                   # every wave the s
 | runs | assign in queue order to the lane free first; settle outcomes from the artifact | reorder, pin, exclude, requeue, steal, constrain | — |
 | cluster jobs | submit under the caps, resubmit machine faults, resize a `TIMEOUT` from measured progress, pull a `PENDING` job to an idle lane | budget and walltime judgment | — |
 | disk | `rig-sync offload` pass on declared rigs | turn offload on or off for a rig | — |
-| tracking | fleet board claim/refresh/release, snapshot, table | EXPERIMENTS.md (single writer during a wave), `decide` log, journal | paste the table |
+| tracking | fleet board claim/refresh/release, snapshot, printout and table | EXPERIMENTS.md (single writer during a wave), `decide` log, journal | paste the printout |
 | the user | — | `ask` without blocking | relay `answer` |
 
 The queue is ordered once by dispatch. A lane holds at most one run in flight plus one buffered,
@@ -59,12 +60,16 @@ until the holder releases it. A lane whose card the board gives to another wave 
    primitive, say so once: the table stays available from the command above, in
    `.waves/_state/<wave_id>/table.md`, and in the fleet viewer.
 3. At every tick, even if nothing changed, run `table --wave <wave_id>` and **paste its output
-   verbatim** — it already opens with `Status written <timestamp> —` (`YYYY-MM-DD at HH:MM`, hub local time), one row per GPU. Add at most
-   two sentences of your own. Do not re-derive, re-poll, or restyle it, and never write a probe
-   script of your own.
-4. A `Needs you` line is a supervisor question. When the user answers in chat, record it with
+   verbatim**. It is a few lines: `Status written <timestamp> —` (`YYYY-MM-DD at HH:MM`, hub
+   local time), the wave ETA with its countdown and the done count; a progress bar; one line per
+   rig (GPUs, runs done, when it falls free, `← last to finish`) only when the pool has several
+   rigs; and a `⚠` line only for a stale, blocked, or down lane, a failed run, or a question. Add
+   nothing when there is no `⚠` line, and at most one sentence when there is. Do not re-derive,
+   re-poll, or restyle it, and never write a probe script of your own. The per-GPU table is
+   `table --full` (also `.waves/_state/<wave_id>/table.md`); post it only when the user asks.
+4. A `⚠ needs you [<id>]` line is a supervisor question. When the user answers in chat, record it with
    `answer`; the service wakes the agent on it. Until then the stated status quo holds.
-5. When the header says the wave finished, post the final table, the prune proposal
+5. When the printout says `finished`, post it, the prune proposal
    (`rig-sync prune --dry-run`, user-approved as always), and stop the schedule.
 6. A direct request ("move X to behemoth", "stop using the 3080") goes through the same commands
    the agent uses (`queue`, `lane`, `steal`), with `--reason "user: ..."`.

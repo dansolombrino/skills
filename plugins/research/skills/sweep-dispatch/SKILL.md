@@ -213,7 +213,7 @@ environment gates pass:
    `lane.sh`, claims it on `rig-board`, feeds its buffer, and submits `leonardo` jobs under the
    caps with the guarded `sbatch` in `references/cineca-slurm.md`. A claim that exits 3 means
    another project holds the lane: nothing is killed, the lane stays out, and it is reported.
-3. Confirm the first table (`sweep-supervisor` `table --wave <wave_id> --cycle`) shows every pool
+3. Confirm the first table (`sweep-supervisor` `table --wave <wave_id> --cycle --full`) shows every pool
    lane started or names why not, then follow `sweep-supervisor` § In a chat for the ten-minute
    printout. A chat that stalls loses only the printout.
 

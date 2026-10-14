@@ -1338,6 +1338,55 @@ def short(text: str | None, width: int = 44) -> str:
     return text if len(text) <= width else "…" + text[-(width - 1):]
 
 
+TROUBLE_STATES = ("stale", "blocked", "rig down", "waiting for board")
+
+
+def render_brief(snapshot: dict) -> str:
+    """The chat printout: the wave ETA first, one line per rig only when there are several, and a
+    warning line only for what needs a look. The per-GPU table stays in `table --full` and table.md."""
+    at = now()
+    counts, total = snapshot["counts"], snapshot["total"]
+    if snapshot.get("finished_at"):
+        eta = f"finished {clock(snapshot['finished_at'], at)}"
+    elif moment := parse_iso(snapshot["wave_eta"]):
+        eta = f"ETA {clock(snapshot['wave_eta'], at)} (~{humanize((moment - at).total_seconds())})"
+    else:
+        eta = f"ETA unavailable: {snapshot['wave_eta_basis']}"
+    tally = f"{counts['done']}/{total} done" + (f" · {counts['failed']} failed" if counts["failed"] else "")
+    lines = [
+        f"Status written {at.strftime('%Y-%m-%d at %H:%M')} — {eta} · {tally}",
+        bar(counts["done"] / total if total else None, 20),
+    ]
+    rigs: dict[str, list[dict]] = {}
+    for row in snapshot["lanes"]:
+        rigs.setdefault(row["rig"], []).append(row)
+    if len(rigs) > 1:
+        free = {rig: max((parse_iso(r["lane_free_at"]) for r in rows if r["lane_free_at"]), default=None) for rig, rows in rigs.items()}
+        last = max((moment for moment in free.values() if moment), default=None)
+        width = max(len(rig) for rig in rigs)
+        for rig, rows in rigs.items():
+            unit = ("job" if rows[0]["kind"] == "job" else "GPU") + ("s" if len(rows) != 1 else "")
+            moment = free[rig]
+            when = f"free {clock(iso(moment), at)}" if moment else "idle"
+            mark = "  ← last to finish" if moment and moment == last and not snapshot.get("finished_at") else ""
+            lines.append(f"  {rig.ljust(width)}  {len(rows)} {unit} · {sum(r['done'] for r in rows)} done · {when}{mark}")
+    warnings = []
+    for row in snapshot["lanes"]:
+        if row.get("problem"):
+            warnings.append(f"{row['rig']} gpu{row['gpu']}: {row['problem']}")
+        elif row["state"] in TROUBLE_STATES:
+            warnings.append(f"{row['rig']} gpu{row['gpu']} {row['state']}" + (f" (run {row['run']})" if row["run"] else ""))
+    if snapshot["failed"]:
+        names = ", ".join(f"`{item['run']}`" for item in snapshot["failed"][:3])
+        more = f" and {len(snapshot['failed']) - 3} more" if len(snapshot["failed"]) > 3 else ""
+        warnings.append(f"failed: {names}{more}")
+    for q in snapshot["questions"]:
+        warnings.append(f"needs you [{q['id']}] {q['text']} — meanwhile: {q.get('meanwhile') or 'status quo'}")
+    if warnings:
+        lines += [""] + [f"⚠ {text}" for text in warnings]
+    return "\n".join(lines) + "\n"
+
+
 TABLE_COLUMNS = ("rig", "gpu", "state", "run", "progress", "hb", "run ETA", "next", "done", "lane free", "basis")
 
 
@@ -1735,6 +1784,7 @@ def build_parser() -> argparse.ArgumentParser:
     wave_parser("cycle")
     table_p = wave_parser("table")
     table_p.add_argument("--format", choices=("md", "text"), default="md")
+    table_p.add_argument("--full", action="store_true", help="the per-GPU table instead of the brief chat printout")
     table_p.add_argument("--cycle", action="store_true", help="run one cycle first instead of reading the last snapshot")
     wave_parser("snapshot")
     ledger_p = wave_parser("ledger")
@@ -1810,7 +1860,7 @@ def main(argv: list[str] | None = None) -> int:
             snapshot = board.read_json(wave.snapshot_path)
             if snapshot is None:
                 raise SupervisorError(f"wave {wave.wave_id} has no snapshot yet; is the supervisor service running?")
-            print(render_table(snapshot, args.format), end="")
+            print(render_table(snapshot, args.format) if args.full else render_brief(snapshot), end="")
             return 0
         if args.command == "snapshot":
             print(json.dumps(board.read_json(wave.snapshot_path) or {}, indent=2, sort_keys=True))

@@ -324,7 +324,7 @@ class SupervisorTests(unittest.TestCase):
         write(self.hub / run["status_path"], json.dumps({"state": "running", "wave_id": WAVE, "heartbeat": now, "elapsed_s": 600, "progress": "epoch 5/10", "progress_completed": 5, "progress_total": 10}))
         self.cli("ask", "--wave", WAVE, "--text", "use behemoth gpu 5?", "--meanwhile", "gpu 5 stays unused")
         self.cli("decide", "--wave", WAVE, "kept m1 on hub: peer is slower than its weight")
-        code, out, err = self.cli("table", "--wave", WAVE, "--cycle")
+        code, out, err = self.cli("table", "--wave", WAVE, "--cycle", "--full")
         self.assertEqual(code, 0, err)
         lines = out.splitlines()
         self.assertRegex(lines[0], r"^Status written \d{4}-\d{2}-\d{2} at \d{2}:\d{2} — wave `" + WAVE)
@@ -337,6 +337,22 @@ class SupervisorTests(unittest.TestCase):
         self.assertIn("[q1] use behemoth gpu 5?", out)
         self.assertIn("[opus/high] kept m1 on hub", out)
         self.assertIn("wave ETA", lines[0])
+
+    def test_brief_printout_leads_with_the_eta_and_one_line_per_rig(self) -> None:
+        self.register()
+        self.cli("cycle", "--wave", WAVE)
+        self.cli("ask", "--wave", WAVE, "--text", "use behemoth gpu 5?", "--meanwhile", "gpu 5 stays unused")
+        code, out, err = self.cli("table", "--wave", WAVE, "--cycle")
+        self.assertEqual(code, 0, err)
+        lines = out.splitlines()
+        self.assertRegex(lines[0], r"^Status written \d{4}-\d{2}-\d{2} at \d{2}:\d{2} — ETA ")
+        self.assertRegex(lines[0], r"· 0/\d+ done$")
+        self.assertIn("░", lines[1])
+        rig_lines = [line for line in lines if line.startswith("  hub ") or line.startswith("  peer ")]
+        self.assertEqual(len(rig_lines), 2)
+        self.assertIn("1 GPU ·", rig_lines[0])
+        self.assertIn("⚠ needs you [q1] use behemoth gpu 5? — meanwhile: gpu 5 stays unused", out)
+        self.assertNotIn("| rig | gpu |", out)
 
     def test_wake_runs_the_declared_profile_once_and_records_it(self) -> None:
         self.register()
