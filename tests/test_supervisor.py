@@ -354,6 +354,20 @@ class SupervisorTests(unittest.TestCase):
         self.assertIn("⚠ needs you [q1] use behemoth gpu 5? — meanwhile: gpu 5 stays unused", out)
         self.assertNotIn("| rig | gpu |", out)
 
+    def test_brief_counts_a_slurm_rigs_finished_jobs_and_reports_what_is_in_flight(self) -> None:
+        at = supervisor.now()
+        lane = {"kind": "lane", "rig": "hub", "gpu": "0", "state": "running", "run": "m9", "done": 3, "lane_free_at": supervisor.iso(at + supervisor.timedelta(hours=1)), "problem": None}
+        job = lambda state: {"kind": "job", "rig": "cluster", "gpu": "job 1", "state": state, "run": "m1", "done": 0, "lane_free_at": None, "problem": None}
+        snapshot = {
+            "counts": {"done": 10, "failed": 0}, "total": 20, "wave_eta": supervisor.iso(at + supervisor.timedelta(hours=2)), "wave_eta_basis": "",
+            "lanes": [lane, job("running"), job("running"), job("pending (Priority)")], "failed": [], "questions": [],
+            "rigs": {"cluster": {"kind": "slurm", "done": 7}, "hub": {"kind": "lanes", "done": 3}, "spare": {"kind": "slurm", "done": 0}},
+        }
+        lines = supervisor.render_brief(snapshot).splitlines()
+        self.assertIn("  cluster  3 jobs · 7 done · 2 running, 1 waiting", lines)
+        self.assertIn("  spare    0 jobs · 0 done · no jobs in flight", lines)
+        self.assertTrue(any(line.startswith("  hub      1 GPU · 3 done · free ") and line.endswith("← last to finish") for line in lines))
+
     def test_wake_runs_the_declared_profile_once_and_records_it(self) -> None:
         self.register()
         wave = supervisor.Wave(self.hub, WAVE)

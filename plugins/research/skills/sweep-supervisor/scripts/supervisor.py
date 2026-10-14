@@ -1269,6 +1269,11 @@ def build_snapshot(queue: dict, runtime: dict, wave: Wave, vram: dict, at: datet
         "cycled_at": iso(at),
         "offload": {rig: (queue.get("offload_last") or {}).get(rig) for rig in queue["offload"]},
         "lanes": rows,
+        # per rig, so a Slurm rig (whose rows are only its live jobs) still reports what it finished
+        "rigs": {
+            rig: {"kind": pool["kind"], "done": sum(r["state"] == "done" and (r.get("lane") or {}).get("rig") == rig for r in queue["runs"])}
+            for rig, pool in sorted(queue["pool"].items())
+        },
         "failed": [{"run": r["id"], "note": r.get("note")} for r in queue["runs"] if r["state"] == "failed"],
         "excluded": [{"run": r["id"], "note": r.get("note")} for r in queue["runs"] if r["state"] == "excluded"],
         "questions": questions,
@@ -1363,7 +1368,8 @@ def render_brief(snapshot: dict) -> str:
         f"Status written {at.strftime('%Y-%m-%d at %H:%M')} — {eta} · {tally}",
         bar(counts["done"] / total if total else None, 20),
     ]
-    rigs: dict[str, list[dict]] = {}
+    info = snapshot.get("rigs") or {}
+    rigs: dict[str, list[dict]] = {rig: [] for rig in info}
     for row in snapshot["lanes"]:
         rigs.setdefault(row["rig"], []).append(row)
     if len(rigs) > 1:
@@ -1371,11 +1377,18 @@ def render_brief(snapshot: dict) -> str:
         last = max((moment for moment in free.values() if moment), default=None)
         width = max(len(rig) for rig in rigs)
         for rig, rows in rigs.items():
-            unit = ("job" if rows[0]["kind"] == "job" else "GPU") + ("s" if len(rows) != 1 else "")
+            slurm = (info.get(rig) or {}).get("kind") == "slurm" or any(r["kind"] == "job" for r in rows)
+            unit = ("job" if slurm else "GPU") + ("s" if len(rows) != 1 else "")
+            done = (info.get(rig) or {}).get("done", sum(r["done"] for r in rows))
             moment = free[rig]
-            when = f"free {clock(iso(moment), at)}" if moment else "idle"
+            if slurm:
+                # a Slurm rig never "falls free": it takes new jobs until the queue is empty
+                running = sum(r["state"] == "running" or r["state"] == "stale" for r in rows)
+                when = f"{running} running, {len(rows) - running} waiting" if rows else "no jobs in flight"
+            else:
+                when = f"free {clock(iso(moment), at)}" if moment else "idle"
             mark = "  ← last to finish" if moment and moment == last and not snapshot.get("finished_at") else ""
-            lines.append(f"  {rig.ljust(width)}  {len(rows)} {unit} · {sum(r['done'] for r in rows)} done · {when}{mark}")
+            lines.append(f"  {rig.ljust(width)}  {len(rows)} {unit} · {done} done · {when}{mark}")
     warnings = []
     for row in snapshot["lanes"]:
         if row.get("problem"):

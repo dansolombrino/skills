@@ -62,8 +62,8 @@ until the holder releases it. A lane whose card the board gives to another wave 
 3. At every tick, even if nothing changed, run `table --wave <wave_id>` and **paste its output
    verbatim**. It is a few lines: `Status written <timestamp> —` (`YYYY-MM-DD at HH:MM`, hub
    local time), the wave ETA with its countdown and the done count; a progress bar; one line per
-   rig (GPUs, runs done, when it falls free, `← last to finish`) only when the pool has several
-   rigs; and a `⚠` line only for a stale, blocked, or down lane, a failed run, or a question. Add
+   rig (GPUs or Slurm jobs, runs done, when it falls free or, for Slurm, jobs running and waiting,
+   `← last to finish`) only when the pool has several rigs; and a `⚠` line only for a stale, blocked, or down lane, a failed run, or a question. Add
    nothing when there is no `⚠` line, and at most one sentence when there is. Do not re-derive,
    re-poll, or restyle it, and never write a probe script of your own. The per-GPU table is
    `table --full` (also `.waves/_state/<wave_id>/table.md`); post it only when the user asks.
