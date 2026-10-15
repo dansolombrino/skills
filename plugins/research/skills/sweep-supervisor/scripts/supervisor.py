@@ -1026,21 +1026,31 @@ class Cycle:
             name = f"{queue['wave_id']}__{run['id']}"
             script = f"{rigsync.WAVES_DIR}/{queue['wave_id']}/{run['script']}"
             hms = f"{walltime // 3600:02d}:{walltime % 3600 // 60:02d}:00"
+            # a live job with this name is one whose submission the queue lost (a restart mid-cycle): adopt it
             result = sh(
                 machine,
-                'cd "$1" && if squeue --me --noheader --format=%j | grep -Fxq "$2"; then echo ALREADY-QUEUED; '
+                'cd "$1" && live=$(squeue --me --noheader --name="$2" --format=%i | head -n 1); '
+                'if [ -n "$live" ]; then echo "ALREADY-QUEUED;$live"; '
                 'else sbatch --parsable --time="$3" --export=ALL,LANE_RIG="$5",LANE_GPUS=1 "$4"; fi',
                 str(machine.repo_path), name, hms, script, rig,
             )
-            job_id = result.stdout.strip().split(";")[0]
+            out = result.stdout.strip()
+            adopted = out.startswith("ALREADY-QUEUED;")
+            job_id = out.split(";")[1] if adopted else out.split(";")[0]
             if result.returncode != 0 or not job_id.isdigit():
                 self.event("claim-refused", rig=rig, run=run["id"], problem=(result.stderr or result.stdout).strip()[-300:])
                 break
             run.update(state="assigned", lane={"rig": rig, "gpu": "1"}, entry=None, job_id=int(job_id), walltime_s=walltime,
                        attempts=run["attempts"] + 1, budget_h=run.get("budget_h", 0.0) + cost_h, budget_rig=rig)
             run.pop("front", None)
-            self.record_job(run, job_id, "submitted" if run["attempts"] == 1 else "resubmitted")
-            self.event("job-submitted", run=run["id"], rig=rig, job=int(job_id), walltime_s=walltime)
+            if adopted:
+                self.record_job(run, job_id, "adopted")
+                self.event("job-adopted", run=run["id"], rig=rig, job=int(job_id), walltime_s=walltime)
+            else:
+                self.record_job(run, job_id, "submitted" if run["attempts"] == 1 else "resubmitted")
+                self.event("job-submitted", run=run["id"], rig=rig, job=int(job_id), walltime_s=walltime)
+            # saved per job, so a restart mid-cycle cannot lose a submission that already reached Slurm
+            self.wave.save(queue)
             spent += cost_h
             room -= 1
 
@@ -1673,6 +1683,26 @@ def lane_command(wave: Wave, args: argparse.Namespace) -> int:
     return 0
 
 
+def pool_command(wave: Wave, args: argparse.Namespace) -> int:
+    """Change a registered cluster's tracked core-hour cap; a raised cap clears the budget stop."""
+    if args.core_hours_cap <= 0:
+        raise SupervisorError("--core-hours-cap must be positive")
+    with WaveLock(wave):
+        queue = wave.load()
+        require_pool_rigs(queue, [args.rig])
+        pool = queue["pool"][args.rig]
+        if "core_hours_cap" not in pool:
+            raise SupervisorError(f"{args.rig} is not a cluster pool entry; it has no core-hour cap")
+        old = pool["core_hours_cap"]
+        pool["core_hours_cap"] = float(args.core_hours_cap)
+        if pool["core_hours_cap"] > old:
+            queue.pop("budget_notified", None)
+        wave.save(queue)
+        wave.log("pool-cap", rig=args.rig, old_h=old, new_h=pool["core_hours_cap"], reason=args.reason)
+    print(f"[pool] {args.rig}: core_hours_cap {old} -> {pool['core_hours_cap']}")
+    return 0
+
+
 def steal(wave: Wave, config, board_config, args: argparse.Namespace) -> int:
     """Take a run back from its lane. Refuses anything that is not provably this wave's own process."""
     rigsync.require_confirmation(args.dry_run, args.confirm)
@@ -1828,6 +1858,10 @@ def build_parser() -> argparse.ArgumentParser:
     lane_p.add_argument("--rig", required=True)
     lane_p.add_argument("--gpu", default="0")
     lane_p.add_argument("--reason", required=True)
+    pool_p = wave_parser("pool")
+    pool_p.add_argument("--rig", required=True)
+    pool_p.add_argument("--core-hours-cap", type=float, required=True)
+    pool_p.add_argument("--reason", required=True)
     steal_p = wave_parser("steal")
     steal_p.add_argument("--run", required=True)
     steal_p.add_argument("--reason", required=True)
@@ -1899,6 +1933,8 @@ def main(argv: list[str] | None = None) -> int:
             return data_command(wave, args)
         if args.command == "lane":
             return lane_command(wave, args)
+        if args.command == "pool":
+            return pool_command(wave, args)
         if args.command == "steal":
             return steal(wave, project_config(wave, settings), board_config, args)
         if args.command == "ask":

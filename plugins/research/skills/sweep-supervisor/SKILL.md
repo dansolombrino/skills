@@ -76,7 +76,9 @@ until the holder releases it. A lane whose card the board gives to another wave 
 5. When the printout says `finished`, post it, the prune proposal
    (`rig-sync prune --dry-run`, user-approved as always), and stop the schedule.
 6. A direct request ("move X to behemoth", "stop using the 3080") goes through the same commands
-   the agent uses (`queue`, `lane`, `steal`), with `--reason "user: ..."`.
+   the agent uses (`queue`, `lane`, `steal`), with `--reason "user: ..."`. A user-approved change
+   of a cluster's tracked core-hour cap goes through `pool --rig <cluster> --core-hours-cap <h>
+   --reason "user: ..."` (ledger event `pool-cap`; a raised cap resumes submission).
 
 ## Agent profile
 

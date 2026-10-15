@@ -42,7 +42,11 @@ n=$(cat "$FAKE_SLURM/next" 2>/dev/null || echo 100); echo $((n + 1)) > "$FAKE_SL
 echo "$@" >> "$FAKE_SLURM/submitted"; echo "$n"
 """
 FAKE_SQUEUE = """#!/bin/sh
-case "$*" in *--format=%j) cut -d'|' -f2 "$FAKE_SLURM/squeue" 2>/dev/null ;; *) cat "$FAKE_SLURM/squeue" 2>/dev/null ;; esac
+case "$*" in
+  *--name=*--format=%i) name=$(echo "$*" | sed 's/.*--name=\\([^ ]*\\).*/\\1/'); awk -F'|' -v n="$name" '$2 == n {print $1}' "$FAKE_SLURM/squeue" 2>/dev/null ;;
+  *--format=%j) cut -d'|' -f2 "$FAKE_SLURM/squeue" 2>/dev/null ;;
+  *) cat "$FAKE_SLURM/squeue" 2>/dev/null ;;
+esac
 """
 FAKE_SACCT = '#!/bin/sh\ncat "$FAKE_SLURM/sacct" 2>/dev/null\n'
 FAKE_SCANCEL = '#!/bin/sh\necho "$1" >> "$FAKE_SLURM/cancelled"\n'
@@ -479,6 +483,35 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(len(cancelled), 1)
         moved = [r for r in self.queue()["runs"] if r["lane"] == {"rig": "hub", "gpu": "0"} and r["state"] == "assigned"]
         self.assertEqual(len(moved), 1)
+
+    def test_a_job_slurm_has_but_the_queue_lost_is_adopted_not_resubmitted(self) -> None:
+        pool = {"cluster": {"max_jobs": 1, "core_hours_cap": 1000, "default_walltime_s": 3600}}
+        self.register(runs=1, pool=pool)
+        run = self.queue()["runs"][0]
+        write(self.base / "slurm" / "squeue", f"777|{WAVE}__{run['id']}|PENDING|0:00|1:30:00|Priority\n")
+        self.cli("cycle", "--wave", WAVE)
+        after = self.queue()["runs"][0]
+        self.assertEqual((after["state"], after["job_id"]), ("assigned", 777))
+        self.assertFalse((self.base / "slurm" / "submitted").exists())
+        events = [record["event"] for record in supervisor.Wave(self.hub, WAVE).ledger()]
+        self.assertIn("job-adopted", events)
+        self.assertNotIn("claim-refused", events)
+
+    def test_pool_raises_a_cluster_cap_and_resumes_submission(self) -> None:
+        pool = {"cluster": {"max_jobs": 2, "core_hours_cap": 1, "default_walltime_s": 3600}}
+        self.register(runs=2, pool=pool)
+        self.cli("cycle", "--wave", WAVE)
+        self.assertTrue(self.queue().get("budget_notified"))
+        self.assertFalse([r for r in self.queue()["runs"] if r["job_id"]])
+        self.assertEqual(self.cli("pool", "--wave", WAVE, "--rig", "hub", "--core-hours-cap", "9", "--reason", "x")[0], 2)
+        code, out, err = self.cli("pool", "--wave", WAVE, "--rig", "cluster", "--core-hours-cap", "1000", "--reason", "user: raise")
+        self.assertEqual(code, 0, err)
+        self.assertIn("1.0 -> 1000.0", out)
+        self.assertNotIn("budget_notified", self.queue())
+        self.cli("cycle", "--wave", WAVE)
+        self.assertEqual(len([r for r in self.queue()["runs"] if r["job_id"]]), 2)
+        events = [record["event"] for record in supervisor.Wave(self.hub, WAVE).ledger()]
+        self.assertIn("pool-cap", events)
 
     def test_a_timed_out_job_is_resized_from_what_it_measured(self) -> None:
         pool = {"cluster": {"max_jobs": 1, "core_hours_cap": 1000, "default_walltime_s": 3600}}
