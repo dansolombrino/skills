@@ -1,6 +1,6 @@
 ---
 name: sweep-dispatch
-description: Generate, authorize, and launch experiment runs/sweeps across the GPU rigs (rig-4090, rig-3090-ti, rig-3080-ti, behemoth — also "4090", "3080 ti", "pro 6000", "bw", "blackwell", "server-pro-6000-bw") and the CINECA Leonardo Slurm cluster ("leonardo", "cineca", "slurm", "sbatch", "HPC") as one pull queue over a pool of GPU lanes, then hand the wave to sweep-supervisor. Use when the user asks to run, launch, sweep, dispatch, or submit experiments or Slurm jobs, split runs across machines, GPUs, or the cluster, use a rig that is short on disk, rerun failed runs, supersede in-flight runs with a newer wave, run several waves of one project at once, or fetch results from the cluster. Monitoring, ten-minute status/ETA updates, rebalancing, and recovery after a rig crash or job interruption belong to sweep-supervisor.
+description: Generate, authorize, and launch experiment runs/sweeps across the GPU rigs (rig-4090, rig-3090-ti, rig-3080-ti, behemoth — also "4090", "3080 ti", "pro 6000", "bw", "blackwell", "server-pro-6000-bw") and the CINECA Leonardo Slurm cluster ("leonardo", "cineca", "slurm", "sbatch", "HPC") as one pull queue over a pool of GPU lanes, then hand the wave to sweep-supervisor. Use when the user asks to run, launch, sweep, dispatch, or submit experiments or Slurm jobs, split runs across machines, GPUs, or the cluster, use a rig that is short on disk, rerun failed runs, supersede in-flight runs with a newer wave, run several waves of one project at once, or fetch results from the cluster. Monitoring, periodic status/ETA updates, rebalancing, and recovery after a rig crash or job interruption belong to sweep-supervisor.
 ---
 
 # sweep-dispatch
@@ -112,7 +112,8 @@ waits instead of stopping. Present or record: the pool (rig, GPU set, per lane),
 **the simulated wave completion and each lane's expected share**, runs pinned to a rig by VRAM or
 data, offload rigs, exact smoke command, staged files, journal entry, branch/remote, environment
 key and fingerprint, provisioning dry run, commit/tag/push, worktree deployment scope, and any
-supersede. `leonardo` is outside the balancing: its queue wait is not predictable, so the user
+supersede, and the chat update interval in minutes (the user's number, else 1).
+`leonardo` is outside the balancing: its queue wait is not predictable, so the user
 sets its job cap and core-hour cap, each run it takes becomes one job, and its ETA is reported as
 scheduler estimate plus run estimate. Preview for it the account, partition/QOS, resource line,
 walltime basis, and the budget ceiling (`runs × walltime_h × 8` core-hours per job). State the
@@ -214,8 +215,8 @@ environment gates pass:
    caps with the guarded `sbatch` in `references/cineca-slurm.md`. A claim that exits 3 means
    another project holds the lane: nothing is killed, the lane stays out, and it is reported.
 3. Confirm the first table (`sweep-supervisor` `table --wave <wave_id> --cycle --full`) shows every pool
-   lane started or names why not, then follow `sweep-supervisor` § In a chat for the ten-minute
-   printout. A chat that stalls loses only the printout.
+   lane started or names why not, then follow `sweep-supervisor` § In a chat for the periodic
+   printout at the chat update interval. A chat that stalls loses only the printout.
 
 Tell the user how to watch manually too: for a peer, `ssh <rig>` then
 `tmux attach -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>`; for the current local hub, run the
@@ -275,7 +276,7 @@ dirty worktrees by itself; still list only waves whose rows are all terminal.
 
 ## Status and ETA updates
 
-The ten-minute table, the urgent reports, the final summary, board refresh and release, and the
+The periodic table, the urgent reports, the final summary, board refresh and release, and the
 once-per-wave `write_run_id_map(<evaluations experiment dir>, layout=RUN_ID_PATH_LAYOUT)` rebuild
 (never per run) belong to `sweep-supervisor`. When its final table is posted, propose the prune
 (§ Pruning finished waves).

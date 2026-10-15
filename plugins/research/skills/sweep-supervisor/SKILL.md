@@ -1,6 +1,6 @@
 ---
 name: sweep-supervisor
-description: Supervise a dispatched Research 2.0 wave from the hub without depending on any open chat - a hub service feeds each GPU lane from one pull queue so load balances itself, relaunches lanes after a rig fault, offloads disk-constrained rigs, keeps the fleet board current, renders a short ETA printout (per-GPU table on request), and wakes a fresh unattended agent every ten minutes and on every failure to judge what rules cannot (diagnose failures, move or steal runs across GPUs and rigs, fetch datasets, fix walltimes, ask the user without blocking). Use when a wave is running or about to be launched, when the user asks for status, ETA, a ten-minute update, to monitor or babysit a sweep, to rebalance GPUs, to recover after a crash or reboot, to answer a supervisor question, or when woken as the unattended supervisor agent for a tick. Do not use to design, generate, or authorize a wave (sweep-dispatch), or for fleet-wide GPU occupancy across projects (rig-board).
+description: Supervise a dispatched Research 2.0 wave from the hub without depending on any open chat - a hub service feeds each GPU lane from one pull queue so load balances itself, relaunches lanes after a rig fault, offloads disk-constrained rigs, keeps the fleet board current, renders a short ETA printout (per-GPU table on request), and wakes a fresh unattended agent every two minutes and on every failure to judge what rules cannot (diagnose failures, move or steal runs across GPUs and rigs, fetch datasets, fix walltimes, ask the user without blocking). Use when a wave is running or about to be launched, when the user asks for status, ETA, periodic updates or their interval, to monitor or babysit a sweep, to rebalance GPUs, to recover after a crash or reboot, to answer a supervisor question, or when woken as the unattended supervisor agent for a tick. Do not use to design, generate, or authorize a wave (sweep-dispatch), or for fleet-wide GPU occupancy across projects (rig-board).
 ---
 
 # sweep-supervisor
@@ -54,14 +54,18 @@ until the holder releases it. A lane whose card the board gives to another wave 
    end the turn waiting on the user: a blocked chat cannot print, and an unanswered question at
    02:00 must cost nothing. Monitoring does not depend on the chat, so a stalled chat loses only
    the printout.
-2. Arm the host's scheduled wake-up primitive for exact 600-second ticks anchored to the launch
+2. **Update interval: the user's N minutes, else 1.** Take N from the user's request or one
+   already given in this chat; with the default, say once that updates come every minute and
+   "every N minutes" changes it, which re-arms. This interval is the chat's alone; the unattended
+   agent keeps the registry's `tick_every`.
+   Arm the host's scheduled wake-up primitive for exact N-minute ticks anchored to the launch
    time; collection or message latency must not drift later ticks, and an urgent report does not
    reset `next_update`. Never implement the cadence with shell `sleep`. If the host has no such
    primitive, say so once: the table stays available from the command above, in
    `.waves/_state/<wave_id>/table.md`, and in the fleet viewer.
 3. At every tick, even if nothing changed, run `table --wave <wave_id>` and **paste its output
    verbatim**. It is a few lines: `Status written <timestamp> —` (`YYYY-MM-DD at HH:MM`, hub
-   local time), the wave ETA with its countdown and the done count; a progress bar; one line per
+   local time), the wave ETA with its countdown and the done count; a progress bar of emoji squares (red under a third, yellow under two thirds, green beyond); one line per
    rig (GPUs or Slurm jobs, runs done, when it falls free or, for Slurm, jobs running and waiting,
    `← last to finish`) only when the pool has several rigs; and a `⚠` line only for a stale, blocked, or down lane, a failed run, or a question. Add
    nothing when there is no `⚠` line, and at most one sentence when there is. Do not re-derive,

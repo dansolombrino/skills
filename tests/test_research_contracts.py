@@ -70,7 +70,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "9.3.2")
+        self.assertEqual(manifest["version"], "9.4.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -2024,9 +2024,11 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("a wave nobody supervises is not launched", dispatch)
         self.assertNotIn("one background subagent per", dispatch)
         self.assertNotIn("must not send its final response", dispatch)
-        self.assertIn("ten-minute status and ETA updates", metadata)
+        self.assertIn("status and ETA updates every minute or at an interval the user chooses", metadata)
         # the printout: fixed cadence, script-rendered, never blocking
-        self.assertIn("exact 600-second ticks", supervisor)
+        self.assertIn("exact N-minute ticks", supervisor)
+        self.assertIn("Update interval: the user's N minutes, else 1.", supervisor)
+        self.assertNotIn("600-second", supervisor)
         self.assertIn("even if nothing changed", supervisor)
         self.assertIn("Status written <timestamp> —", supervisor)
         self.assertIn("`YYYY-MM-DD at HH:MM`", supervisor)

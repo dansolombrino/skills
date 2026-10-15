@@ -3,7 +3,7 @@
 
 A *board* groups the tasks one chat is watching and fixes the cadence:
 
-    start  --every 5                       -> prints the board id
+    start  --every N                       -> prints the board id
     add    --board B --name N --kind K ... -> registers a task
     table  --board B                       -> samples every task, prints the table
     remove --board B --name N | stop --board B | list
@@ -347,7 +347,7 @@ def main(argv: list[str] | None = None) -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("start", help="create a board")
-    p.add_argument("--every", type=float, default=5.0, help="cadence in minutes (default 5)")
+    p.add_argument("--every", type=float, default=1.0, help="cadence in minutes (default 1)")
     p.add_argument("--board", help="board id (default: timestamp + random suffix)")
     p.set_defaults(func=cmd_start)
 

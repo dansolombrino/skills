@@ -60,7 +60,7 @@ SCHEMA_VERSION = 1
 STATE_DIR = "_state"  # under .waves/, already ignored by every supported project; never a wave id
 BUFFER_DEPTH = 2  # the run in flight plus one waiting: shallow, so late data can still re-route
 DEFAULT_CYCLE_EVERY_S = 60
-DEFAULT_TICK_EVERY_S = 600
+DEFAULT_TICK_EVERY_S = 120
 DEFAULT_AGENT_TIMEOUT_S = 900
 MIN_CYCLE_EVERY_S = 10
 DOWN_AFTER_FAILURES = 3
@@ -1337,10 +1337,13 @@ def clock(value: str | None, at: datetime) -> str:
 
 
 def bar(value: float | None, width: int = 10) -> str:
+    """Emoji squares, so the color survives a markdown chat: red under a third, yellow under two
+    thirds, green beyond."""
     if value is None:
         return "—"
     filled = int(round(value * width))
-    return "█" * filled + "░" * (width - filled) + f" {value * 100:3.0f}%"
+    square = "🟥" if value < 1 / 3 else "🟨" if value < 2 / 3 else "🟩"
+    return square * filled + "⬜" * (width - filled) + f" {value * 100:3.0f}%"
 
 
 def short(text: str | None, width: int = 44) -> str:
@@ -1366,7 +1369,7 @@ def render_brief(snapshot: dict) -> str:
     tally = f"{counts['done']}/{total} done" + (f" · {counts['failed']} failed" if counts["failed"] else "")
     lines = [
         f"Status written {at.strftime('%Y-%m-%d at %H:%M')} — {eta} · {tally}",
-        bar(counts["done"] / total if total else None, 20),
+        bar(counts["done"] / total if total else None),
     ]
     info = snapshot.get("rigs") or {}
     rigs: dict[str, list[dict]] = {rig: [] for rig in info}

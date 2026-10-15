@@ -15,7 +15,7 @@ slurm = ["leonardo"]
 
 [supervisor]
 cycle_every = 60             # seconds between service passes (probe, feed, recover, offload, table); >= 10
-tick_every = 600             # seconds between scheduled agent ticks; events wake it at once
+tick_every = 120             # idle seconds between one agent tick's end and the next; events wake it at once
 agent_timeout = 900          # a tick that runs longer is stopped; the next one starts fresh
 notify_command = ["notify-send", "sweep-supervisor", "{text}"]   # optional; run for every `ask`
 

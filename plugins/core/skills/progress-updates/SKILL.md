@@ -1,6 +1,6 @@
 ---
 name: progress-updates
-description: Post a fixed status and ETA table in the chat every few minutes (default 5) for any long-running task without being asked - file transfers (rsync, scp, cloud copies), downloads, single training or evaluation runs, builds, or any background command expected to take more than a few minutes. Use whenever such a task is started or is already running and being watched, or when the user asks for status, an ETA, progress, or "updates every N minutes"; also to change the cadence or stop the updates. Do not use for waves launched through sweep-dispatch (sweep-supervisor reports those), or for fleet-wide GPU occupancy (rig-board).
+description: Post a fixed status and ETA table in the chat every N minutes (default 1, or the user's number) for any long-running task without being asked - file transfers (rsync, scp, cloud copies), downloads, single training or evaluation runs, builds, or any background command expected to take more than a few minutes. Use whenever such a task is started or is already running and being watched, or when the user asks for status, an ETA, progress, or "updates every N minutes"; also to change the cadence or stop the updates. Do not use for waves launched through sweep-dispatch (sweep-supervisor reports those), or for fleet-wide GPU occupancy (rig-board).
 ---
 
 # progress-updates
@@ -16,7 +16,7 @@ directory's absolute path.
 ```bash
 # Absolute path to this skill's own scripts/progress.py; see "Resolving this skill's own files".
 PROGRESS=/absolute/path/to/progress-updates/scripts/progress.py
-python3 "$PROGRESS" start --every 5                       # prints the board id; one board per chat
+python3 "$PROGRESS" start --every <N>                     # N = the user's minutes, else 1; prints the board id
 python3 "$PROGRESS" add --board <id> --name "<label>" --kind rsync --log <file> [--exit-file <file>] [--host <ssh host>]
 python3 "$PROGRESS" add --board <id> --name "<label>" --kind log   --log <file> [--pattern '(?P<done>\d+) of (?P<total>\d+)'] [--exit-file <file>] [--pid <n>]
 python3 "$PROGRESS" add --board <id> --name "<label>" --kind size  --path <dest> (--total 62G | --total-of <src> [--total-of-host <h>])
@@ -56,22 +56,24 @@ destination size, or `--pid` for liveness only. Say once which reading the ETA r
 
 ## Cadence
 
-1. Run `start --every <N>`, with N from the user's request or else 5, and `add` every task, then
-   post the first table right away.
-2. Arm the host's scheduled wake-up primitive for ticks every N minutes, anchored to the start;
+1. N is the update interval in minutes: the user's number ("every 3 minutes", or one already
+   given in this chat), else **1**. Never wait for an answer before starting.
+2. Run `start --every <N>` and `add` every task, then post the first table right away. When N is
+   the default, add one line: updates every minute; say "every N minutes" to change it.
+3. Arm the host's scheduled wake-up primitive for ticks every N minutes, anchored to the start;
    the header's `next` time comes from the same anchor. Never implement the cadence with shell
    `sleep` or a blocking wait. If the host has no such primitive, say so once and offer the table
    on request instead.
-3. On every tick, even when nothing changed, run `table` and **paste its output verbatim**. Do not
+4. On every tick, even when nothing changed, run `table` and **paste its output verbatim**. Do not
    restyle it, re-derive numbers, or add columns. After it, add at most two sentences, and only
    when something needs the user: `stalled`, `error in log`, `failed`, `ended (no exit code)`,
    an `unavailable` ETA, or an ETA that moved a lot.
-4. A new long-running task started later in the chat goes on the same board (`add`), not a
+5. A new long-running task started later in the chat goes on the same board (`add`), not a
    second board. "every N minutes" from the user changes the cadence: run `stop`, then `start` a
    new board with the new `--every` and re-`add` the tasks, and re-arm the wake-up.
-5. When a task fails, post the table, show the last 20 log lines, and ask before retrying.
+6. When a task fails, post the table, show the last 20 log lines, and ask before retrying.
    Keep reporting the other tasks.
-6. When the header says `all tasks finished — stop the updates`, post that final table, cancel
+7. When the header says `all tasks finished — stop the updates`, post that final table, cancel
    the scheduled wake-up, and run `stop`. "stop the updates" from the user does the same at any
    time; the tasks keep running.
 

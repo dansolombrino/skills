@@ -332,7 +332,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertIn("| rig | gpu | state | run | progress | hb | run ETA | next | done | lane free | basis |", out)
         rows = [line for line in lines if line.startswith("| hub ") or line.startswith("| peer ")]
         self.assertEqual(len(rows), 2)
-        self.assertIn("█████░░░░░  50%", rows[0])
+        self.assertIn("🟨🟨🟨🟨🟨⬜⬜⬜⬜⬜  50%", rows[0])
         self.assertIn("structured progress", rows[0])
         self.assertIn("[q1] use behemoth gpu 5?", out)
         self.assertIn("[opus/high] kept m1 on hub", out)
@@ -347,7 +347,7 @@ class SupervisorTests(unittest.TestCase):
         lines = out.splitlines()
         self.assertRegex(lines[0], r"^Status written \d{4}-\d{2}-\d{2} at \d{2}:\d{2} — ETA ")
         self.assertRegex(lines[0], r"· 0/\d+ done$")
-        self.assertIn("░", lines[1])
+        self.assertTrue(lines[1].startswith("⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜"), lines[1])
         rig_lines = [line for line in lines if line.startswith("  hub ") or line.startswith("  peer ")]
         self.assertEqual(len(rig_lines), 2)
         self.assertIn("1 GPU ·", rig_lines[0])
