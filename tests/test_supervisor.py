@@ -103,11 +103,24 @@ class SupervisorTests(unittest.TestCase):
             mock.patch.dict(os.environ, env),
             mock.patch.object(rigsync, "remote", side_effect=local_remote),
             mock.patch.object(supervisor.Cycle, "verify_lane", return_value=None),
+            mock.patch.object(supervisor, "run_rigsync", side_effect=self.fake_rigsync),
+            mock.patch.object(rigsync.socket, "gethostname", return_value="hub-host"),  # this host is the hub
         ]
+        self.rigsync_calls: list[tuple[str, ...]] = []
+        self.rigsync_failures: list[str] = []  # each entry fails one rig-sync call with that message
         for patch in patches:
             patch.start()
             self.addCleanup(patch.stop)
         self.addCleanup(self.tmp.cleanup)
+
+    def fake_rigsync(self, wave, settings, *argv: str) -> subprocess.CompletedProcess:
+        self.rigsync_calls.append(argv)
+        if self.rigsync_failures:
+            return subprocess.CompletedProcess(argv, 2, "", f"rigsync: {self.rigsync_failures.pop(0)}")
+        return subprocess.CompletedProcess(argv, 0, f"[{argv[0]}-summary] {argv[argv.index('--machine') + 1]}: copied 0 (0 kB)\n", "")
+
+    def collected(self) -> list[str]:
+        return [argv[argv.index("--machine") + 1] for argv in self.rigsync_calls if argv[0] == "collect"]
 
     def write_registry(self, agent: bool) -> None:
         profile = (
@@ -524,6 +537,57 @@ class SupervisorTests(unittest.TestCase):
         after = self.queue()["runs"][0]
         self.assertEqual(after["walltime_s"], 40500)  # 5400 s / 100 x 500 x 1.5
         self.assertIn("--time=11:15:00", (self.base / "slurm" / "submitted").read_text())
+
+    def test_every_cycle_collects_from_each_reachable_rig_but_the_hub(self) -> None:
+        pool = {"hub": {"lanes": ["0"]}, "peer": {"lanes": ["0"]}, "cluster": {"max_jobs": 1, "core_hours_cap": 1000, "default_walltime_s": 3600}}
+        self.register(pool=pool)
+        code, _out, err = self.cli("cycle", "--wave", WAVE)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(sorted(self.collected()), ["cluster", "peer"])
+        call = next(argv for argv in self.rigsync_calls if argv[0] == "collect")
+        self.assertEqual(call[1:3], ("--wave", WAVE))
+        self.assertIn("--confirm", call)
+        last = self.queue()["collect_last"]
+        self.assertTrue(last["peer"]["ok"])
+        self.assertIn("[collect-summary] peer", last["peer"]["summary"])
+        snapshot = board.read_json(supervisor.Wave(self.hub, WAVE).snapshot_path)
+        self.assertEqual(sorted(snapshot["collect"]), ["cluster", "peer"])
+
+    def test_a_failing_collect_is_one_event_and_never_breaks_the_cycle(self) -> None:
+        self.register()
+        self.rigsync_failures = ["identity differs", "identity differs"]
+        for _ in range(2):
+            code, _out, err = self.cli("cycle", "--wave", WAVE)
+            self.assertEqual(code, 0, err)
+        events = [r for r in supervisor.Wave(self.hub, WAVE).ledger() if r["event"] == "collect-failed"]
+        self.assertEqual(len(events), 1, "the same problem twice is one event")
+        self.assertEqual(events[0]["rig"], "peer")
+        self.assertIn("identity differs", self.queue()["collect_last"]["peer"]["problem"])
+        self.assertEqual(sum(r["state"] == "assigned" for r in self.queue()["runs"]), 4, "lanes were still fed")
+
+    def test_the_wave_turns_terminal_only_after_a_final_collect_from_every_rig(self) -> None:
+        self.register(runs=1, pool={"peer": {"lanes": ["0"]}})
+        self.cli("cycle", "--wave", WAVE)
+        run = self.queue()["runs"][0]
+        self.finish_entry(self.peer, run["entry"], 0, run["artifact"])
+        self.rigsync_calls.clear()
+        self.rigsync_failures = ["ssh connection lost"]  # the per-cycle pass fails; the final one retries
+        self.cli("cycle", "--wave", WAVE)
+        self.assertEqual(self.collected(), ["peer", "peer"])
+        terminal = [r for r in supervisor.Wave(self.hub, WAVE).ledger() if r["event"] == "wave-terminal"]
+        self.assertEqual(len(terminal), 1)
+        self.assertEqual(terminal[0]["collect_failed"], [])
+        self.assertTrue(self.queue()["collect_last"]["peer"]["ok"])
+
+    def test_finish_collects_from_every_rig_but_the_hub(self) -> None:
+        self.register()
+        self.rigsync_calls.clear()
+        code, out, err = self.cli("finish", "--wave", WAVE, "--abandon", "--confirm")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.collected(), ["peer"])
+        self.rigsync_calls.clear()
+        self.assertEqual(self.cli("finish", "--wave", WAVE, "--abandon", "--dry-run")[0], 0)
+        self.assertEqual(self.collected(), [], "a dry run collects nothing")
 
     def test_finish_refuses_a_live_wave_without_abandon(self) -> None:
         self.register()

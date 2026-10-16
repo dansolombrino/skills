@@ -1,7 +1,8 @@
 # CINECA Leonardo — Slurm dispatch target
 
 Read this file only when a wave assigns runs to `leonardo`. Everything that is not Slurm-specific
-(gates, wave ids, script layout, three-signal monitoring, tracking rows, ten-minute updates) is
+(gates, wave ids, script layout, three-signal monitoring, tracking rows, chat updates every N
+minutes — every minute by default, as `sweep-supervisor` says) is
 unchanged and lives in `../SKILL.md`. This file states only what differs on a batch scheduler.
 
 Every CINECA fact below carries its source. Where the docs are silent the text says
@@ -16,7 +17,8 @@ stale — partitions, QOS limits, and cleanup policies change without notice.
   several and the user says so for that wave.
 - A **slice** on `leonardo` is the set of jobs a wave ends up submitting there. There are no lanes
   and no tmux sessions: Slurm is the queue, and every job is independent. In the wave's pool the
-  cluster is one entry with a **job cap** and a **core-hour cap**; `sweep-supervisor` keeps at
+  cluster is one entry with a **job cap** and a **core-hour cap** (never above the execution
+  agreement's **Leonardo core-hour ceiling**); `sweep-supervisor` keeps at
   most that many of this wave's jobs submitted, taking runs from the **tail** of the wave's queue
   while the rig lanes take from its head, and never commits more core-hours than the cap.
 
@@ -172,7 +174,7 @@ the bare shebang; inside a job the script leaves `CUDA_VISIBLE_DEVICES` to Slurm
 ```bash
 #!/usr/bin/env bash
 #SBATCH --job-name=<wave_id>__<run_id_name>
-#SBATCH --account=<account chosen for this wave>
+#SBATCH --account=<the account declared in the execution agreement's envelope>
 #SBATCH --partition=boost_usr_prod
 #SBATCH --qos=normal
 #SBATCH --nodes=1
@@ -185,7 +187,8 @@ the bare shebang; inside a job the script leaves `CUDA_VISIBLE_DEVICES` to Slurm
 #SBATCH --error=logs/<NNN_exp>/<run_id folder>/wave_<wave_id>/slurm-%j.out
 #SBATCH --signal=B:USR1@600
 #SBATCH --no-requeue
-# run: <flat run_id>   experiment: <NNN_exp>
+# run: <run_id_name>   experiment: <NNN_exp>
+# label: <run_id_label under hashed-v2; the flat run_id under a legacy pin>
 # wave: <wave_id>   rig: leonardo   gpu: 1 (Slurm-assigned)
 set -uo pipefail
 export WANDB_MODE=offline
@@ -205,8 +208,8 @@ export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
 - `--time` in the header is only the fallback. The supervisor passes the real value on the
   `sbatch` command line, which overrides the header: the `experiments-tracking` ETA hierarchy with
   a 50% margin — **measured in this wave as soon as any run has finished**, the prior before that
-  — rounded up to 15 minutes. With no basis at all it uses the user-approved `default_walltime_s`
-  from the gate-3 preview; never submit with a guessed
+  — rounded up to 15 minutes. With no basis at all it uses the `default_walltime_s` reported in
+  the gate-3 report; never submit with a guessed
   24 h "to be safe", because walltime shapes priority and the per-GPU budget estimate. A per-step
   cost that differs by dataset (a tiny dataset that validates every few steps) is exactly what a
   flat guess gets wrong. A run whose
@@ -235,17 +238,25 @@ ssh -o BatchMode=yes -o ConnectTimeout=20 leonardo "cd <repo_path on leonardo> &
 - The exact job-name check is the never-double-submit rule: the job name is unique per (run,
   wave), so a queued or running job with that name means the run is already placed. Match names
   with `grep -F`, never `squeue --name`/`sacct --name`: those split their argument on commas, and
-  run names contain commas.
+  legacy run names contain commas. Under `hashed-v2` the job name is `<wave_id>__rid-<32 hex>`:
+  `run_id_name` is the hash, and the label never enters it.
 - Append the printed job id to `scripts/<NNN_exp>/<run_id folder>/wave_<wave_id>/leonardo.jobs`
   on the hub as `<ISO timestamp> <jobid> submitted` (one line per submission, history kept, never
   rewritten), commit nothing: this file is state, like EXPERIMENTS.md, and is gitignored by
   `research-project-init`. The EXPERIMENTS.md row for the run carries `rig=leonardo`, `gpu=1`, and
   the job id in `notes`.
 - Before the first submission of a wave, run `saldo -b` and refuse any account whose consumed
-  hours are at or above its total or whose end date has passed; show the remaining hours and the
-  wave's estimate in the gate-3 preview.
-- The supervisor keeps up to the pool's job cap submitted and tops it up as jobs end; it stops at
-  the core-hour cap and asks the user without blocking. A job still `PENDING` costs nothing, so
+  hours are at or above its total or whose end date has passed; report the remaining hours, the
+  wave's estimate, and the envelope's Leonardo core-hour ceiling in the gate-3 report. The
+  execution agreement's Leonardo core-hour ceiling is the bound: setting the wave's core-hour cap
+  at `register` up to it, or raising it later with `pool --rig leonardo --core-hours-cap <n>` up to
+  it, is a standing-policy action — do it, then report. A wave whose estimate exceeds the ceiling,
+  a cap above it, or an account the envelope does not declare asks first. The scripts never read
+  the ceiling (it is agreement prose), so the agent checks cap ≤ ceiling before `register`/`pool`.
+- The supervisor keeps up to the pool's job cap submitted and tops it up as jobs end; at the
+  core-hour cap it stops submitting and raises a `budget-cap` event. The agent then raises the cap
+  up to the ceiling and reports; at the ceiling it asks the user without blocking (exceeding the
+  ceiling is a budget expansion, which always asks). A job still `PENDING` costs nothing, so
   when a rig lane goes idle with nothing left in the queue the supervisor `scancel`s one pending
   job **by id** and gives that run to the lane.
 

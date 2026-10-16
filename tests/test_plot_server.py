@@ -24,6 +24,9 @@ sys.modules[SPEC.name] = plot_server
 SPEC.loader.exec_module(plot_server)
 
 TOKEN = "t" * 32
+HASH_A = "rid-" + "a" * 32
+HASH_B = "rid-" + "b" * 32
+HASH_OLD = "rid-" + "0" * 32
 
 
 class Fixture(unittest.TestCase):
@@ -38,6 +41,11 @@ class Fixture(unittest.TestCase):
         self.plot.write_text("<html>loss</html>")
         (self.project / "evaluations").mkdir()
         (self.project / "evaluations/secret.json").write_text("{}")
+        self.experiment = self.project / "evaluations/000_x"
+        self.spec = self.project / "config/000_x"  # tracked identity files live in config/<exp>/
+        self.write_run_id_files(self.experiment)
+        (self.experiment / HASH_A).mkdir()
+        (self.experiment / HASH_A / ".run_config.json").write_text('{"lr": 0.0001}')
         (self.project / "code.py").write_text("x = 1")
         self.outside = base / "outside.html"
         self.outside.write_text("<html>outside</html>")
@@ -46,6 +54,29 @@ class Fixture(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
+
+    def spec_of(self, experiment: Path) -> Path:
+        """config/<exp>/ for an evaluations/<exp>/ path."""
+        return self.project / "config" / experiment.relative_to(self.project / "evaluations")
+
+    def write_run_id_files(self, experiment: Path) -> None:
+        """The derived map in evaluations/<exp>/, the identity files in config/<exp>/."""
+        experiment.mkdir(parents=True, exist_ok=True)
+        spec = self.spec_of(experiment)
+        spec.mkdir(parents=True, exist_ok=True)
+        run = {"params": {"lr": 0.0001, "seed": 0}, "version": 2, "wave_id": "w1", "state": "done", "rig": "r1"}
+        (experiment / "RUN_ID_MAP.json").write_text(json.dumps({
+            "layout": "hashed-v2", "version": 2,
+            "by_hash": {HASH_A: run, HASH_B: {**run, "params": {"lr": 0.001, "seed": 0}}},
+            "by_params": {}, "configs": {HASH_A: {"lr": 0.0001, "seed": 0}},
+        }))
+        (spec / "RUN_ID_VERSIONS.json").write_text(json.dumps([
+            {"version": 1, "params": ["seed"], "date": "2026-01-01", "reason": "first"},
+            {"version": 2, "params": ["lr", "seed"], "date": "2026-02-01", "reason": "sweep lr"},
+        ]))
+        (spec / "RUN_ID_HISTORY.json").write_text(json.dumps([
+            {"from_version": 1, "to_version": 2, "date": "2026-02-01", "map": {HASH_OLD: HASH_A}, "backfill": {}},
+        ]))
 
     def write_registry(self, extra: str = "") -> None:
         self.registry.write_text(f'[plots]\nroots = ["{self.root}"]\n{extra}')
@@ -95,6 +126,76 @@ class PlotServerTest(Fixture):
         target = other / "plots/a/fig.html"
         self.assertEqual(plot_server.resolve_plot(self.config, target.as_posix()), target)
         self.assertIn(other, plot_server.discover_projects(self.config))
+
+    def test_run_id_files_resolve_only_from_the_allowlist(self) -> None:
+        resolve = plot_server.resolve_run_id_file
+        self.assertEqual(resolve(self.config, self.project, "000_x", "RUN_ID_MAP.json"), self.experiment / "RUN_ID_MAP.json")
+        for name in ("RUN_ID_VERSIONS.json", "RUN_ID_HISTORY.json"):
+            self.assertEqual(resolve(self.config, self.project, "000_x", name), self.spec / name)
+        # identity files are read from config/ only: a stray copy in evaluations/ is never served
+        (self.spec / "RUN_ID_VERSIONS.json").rename(self.experiment / "RUN_ID_VERSIONS.json")
+        self.assertIsNone(resolve(self.config, self.project, "000_x", "RUN_ID_VERSIONS.json"))
+        (self.experiment / "RUN_ID_VERSIONS.json").rename(self.spec / "RUN_ID_VERSIONS.json")
+        (self.experiment / "RUN_ID_OTHER.json").write_text("{}")
+        (self.spec / "RUN_ID_OTHER.json").write_text("{}")
+        (self.spec / "train.yaml").write_text("lr: 1")
+        for experiment, name in (
+            ("000_x", "RUN_ID_OTHER.json"),
+            ("000_x", "secret.json"),
+            ("000_x", "train.yaml"),
+            ("000_x/" + HASH_A, ".run_config.json"),
+            ("000_x/" + HASH_A, "RUN_ID_MAP.json"),
+            ("", "RUN_ID_MAP.json"),
+            ("000_x/..", "RUN_ID_MAP.json"),
+            ("../evaluations/000_x", "RUN_ID_MAP.json"),
+            ("/000_x", "RUN_ID_MAP.json"),
+            ("000_x\x00", "RUN_ID_MAP.json"),
+            ("a/b/c/d/e", "RUN_ID_MAP.json"),
+            ("000_x", "../RUN_ID_MAP.json"),
+        ):
+            self.assertIsNone(resolve(self.config, self.project, experiment, name), (experiment, name))
+        # The project must own a plots/ folder in a checkout under a root.
+        self.assertIsNone(resolve(self.config, self.root, "000_x", "RUN_ID_MAP.json"))
+        self.assertIsNone(resolve(self.config, Path(self.tmp.name), "000_x", "RUN_ID_MAP.json"))
+
+    def test_run_id_file_symlinks_cannot_leave_evaluations(self) -> None:
+        escape = self.project / "evaluations/001_escape"
+        escape.mkdir()
+        (escape / "RUN_ID_MAP.json").symlink_to(self.outside)
+        self.assertIsNone(plot_server.resolve_run_id_file(self.config, self.project, "001_escape", "RUN_ID_MAP.json"))
+        (self.project / "evaluations/002_dirlink").symlink_to(Path(self.tmp.name))
+        (Path(self.tmp.name) / "RUN_ID_MAP.json").write_text("{}")
+        self.assertIsNone(plot_server.resolve_run_id_file(self.config, self.project, "002_dirlink", "RUN_ID_MAP.json"))
+        inside = self.project / "evaluations/003_inside"
+        inside.mkdir()
+        (inside / "RUN_ID_MAP.json").symlink_to(self.experiment / "RUN_ID_MAP.json")
+        self.assertEqual(
+            plot_server.resolve_run_id_file(self.config, self.project, "003_inside", "RUN_ID_MAP.json"),
+            inside / "RUN_ID_MAP.json",
+        )
+
+    def test_config_symlinks_cannot_leave_config(self) -> None:
+        escape = self.project / "config/001_escape"
+        escape.mkdir(parents=True)
+        (escape / "RUN_ID_VERSIONS.json").symlink_to(self.outside)
+        self.assertIsNone(plot_server.resolve_run_id_file(self.config, self.project, "001_escape", "RUN_ID_VERSIONS.json"))
+        (self.project / "config/002_dirlink").symlink_to(Path(self.tmp.name))
+        (Path(self.tmp.name) / "RUN_ID_HISTORY.json").write_text("[]")
+        self.assertIsNone(plot_server.resolve_run_id_file(self.config, self.project, "002_dirlink", "RUN_ID_HISTORY.json"))
+
+    def test_experiments_are_discovered_nested_and_bounded(self) -> None:
+        self.write_run_id_files(self.project / "evaluations/001_x/002_sub")
+        (self.project / "evaluations/003_empty/" / HASH_A).mkdir(parents=True)
+        self.write_run_id_files(self.project / "evaluations/.run_id_migrations/x")
+        self.write_run_id_files(self.project / "evaluations/a/b/c/d/e")
+        # the union: a config/ dir holding RUN_ID_VERSIONS.json is an experiment before any map exists
+        (self.project / "config/004_new").mkdir(parents=True)
+        (self.project / "config/004_new/RUN_ID_VERSIONS.json").write_text("[]")
+        (self.project / "config/005_plain").mkdir(parents=True)
+        (self.project / "config/005_plain/train.yaml").write_text("lr: 1")
+        self.assertEqual(
+            plot_server.discover_experiments(self.project), ["000_x", "001_x/002_sub", "004_new"]
+        )
 
     def test_depth_limits_resolution_and_discovery(self) -> None:
         self.write_registry("depth = 2\n")
@@ -158,7 +259,34 @@ class SandboxedInstallTest(Fixture):
         self.assertIn(f"BindReadOnlyPaths=-{self.project / 'plots'}\n", text)
         self.assertNotIn("BindPaths=", text)
         self.assertEqual(manifest.read_text().splitlines()[-1], str(self.project))
+        self.assertIn(f"BindReadOnlyPaths=-{self.experiment / 'RUN_ID_MAP.json'}\n", text)
+        for name in ("RUN_ID_VERSIONS.json", "RUN_ID_HISTORY.json"):
+            self.assertIn(f"BindReadOnlyPaths=-{self.spec / name}\n", text)
+        self.assertIn("3 RUN_ID file(s)", out)
+        self.assertNotIn(f"-{self.project / 'config'}\n", text)
+        # Only the allowlisted files: never evaluations/ itself, a run's config or other files.
+        self.assertNotIn(f"-{self.project / 'evaluations'}\n", text)
+        self.assertNotIn(".run_config.json", text)
+        self.assertNotIn("secret.json", text)
         self.assertIn("unchanged", self.sync(config)[1])
+        # A RUN_ID file rewritten by rename has a new inode; the old bind would pin the stale copy.
+        tmp = self.experiment / "RUN_ID_MAP.json.tmp"
+        tmp.write_text((self.experiment / "RUN_ID_MAP.json").read_text())
+        tmp.replace(self.experiment / "RUN_ID_MAP.json")
+        self.assertIn("changed", self.sync(config)[1].replace("unchanged", ""))
+        self.assertIn("unchanged", self.sync(config)[1])
+
+    def test_sync_maps_symlinked_run_id_files_and_refuses_escapes(self) -> None:
+        config, _ = self.manifest_config()
+        inside = self.project / "evaluations/001_link"
+        inside.mkdir()
+        (inside / "RUN_ID_MAP.json").symlink_to(self.experiment / "RUN_ID_MAP.json")
+        (self.project / "evaluations/002_out").symlink_to(Path(self.tmp.name))
+        (Path(self.tmp.name) / "RUN_ID_MAP.json").write_text("{}")
+        _, _, _, dropin = self.sync(config)
+        text = dropin.read_text()
+        self.assertIn(f"BindReadOnlyPaths=-{self.experiment / 'RUN_ID_MAP.json'}:{inside / 'RUN_ID_MAP.json'}\n", text)
+        self.assertNotIn("002_out", text)
 
     def test_sync_maps_a_symlinked_plots_and_refuses_escapes_and_unsafe_paths(self) -> None:
         config, _ = self.manifest_config()
@@ -278,6 +406,8 @@ class LiveServerTest(Fixture):
         self.assertEqual(code, 200)
         self.assertEqual(body, plot_server.BROWSER_PATH.read_bytes())
         self.assertIn(b"/api/files", body)
+        self.assertIn(b"/api/runs", body)
+        self.assertIn(b"/api/experiments", body)
         self.assertIn(b"000_x/plot_loss/loss.html", self.get(base + "/plain")[1])
         code, body, _ = self.get(base + "/api/projects")
         projects = json.loads(body)["projects"]
@@ -290,6 +420,97 @@ class LiveServerTest(Fixture):
         self.assertEqual(self.get(base + "/api/files?project=/etc")[0], 404)
         with mock.patch.object(plot_server, "BROWSER_PATH", plot_server.BROWSER_PATH.with_name("missing.html")):
             self.assertIn(b"000_x/plot_loss/loss.html", self.get(base + "/")[1])
+
+    def runs_url(self, base: str, experiment: str = "000_x", file: str = "MAP", project: Path | None = None) -> str:
+        query = urllib.parse.urlencode({"project": (project or self.project).as_posix(), "experiment": experiment, "file": file})
+        return f"{base}/api/runs?{query}"
+
+    def test_runs_api_serves_the_run_identity_files(self) -> None:
+        base = self.start()
+        code, body, headers = self.get(base + "/api/experiments?project=" + urllib.parse.quote(self.project.as_posix()))
+        self.assertEqual(code, 200)
+        experiments = json.loads(body)["experiments"]
+        self.assertEqual([e["path"] for e in experiments], ["000_x"])
+        self.assertEqual(sorted(experiments[0]["files"]), ["HISTORY", "MAP", "VERSIONS"])
+        self.assertEqual(experiments[0]["files"]["MAP"]["size"], (self.experiment / "RUN_ID_MAP.json").stat().st_size)
+        self.assertEqual(self.get(base + "/api/experiments?project=/etc")[0], 404)
+        for kind in ("MAP", "VERSIONS", "HISTORY"):
+            code, body, headers = self.get(self.runs_url(base, file=kind))
+            self.assertEqual(code, 200, kind)
+            folder = self.experiment if kind == "MAP" else self.spec
+            self.assertEqual(body, (folder / f"RUN_ID_{kind}.json").read_bytes())
+            self.assertTrue(headers["Content-Type"].startswith("application/json"))
+            self.assertEqual(self.get(self.runs_url(base, file=kind), {"If-None-Match": headers["ETag"]})[0], 304)
+        self.assertIn(HASH_A, json.loads(self.get(self.runs_url(base))[1])["by_hash"])
+        for url in (
+            self.runs_url(base, file="OTHER"),
+            self.runs_url(base, file="secret.json"),
+            self.runs_url(base, file="../secret"),
+            self.runs_url(base, experiment="000_x/" + HASH_A, file=".run_config.json"),
+            self.runs_url(base, experiment="000_x/.."),
+            self.runs_url(base, experiment="../../plots"),
+            self.runs_url(base, experiment="missing"),
+            self.runs_url(base, project=Path("/etc")),
+            self.runs_url(base, project=self.root),
+            base + "/api/runs",
+        ):
+            self.assertEqual(self.get(url)[0], 404, url)
+        # Nothing under evaluations/ or config/ is reachable by its path either.
+        for path in (
+            self.experiment / "RUN_ID_MAP.json",
+            self.spec / "RUN_ID_VERSIONS.json",
+            self.experiment / HASH_A / ".run_config.json",
+            self.project / "evaluations/secret.json",
+        ):
+            self.assertEqual(self.get(base + path.as_posix())[0], 404, path)
+
+    def test_runs_api_refuses_a_symlink_escape(self) -> None:
+        escape = self.project / "evaluations/001_escape"
+        escape.mkdir()
+        secret = Path(self.tmp.name) / "RUN_ID_MAP.json"
+        secret.write_text('{"secret": true}')
+        (escape / "RUN_ID_MAP.json").symlink_to(secret)
+        base = self.start()
+        self.assertEqual(self.get(self.runs_url(base, experiment="001_escape"))[0], 404)
+        body = self.get(base + "/api/experiments?project=" + urllib.parse.quote(self.project.as_posix()))[1]
+        self.assertEqual([e["path"] for e in json.loads(body)["experiments"]], ["000_x"])
+
+    def test_page_falls_back_to_the_maps_embedded_identity_copies(self) -> None:
+        (self.spec / "RUN_ID_VERSIONS.json").unlink()
+        (self.spec / "RUN_ID_HISTORY.json").unlink()
+        base = self.start()
+        self.assertEqual(self.get(self.runs_url(base, file="VERSIONS"))[0], 404)
+        self.assertEqual(self.get(self.runs_url(base, file="HISTORY"))[0], 404)
+        self.assertEqual(self.get(self.runs_url(base))[0], 200)
+        page = plot_server.BROWSER_PATH.read_text()
+        self.assertIn("r.status === 404) return undefined", page)
+        self.assertIn('embedded("versions")', page)
+        self.assertIn('embedded("history")', page)
+
+    def test_runs_api_needs_the_token_off_this_machine(self) -> None:
+        self.write_registry(f'token = "{TOKEN}"\n')
+        base = self.start()
+        experiments = base + "/api/experiments?project=" + urllib.parse.quote(self.project.as_posix())
+        with mock.patch.object(plot_server, "is_loopback", return_value=False):
+            self.assertEqual(self.get(self.runs_url(base))[0], 401)
+            self.assertEqual(self.get(experiments)[0], 401)
+            self.assertEqual(self.get(self.runs_url(base), {"Authorization": f"Bearer {TOKEN}"})[0], 200)
+            self.assertEqual(self.get(experiments, {"Authorization": f"Bearer {TOKEN}"})[0], 200)
+
+    def test_a_large_run_id_map_is_gzipped(self) -> None:
+        import gzip
+        runs = {f"rid-{i:032x}": {"params": {"lr": 0.0001, "seed": i}, "version": 1} for i in range(2000)}
+        payload = json.dumps({"layout": "hashed-v2", "version": 1, "by_hash": runs}).encode()
+        self.assertGreater(len(payload), plot_server.GZIP_MIN_BYTES)
+        (self.experiment / "RUN_ID_MAP.json").write_bytes(payload)
+        base = self.start()
+        code, body, headers = self.get(self.runs_url(base), {"Accept-Encoding": "gzip"})
+        self.assertEqual(code, 200)
+        self.assertEqual(headers["Content-Encoding"], "gzip")
+        self.assertEqual(gzip.decompress(body), payload)
+        self.assertEqual(
+            self.get(self.runs_url(base), {"If-None-Match": headers["ETag"], "Accept-Encoding": "gzip"})[0], 304
+        )
 
     def test_large_text_is_gzipped_and_revalidates_with_304(self) -> None:
         import gzip

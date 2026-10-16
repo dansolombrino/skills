@@ -1,4 +1,4 @@
 interface:
   display_name: "Sweep Dispatch"
   short_description: "Launch waves as a pull queue over rigs and Slurm"
-  default_prompt: "Use $sweep-dispatch to verify, authorize by engineering mode, and launch a GPU wave from its own worktree as one pull queue over a pool of rig lanes and CINECA Leonardo Slurm jobs, keeping disk-constrained rigs in use through offload, refusing run overlaps, then hand it to $sweep-supervisor for rebalancing, recovery, and status and ETA updates every minute or at an interval the user chooses."
+  default_prompt: "Use $sweep-dispatch to verify and launch, under the standing dispatch policy that reports rather than waits, a GPU wave from its own worktree as one pull queue over a pool of rig lanes and CINECA Leonardo Slurm jobs, keeping disk-constrained rigs in use through offload, refusing run overlaps, then hand it to $sweep-supervisor for rebalancing, recovery, and status and ETA updates every minute or at an interval the user chooses."

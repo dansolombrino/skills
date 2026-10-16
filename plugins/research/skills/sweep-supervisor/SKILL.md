@@ -1,6 +1,6 @@
 ---
 name: sweep-supervisor
-description: Supervise a dispatched Research 2.0 wave from the hub without depending on any open chat - a hub service feeds each GPU lane from one pull queue so load balances itself, relaunches lanes after a rig fault, offloads disk-constrained rigs, keeps the fleet board current, renders a short ETA printout (per-GPU table on request), and wakes a fresh unattended agent every two minutes and on every failure to judge what rules cannot (diagnose failures, move or steal runs across GPUs and rigs, fetch datasets, fix walltimes, ask the user without blocking). Use when a wave is running or about to be launched, when the user asks for status, ETA, periodic updates or their interval, to monitor or babysit a sweep, to rebalance GPUs, to recover after a crash or reboot, to answer a supervisor question, or when woken as the unattended supervisor agent for a tick. Do not use to design, generate, or authorize a wave (sweep-dispatch), or for fleet-wide GPU occupancy across projects (rig-board).
+description: Supervise a dispatched Research 2.0 wave from the hub without depending on any open chat - a hub service feeds each GPU lane from one pull queue so load balances itself, relaunches lanes after a rig fault, offloads disk-constrained rigs, collects evaluations to the hub, keeps the fleet board current, renders a short ETA printout (per-GPU table on request), and wakes a fresh unattended agent every two minutes and on every failure to judge what rules cannot (diagnose failures, move or steal runs across GPUs and rigs, fetch datasets, fix walltimes, ask the user without blocking). Use when a wave is running or about to be launched, when the user asks for status, ETA, periodic updates or their interval, to monitor or babysit a sweep, to rebalance GPUs, to recover after a crash or reboot, to answer a supervisor question, or when woken as the unattended supervisor agent for a tick. Do not use to design, generate, or authorize a wave (sweep-dispatch), or for fleet-wide GPU occupancy across projects (rig-board).
 ---
 
 # sweep-supervisor
@@ -36,13 +36,22 @@ python3 "$SUPERVISOR" waves                                   # every wave the s
 | lanes | start, feed, relaunch after a fault, drain | unblock, admit a new in-envelope lane | — |
 | runs | assign in queue order to the lane free first; settle outcomes from the artifact | reorder, pin, exclude, requeue, steal, constrain | — |
 | cluster jobs | submit under the caps, resubmit machine faults, resize a `TIMEOUT` from measured progress, pull a `PENDING` job to an idle lane | budget and walltime judgment | — |
-| disk | `rig-sync offload` pass on declared rigs | turn offload on or off for a rig | — |
+| disk | `rig-sync offload` pass on offload rigs (every non-hub lane rig by default; Slurm targets such as `leonardo` excluded, and `supervisor.py` rejects offload entries that are not lane rigs) | turn offload on or off for a rig | — |
+| evaluations | `rig-sync collect` from every pool rig to the hub | settle a `collect-failed` identity mismatch with the user | — |
 | tracking | fleet board claim/refresh/release, snapshot, printout and table | EXPERIMENTS.md (single writer during a wave), `decide` log, journal | paste the printout |
 | the user | — | `ask` without blocking | relay `answer` |
 
 The queue is ordered once by dispatch. A lane holds at most one run in flight plus one buffered,
 so a fast card simply takes more runs: a wrong initial estimate corrects itself, and an unstarted
 run can still be re-routed. The hub reaches rigs; rigs never reach the hub.
+
+- **Evaluations converge on the hub.** Every cycle the supervisor runs
+  `rigsync collect --wave <id> --machine <rig> --confirm` for each reachable pool rig except the
+  hub, recording the result in `collect_last` (snapshot `collect`). A failure is one
+  `collect-failed` ledger event per new problem (urgent: it wakes the agent) and never stops the
+  cycle. When every run is terminal it collects once more, from every rig not already collected
+  successfully in that cycle, before marking the wave terminal; `wave-terminal` carries `collect_failed` with any rig that still failed. `SUP finish`
+  collects one last time before closing the wave.
 
 The fleet board decides first: the service claims a card before it starts a lane there, and a
 refused claim keeps the lane out (state `waiting for board`, one `claim-refused` event per refusal)
@@ -76,9 +85,11 @@ until the holder releases it. A lane whose card the board gives to another wave 
 5. When the printout says `finished`, post it, the prune proposal
    (`rig-sync prune --dry-run`, user-approved as always), and stop the schedule.
 6. A direct request ("move X to behemoth", "stop using the 3080") goes through the same commands
-   the agent uses (`queue`, `lane`, `steal`), with `--reason "user: ..."`. A user-approved change
-   of a cluster's tracked core-hour cap goes through `pool --rig <cluster> --core-hours-cap <h>
-   --reason "user: ..."` (ledger event `pool-cap`; a raised cap resumes submission).
+   the agent uses (`queue`, `lane`, `steal`), with `--reason "user: ..."`. A change of a cluster's
+   tracked core-hour cap goes through `pool --rig <cluster> --core-hours-cap <h> --reason "..."`
+   (ledger event `pool-cap`; a raised cap resumes submission). Up to the execution agreement's
+   Leonardo core-hour ceiling it is a standing-policy action (do it, then report); above the
+   ceiling it needs the user's approval first.
 
 ## Agent profile
 
@@ -91,13 +102,24 @@ supervision work, request that same declared profile rather than the host's defa
 
 Standing, per wave, granted at the dispatch gate and recorded in the wave README: inside the
 wave's **pool** (its rigs, GPU sets, cluster caps) the supervisor may start, stop, move, requeue,
-and steal this wave's own runs, resubmit and cancel this wave's own jobs by id, fetch data into
-declared caches, and let `rig-sync offload` free verified checkpoints — without asking. A
-user-granted `behemoth` card is part of the pool for the whole wave.
+and steal this wave's own runs, resubmit this wave's own jobs and cancel the ones the cluster has
+not started yet (a `PENDING` job pulled to an idle lane) by id, fetch data into
+declared caches, let `rig-sync offload` free verified checkpoints, and `rig-sync collect`
+evaluation records to the hub — without asking. A user-granted `behemoth` card is part of the pool
+for the whole wave. **Leonardo:** the execution agreement's Leonardo core-hour ceiling is the
+bound. Setting or raising the wave's core-hour cap up to it — at `register`, or later with
+`pool --rig leonardo --core-hours-cap <n>` — is a standing-policy action: do it, then report. On a
+`budget-cap` event the agent raises the cap up to the ceiling and reports; at the ceiling it asks,
+because exceeding the ceiling always asks. The scripts never read the ceiling (it lives in the
+agreement's prose), so the agent checks cap ≤ ceiling itself before every `register` or `pool`.
 
 Always the user's, asked with `ask` while the status quo holds: any rig, card, or budget outside
 the pool; a `behemoth` card without a grant for this wave; anything belonging to another project
-or another user; deleting anything `offload` and `prune` do not cover; superseding another wave.
+or another user; deleting anything `offload` and `prune` do not cover; cancelling or superseding
+runs outside this standing authorization (another wave's runs, a supersede, a running Slurm job);
+raising a `leonardo` cap past the ceiling;
+a run_id migration (`run-identity`); and settling an identity mismatch `collect` reports between a
+rig and the hub.
 
 Before any kill, prove ownership: the lane is held on the fleet board by this wave's session, the
 recorded pid belongs to this user and is this run's wave script, the card is not foreign. `steal`

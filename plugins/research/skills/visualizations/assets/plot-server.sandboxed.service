@@ -1,8 +1,9 @@
 # plot-server as a sandboxed system service. Installed by scripts/install_sandboxed.sh; see
 # references/plot-server.md. The server runs as the dedicated plotserver account and sees a
 # read-only filesystem in which /home and /mnt are empty; the sync job bind-mounts each project's
-# plots/ back in, read-only (plot-server.service.d/plots.conf). Nothing else of your data exists
-# from inside, whatever the server's own code does.
+# plots/ and each experiment's evaluations/<experiment>/RUN_ID_{MAP,VERSIONS,HISTORY}.json back in,
+# read-only (plot-server.service.d/plots.conf). Nothing else of your data exists from inside,
+# whatever the server's own code does.
 [Unit]
 Description=plot-server: read-only HTTP view of every project's plots/ (sandboxed)
 After=network-online.target
@@ -16,7 +17,7 @@ ExecStart=/usr/bin/python3 /usr/local/lib/plot-server/scripts/plot_server.py --r
 Restart=on-failure
 RestartSec=5
 
-# Filesystem: read-only everywhere; homes and data volumes hidden except the published plots/.
+# Filesystem: read-only everywhere; homes and data volumes hidden except the published plots/ and RUN_ID files.
 ProtectSystem=strict
 ProtectHome=tmpfs
 TemporaryFileSystem=/mnt:ro /media:ro /srv:ro /opt:ro

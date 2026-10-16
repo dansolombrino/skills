@@ -39,7 +39,7 @@
   #menu[aria-pressed="true"] { background: var(--hover); }
   body.nav-hidden aside, body.nav-hidden .divider { display: none; }
   .picker { position: relative; flex: 1; min-width: 0; max-width: 560px; }
-  #project { width: 100%; appearance: none; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 34px 7px 10px; cursor: pointer; text-overflow: ellipsis; }
+  .picker select { width: 100%; appearance: none; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 34px 7px 10px; cursor: pointer; text-overflow: ellipsis; }
   .picker::after { content: ""; position: absolute; right: 13px; top: 50%; width: 7px; height: 7px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: translateY(-70%) rotate(45deg); pointer-events: none; }
   header .spacer { flex: 1; }
 
@@ -50,7 +50,7 @@
   .tools { padding: 10px 10px 8px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--line); }
   .search { position: relative; }
   .search .icon { position: absolute; left: 9px; top: 9px; color: var(--faint); }
-  #filter { width: 100%; font: inherit; padding: 6px 28px 6px 30px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg); color: var(--text); }
+  .search input { width: 100%; font: inherit; padding: 6px 28px 6px 30px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg); color: var(--text); }
   #clear { position: absolute; right: 4px; top: 4px; border: 0; padding: 2px 6px; color: var(--muted); display: none; }
   .modes { display: flex; align-items: center; gap: 8px; }
   .seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
@@ -126,6 +126,50 @@
   kbd { font: 11px var(--mono); border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: var(--panel); }
   .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 7px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
   .toast.show { opacity: 1; }
+  #views { flex: none; }
+  #views button { padding: 6px 12px; }
+  body.view-runs #menu { display: none; }
+
+  /* Runs view: hash ↔ params over evaluations/<experiment>/RUN_ID_*.json. */
+  .runs { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .rtools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .rtools .picker { flex: 1 1 200px; max-width: 340px; }
+  .rtools .search { flex: 2 1 260px; min-width: 0; }
+  .rtools .search.lookup { flex: 1 1 220px; }
+  .rtools .search input { padding-right: 10px; }
+  .check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); white-space: nowrap; cursor: pointer; }
+  .rtools .count { margin-left: auto; }
+  .rmeta { padding: 6px 12px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+  .rmeta b { color: var(--text); font-weight: 600; }
+  .rmeta details { margin-top: 4px; }
+  .rmeta summary { cursor: pointer; width: max-content; max-width: 100%; }
+  .rmeta ul { margin: 4px 0 2px; padding-left: 18px; }
+  .lookup-out { padding: 6px 12px; border-bottom: 1px solid var(--line); display: grid; gap: 4px; font-size: 13px; background: var(--bg); }
+  .lookup-out .lk { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .lookup-out code { font: 12px var(--mono); overflow-wrap: anywhere; }
+  .lookup-out button { padding: 1px 8px; font-size: 12px; }
+  .muted { color: var(--muted); }
+  .badge { display: inline-block; border-radius: 999px; padding: 0 8px; font-size: 11px; line-height: 18px; background: var(--warn-bg); border: 1px solid var(--warn-line); white-space: nowrap; }
+  .badge.cur { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+  .twrap { flex: 1; overflow: auto; min-height: 0; }
+  .runs-t { border-collapse: separate; border-spacing: 0; font-size: 13px; min-width: 100%; }
+  .runs-t th, .runs-t td { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; max-width: 300px; overflow: hidden; text-overflow: ellipsis; background: var(--bg); }
+  .runs-t thead th { position: sticky; top: 0; z-index: 1; height: 31px; }
+  .runs-t thead tr.filters th { top: 31px; padding-top: 2px; padding-bottom: 6px; }
+  .runs-t th.hash, .runs-t td.hash { position: sticky; left: 0; z-index: 1; box-shadow: inset -1px 0 0 var(--line); }
+  .runs-t thead th.hash { z-index: 2; }
+  .runs-t th .sort { border: 0; padding: 0; font-weight: 600; color: var(--muted); }
+  .runs-t th.cfg .sort { font-weight: 400; font-style: italic; }
+  .runs-t .cf { width: 100%; min-width: 64px; font: 12px var(--sans); padding: 3px 6px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--bg); color: var(--text); }
+  .runs-t tbody tr:hover td { background: var(--hover); }
+  .runs-t tbody tr.hit td { background: var(--accent-soft); }
+  .runs-t td.num, .runs-t td.param, .runs-t td.cfg { font-variant-numeric: tabular-nums; }
+  .runs-t td.empty { color: var(--muted); padding: 16px 12px; white-space: normal; }
+  .hashbtn { font: 12px var(--mono); border: 0; padding: 0 2px; }
+  .nil { color: var(--faint); }
+  .ract { display: flex; gap: 4px; }
+  .ract button, .ract a { font-size: 12px; padding: 1px 7px; border: 1px solid var(--line-strong); border-radius: 6px; color: inherit; text-decoration: none; }
+  .ract a:hover { background: var(--hover); }
   .error { margin: 40px auto; max-width: 520px; padding: 16px; border: 1px solid var(--warn-line); background: var(--warn-bg); border-radius: 10px; }
 
   @media (max-width: 760px) {
@@ -135,6 +179,9 @@
     body.nav-open aside { transform: none; }
     .divider { display: none; }
     .bar .info { display: none; }
+    #views button { padding: 6px 9px; }
+    .rtools .picker, .rtools .search, .rtools .search.lookup { flex: 1 1 100%; max-width: none; }
+    .runs-t th, .runs-t td { max-width: 180px; }
     .welcome { padding: 16px; }
     .row { min-height: 36px; }
   }
@@ -156,12 +203,16 @@
   <button id="menu" aria-label="Show or hide the plot list" title="Show or hide the plot list  (b)"><svg class="icon"><use href="#i-menu"/></svg></button>
   <span class="brand">Projects</span>
   <div class="picker"><select id="project" aria-label="Project"></select></div>
+  <div class="seg" id="views" role="group" aria-label="Plots or runs">
+    <button id="view-plots" aria-pressed="true" title="Plots of this project">Plots</button>
+    <button id="view-runs" aria-pressed="false" title="Runs: hash ↔ params of each experiment">Runs</button>
+  </div>
   <span class="spacer"></span>
   <button id="refresh" title="Rescan projects and plots"><svg class="icon"><use href="#i-reload"/></svg></button>
   <span class="host" id="host"></span>
 </header>
 
-<div class="layout">
+<div class="layout" id="plots-view">
   <aside id="aside">
     <div class="tools">
       <div class="search">
@@ -214,6 +265,24 @@
     </div>
   </main>
 </div>
+<section class="runs" id="runs" hidden>
+  <div class="rtools">
+    <div class="picker"><select id="experiment" aria-label="Experiment"></select></div>
+    <div class="search">
+      <svg class="icon"><use href="#i-search"/></svg>
+      <input id="rfilter" type="search" placeholder="Filter runs  ( / )  e.g. lr=1e-4 seed=0" autocomplete="off" spellcheck="false" aria-label="Filter runs: words or key=value, all must match">
+    </div>
+    <div class="search lookup">
+      <svg class="icon"><use href="#i-link"/></svg>
+      <input id="lookup" type="search" placeholder="Look up a hash or prefix" autocomplete="off" spellcheck="false" aria-label="Look up a hash or prefix, old hashes included">
+    </div>
+    <label class="check" title="Add a column for every key of the runs' resolved configs"><input type="checkbox" id="allcols"> all config params</label>
+    <span class="count" id="rcount"></span>
+  </div>
+  <div class="lookup-out" id="lookup-out" hidden></div>
+  <div class="rmeta" id="rmeta"></div>
+  <div class="twrap"><table class="runs-t" id="rtable"><thead id="rhead"></thead><tbody id="rbody"></tbody></table></div>
+</section>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -235,6 +304,7 @@
     open: new Set(),    // expanded folder paths for the current project
     seen: {},           // path -> mtime the page last knew
     visible: [],        // file paths in current display order, for keyboard navigation
+    view: "plots",      // "plots" or "runs"
   };
 
   // ── formatting ──────────────────────────────────────────────────────────
@@ -274,11 +344,15 @@
     return r.json();
   }
 
-  function showError(err) {
+  function errorHtml(err) {
     const msg = err.message === "auth"
       ? "This server needs its access token. Open this page once as <code>?token=&lt;token&gt;</code>; a cookie remembers it afterwards."
       : "Could not reach the plot server (" + esc(err.message) + ").";
-    $("welcome").innerHTML = '<div class="error">' + msg + "</div>";
+    return '<div class="error">' + msg + "</div>";
+  }
+  function showError(err) {
+    if (state.view === "runs") { $("rmeta").innerHTML = errorHtml(err); return; }
+    $("welcome").innerHTML = errorHtml(err);
     $("welcome").hidden = false;
   }
 
@@ -584,20 +658,439 @@
       (recent.length ? '<div class="cards">' + recent.map((f) =>
         '<button class="card" data-file="' + esc(f.path) + '" title="' + esc(f.path) + '"><span class="t">' + esc(leafName(f.path)) + '</span><span class="s">' +
         esc(tail(f.path)) + '</span><span class="s">' + ago(f.mtime) + " · " + size(f.size) + "</span></button>").join("") + "</div>" : "") +
-      '<div class="keys"><kbd>/</kbd> filter · <kbd>↑</kbd> <kbd>↓</kbd> previous / next plot · <kbd>Esc</kbd> clear filter · <kbd>r</kbd> reload plot · <kbd>d</kbd> download plot · <kbd>b</kbd> show / hide list</div>';
+      '<div class="keys"><kbd>/</kbd> filter · <kbd>↑</kbd> <kbd>↓</kbd> previous / next plot · <kbd>Esc</kbd> clear filter · <kbd>r</kbd> reload plot · <kbd>d</kbd> download plot · <kbd>b</kbd> show / hide list · <b>Runs</b> (header) looks up run hashes and their params</div>';
   }
 
+
+  // ── runs view ───────────────────────────────────────────────────────────
+  // Hash ↔ params for one experiment, from evaluations/<experiment>/RUN_ID_MAP.json and the tracked
+  // config/<experiment>/RUN_ID_{VERSIONS,HISTORY}.json (or the copies the map embeds),
+  // served raw by /api/runs. hashed-v2 maps carry params, version, wave, rig, state and full configs;
+  // legacy maps get a limited view built from whatever run_id they recorded.
+  const MAX_ROWS = 1000;
+  const runs = {
+    project: null,        // project the experiment list belongs to
+    experiments: [],      // [{path, files: {MAP|VERSIONS|HISTORY: {size, mtime}}}]
+    experiment: null,
+    stamp: "",            // sizes and mtimes of the loaded files: reload only when they change
+    map: null, versions: [], history: [],
+    rows: [], byHash: new Map(),
+    params: [],           // identity params of the current version, in order
+    configKeys: [],       // flattened config keys that are not identity params
+    cols: [],
+    legacy: false,
+    filter: "",           // free filter: words and key=value terms, all must match
+    colFilters: {},       // column key -> text ("=x" exact)
+    sort: { key: null, dir: 1 },
+    hit: null,            // hash highlighted by a lookup
+    allCols: store.get("runsAllCols", false),
+  };
+
+  const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+  const valText = (v) => v === undefined ? "" : v === null ? "null" : typeof v === "object" ? JSON.stringify(v) : String(v);
+  const valHtml = (v) => v === undefined ? "" : v === null ? '<span class="nil">null</span>' : esc(valText(v));
+  const shortHash = (h) => /^rid-[0-9a-f]{20,}$/i.test(h) ? h.slice(0, 12) + "…" : h;
+  function flatten(obj, prefix = "", out = {}) {
+    for (const [k, v] of Object.entries(obj || {})) {
+      if (isObj(v) && Object.keys(v).length) flatten(v, prefix + k + ".", out);
+      else out[prefix + k] = v;
+    }
+    return out;
+  }
+  // Legacy maps may only hold a rendered run_id; read its key=value segments back.
+  function parseLabel(s) {
+    const out = {};
+    for (const part of String(s).split(/[,/]|__/)) { const i = part.indexOf("="); if (i > 0) out[part.slice(0, i)] = part.slice(i + 1); }
+    return out;
+  }
+  function entryParams(e) {
+    if (typeof e === "string") return parseLabel(e);
+    if (!isObj(e)) return {};
+    for (const k of ["params", "run_id"]) if (isObj(e[k])) return e[k];
+    for (const k of ["run_id_flat", "run_id", "label", "path"]) if (typeof e[k] === "string") return parseLabel(e[k]);
+    return {};
+  }
+  function findWandb(entry, flat) {
+    for (const [k, v] of Object.entries(Object.assign({}, flat, entry))) {
+      if (/wandb/i.test(k) && typeof v === "string" && /^https?:\/\//i.test(v)) return v;
+    }
+    return null;
+  }
+  const currentVersion = () => runs.versions.length ? runs.versions[runs.versions.length - 1] : null;
+
+  function buildRuns() {
+    const map = runs.map || {};
+    const configs = isObj(map.configs) ? map.configs : {};
+    let source = map.by_hash, fromPath = false;
+    if (!isObj(source)) { source = isObj(map.by_path) ? map.by_path : isObj(map.by_run_id_flat) ? map.by_run_id_flat : {}; fromPath = true; }
+    runs.legacy = !!runs.map && map.layout !== "hashed-v2";
+    runs.rows = Object.entries(source).map(([key, e]) => {
+      const entry = isObj(e) ? e : {};
+      const config = isObj(configs[key]) ? configs[key] : null;
+      const flat = config ? flatten(config) : {};
+      const row = {
+        // Unrecorded bookkeeping shows blank; a null identity param shows as null.
+        hash: key, version: entry.version ?? map.version ?? undefined,
+        params: Object.assign(fromPath ? parseLabel(key) : {}, entryParams(e)),
+        wave: entry.wave_id ?? undefined, rig: entry.rig ?? undefined, state: entry.state ?? undefined,
+        label: typeof entry.run_id_flat === "string" ? entry.run_id_flat : "",
+        config, flat, wandb: findWandb(entry, flat),
+      };
+      row.text = [key, row.label, row.wave, row.rig, row.state, row.version != null ? "v" + row.version : "",
+        ...Object.entries(row.params).map(([k, v]) => k + "=" + valText(v)),
+        ...Object.entries(flat).map(([k, v]) => k + "=" + valText(v))].join(" ").toLowerCase();
+      return row;
+    });
+    runs.byHash = new Map(runs.rows.map((r) => [r.hash, r]));
+    const cur = currentVersion();
+    const seen = new Set();
+    runs.params = [];
+    for (const p of [...(cur && Array.isArray(cur.params) ? cur.params.map(String) : []), ...runs.rows.flatMap((r) => Object.keys(r.params))]) {
+      if (!seen.has(p)) { seen.add(p); runs.params.push(p); }
+    }
+    runs.configKeys = [...new Set(runs.rows.flatMap((r) => Object.keys(r.flat)))].filter((k) => !seen.has(k)).sort();
+    buildCols();
+  }
+
+  function buildCols() {
+    const col = (key, label, get, cls = "") => ({ key, label, get, cls });
+    runs.cols = [
+      col("hash", isObj(runs.map && runs.map.by_hash) || !runs.map ? "hash" : "run", (r) => r.hash, "hash"),
+      col("version", "v", (r) => r.version, "num"),
+      ...runs.params.map((p) => col("p:" + p, p, (r) => r.params[p], "param")),
+      col("wave", "wave", (r) => r.wave),
+      col("rig", "rig", (r) => r.rig),
+      col("state", "state", (r) => r.state),
+      ...(runs.allCols ? runs.configKeys.map((k) => col("c:" + k, k, (r) => r.flat[k], "cfg")) : []),
+    ];
+  }
+
+  // ── filtering: "lr=1e-4" matches 0.0001; words match anywhere; everything given must match.
+  function valueMatches(v, want, exact) {
+    const s = valText(v).toLowerCase(), w = want.toLowerCase();
+    if (s === w) return true;
+    if (s !== "" && w !== "" && !isNaN(Number(s)) && !isNaN(Number(w))) return Number(s) === Number(w);
+    return !exact && w !== "" && s.includes(w);
+  }
+  // What a key=value term can name: a column, an identity param, or a config key (also by its last dotted part).
+  function rowValues(r, key) {
+    const k = key.toLowerCase(), out = [];
+    if (k === "hash" || k === "run") out.push(r.hash);
+    if (k === "v" || k === "version") out.push(r.version);
+    if (k === "wave" || k === "wave_id") out.push(r.wave);
+    if (k === "rig") out.push(r.rig);
+    if (k === "state") out.push(r.state);
+    for (const [p, v] of Object.entries(r.params)) if (p.toLowerCase() === k) out.push(v);
+    for (const [c, v] of Object.entries(r.flat)) { const lc = c.toLowerCase(); if (lc === k || lc.endsWith("." + k)) out.push(v); }
+    return out;
+  }
+  const parseTerms = (text) => text.trim().split(/\s+/).filter(Boolean).map((t) => {
+    const i = t.indexOf("=");
+    return i > 0 ? { key: t.slice(0, i), value: t.slice(i + 1) } : { text: t.toLowerCase() };
+  });
+  function rowMatches(r, terms) {
+    for (const t of terms) {
+      if (t.text !== undefined ? !r.text.includes(t.text) : !rowValues(r, t.key).some((v) => valueMatches(v, t.value, false))) return false;
+    }
+    for (const c of runs.cols) {
+      const f = (runs.colFilters[c.key] || "").trim();
+      if (f && !valueMatches(c.get(r), f.startsWith("=") ? f.slice(1) : f, f.startsWith("="))) return false;
+    }
+    return true;
+  }
+  function compare(a, b) {
+    if (a === b) return 0;
+    if (a === undefined || a === null) return 1;
+    if (b === undefined || b === null) return -1;
+    const sa = valText(a), sb = valText(b);
+    if (typeof a !== "object" && typeof b !== "object" && sa !== "" && sb !== "" && !isNaN(Number(sa)) && !isNaN(Number(sb))) return Number(sa) - Number(sb);
+    return sa.localeCompare(sb, undefined, { numeric: true });
+  }
+
+  // ── rendering
+  function renderRunsMeta() {
+    const m = runs.map;
+    if (!runs.experiments.length) {
+      $("rmeta").innerHTML = "No experiment under <b>evaluations/</b> holds a RUN_ID_MAP.json yet; the map is written when a wave finishes.";
+      return;
+    }
+    const cur = currentVersion();
+    const parts = [];
+    if (m) parts.push("layout <b>" + esc(m.layout || "unknown") + "</b>");
+    else parts.push("no RUN_ID_MAP.json yet");
+    if (cur) parts.push("identity v" + esc(cur.version) + ": <b>" + esc((cur.params || []).join(", ") || "none") + "</b>" + (cur.date ? " since " + esc(cur.date) : ""));
+    else if (m && m.version != null) parts.push("version " + esc(m.version));
+    if (runs.history.length) parts.push(runs.history.length + (runs.history.length === 1 ? " migration" : " migrations"));
+    let out = parts.join(" · ");
+    if (runs.legacy) out += ' <span class="badge" title="Legacy layouts record no versions, waves, rigs or configs in their map">legacy layout: limited view</span>';
+    if (runs.versions.length || runs.history.length) {
+      const versions = runs.versions.map((v) => "<li>v" + esc(v.version) + ": " + esc((v.params || []).join(", ")) +
+        (v.date ? " · " + esc(v.date) : "") + (v.reason ? " · " + esc(v.reason) : "") + "</li>").join("");
+      const history = runs.history.map((h) => {
+        const backfill = isObj(h.backfill) ? Object.entries(h.backfill).map(([k, b]) => esc(k) + "=" + esc(valText(isObj(b) && "value" in b ? b.value : b)) +
+          (isObj(b) && b.source ? " (" + esc(b.source) + ")" : "")).join(", ") : "";
+        return "<li>v" + esc(h.from_version) + " → v" + esc(h.to_version) + (h.date ? " · " + esc(h.date) : "") + " · " +
+          Object.keys(isObj(h.map) ? h.map : {}).length + " hashes renamed" + (backfill ? " · backfill " + backfill : "") + "</li>";
+      }).join("");
+      out += "<details><summary>versions and migrations</summary>" + (versions ? "<ul>" + versions + "</ul>" : "") + (history ? "<ul>" + history + "</ul>" : "") + "</details>";
+    }
+    $("rmeta").innerHTML = out;
+  }
+
+  function renderRunsHead() {
+    const th = (c, inner) => '<th class="' + c.cls + '">' + inner + "</th>";
+    const labels = runs.cols.map((c) => th(c, '<button class="sort" data-sort="' + esc(c.key) + '" title="Sort by ' + esc(c.label) + '">' + esc(c.label) +
+      (runs.sort.key === c.key ? (runs.sort.dir > 0 ? " ▲" : " ▼") : "") + "</button>")).join("");
+    const filters = runs.cols.map((c) => th(c, '<input class="cf" type="search" data-col="' + esc(c.key) + '" value="' + esc(runs.colFilters[c.key] || "") +
+      '" placeholder="' + (c.key === "hash" ? "prefix" : "filter") + '" title="Substring or number; =x for an exact match" aria-label="Filter ' + esc(c.label) + '" autocomplete="off" spellcheck="false">')).join("");
+    $("rhead").innerHTML = runs.rows.length ? "<tr>" + labels + "<th></th></tr><tr class=\"filters\">" + filters + "<th></th></tr>" : "";
+  }
+
+  function renderRunsBody() {
+    const terms = parseTerms(runs.filter);
+    const shown = runs.rows.filter((r) => rowMatches(r, terms));
+    const byParams = (a, b) => { for (const p of runs.params) { const d = compare(a.params[p], b.params[p]); if (d) return d; } return compare(a.hash, b.hash); };
+    const col = runs.cols.find((c) => c.key === runs.sort.key);
+    shown.sort(col ? (a, b) => runs.sort.dir * compare(col.get(a), col.get(b)) || byParams(a, b) : byParams);
+    const total = runs.rows.length;
+    $("rcount").textContent = !runs.map ? "" : (shown.length === total ? "" : shown.length + " of ") + total + (total === 1 ? " run" : " runs");
+    const span = runs.cols.length + 1;
+    if (!total) { $("rbody").innerHTML = runs.map ? '<tr><td class="empty">This map lists no runs.</td></tr>' : ""; return; }
+    const out = shown.slice(0, MAX_ROWS).map((r) =>
+      '<tr data-hash="' + esc(r.hash) + '"' + (r.hash === runs.hit ? ' class="hit"' : "") + ">" +
+      runs.cols.map((c) => c.key === "hash"
+        ? '<td class="hash"><button class="hashbtn" data-act="copy-hash" title="' + esc(r.hash + (r.label ? "\n" + r.label : "") + "\nClick to copy") + '">' + esc(shortHash(r.hash)) + "</button></td>"
+        : '<td class="' + c.cls + '" title="' + esc(c.label + " = " + valText(c.get(r))) + '">' + valHtml(c.get(r)) + "</td>").join("") +
+      '<td><div class="ract"><button data-act="copy-hash" title="Copy the full hash">hash</button>' +
+      (r.config ? '<button data-act="copy-config" title="Copy this run’s full resolved config as JSON">config</button>' : "") +
+      '<button data-act="plots" title="Show the plots of this experiment, which select runs by hash">plots</button>' +
+      (r.wandb ? '<a href="' + esc(r.wandb) + '" target="_blank" rel="noopener noreferrer" title="' + esc(r.wandb) + '">WandB</a>' : "") +
+      "</div></td></tr>");
+    if (!shown.length) out.push('<tr><td colspan="' + span + '" class="empty">No run matches. Filters take words or key=value terms (lr=1e-4 seed=0); all must match.</td></tr>');
+    if (shown.length > MAX_ROWS) out.push('<tr><td colspan="' + span + '" class="empty">Showing ' + MAX_ROWS + " of " + shown.length + "; narrow the filter to see the rest.</td></tr>");
+    $("rbody").innerHTML = out.join("");
+  }
+
+  // ── lookup: a hash or prefix, current or from before a run_id migration (followed through HISTORY)
+  function migrations() {
+    const next = new Map();
+    for (const h of runs.history) {
+      for (const [from, to] of Object.entries(isObj(h.map) ? h.map : {})) next.set(from, { to, from: h.from_version, toV: h.to_version });
+    }
+    return next;
+  }
+  function follow(next, hash) {
+    const hops = [], seen = new Set([hash]);
+    let h = hash;
+    while (next.has(h)) { const step = next.get(h); hops.push(step); h = step.to; if (seen.has(h)) break; seen.add(h); }
+    return { final: h, hops };
+  }
+  function lookup(q) {
+    q = q.trim().toLowerCase();
+    if (q.length < 3) return null;
+    const hit = (h) => { const l = h.toLowerCase(); return l.startsWith(q) || l.startsWith("rid-" + q); };
+    const next = migrations(), out = [];
+    for (const r of runs.rows) if (hit(r.hash)) out.push({ hash: r.hash, final: r.hash, hops: [] });
+    for (const old of next.keys()) if (hit(old) && !runs.byHash.has(old)) out.push(Object.assign({ hash: old }, follow(next, old)));
+    return out;
+  }
+  function renderLookup() {
+    const q = $("lookup").value, el = $("lookup-out"), found = lookup(q);
+    el.hidden = found === null;
+    if (found === null) { el.innerHTML = ""; return; }
+    if (!found.length) { el.innerHTML = '<div class="lk muted">No run hash, current or migrated, starts with “' + esc(q.trim()) + "”.</div>"; return; }
+    el.innerHTML = found.slice(0, 20).map((x) => {
+      const cur = runs.byHash.get(x.final);
+      const first = x.hops[0], last = x.hops[x.hops.length - 1];
+      const badge = x.hops.length
+        ? '<span class="badge" title="An old hash, renamed by a run_id migration">migrated v' + esc(first.from ?? "?") + " → v" + esc(last.toV ?? "?") + "</span>"
+        : '<span class="badge cur">current</span>';
+      const label = cur ? runs.params.map((p) => p + "=" + valText(cur.params[p])).join(" ") : "not in the current map";
+      return '<div class="lk">' + badge + " <code>" + esc(x.hash) + "</code>" + (x.hops.length ? " → <code>" + esc(x.final) + "</code>" : "") +
+        ' <span class="muted">' + esc(label) + "</span>" + (cur ? '<button data-show="' + esc(x.final) + '">show</button>' : "") + "</div>";
+    }).join("") + (found.length > 20 ? '<div class="lk muted">' + (found.length - 20) + " more; type more of the hash.</div>" : "");
+  }
+
+  function renderRuns() {
+    renderRunsMeta();
+    renderRunsHead();
+    renderRunsBody();
+    renderLookup();
+  }
+
+  // ── loading
+  async function getRunFile(kind) {
+    const url = "/api/runs?" + new URLSearchParams({ project: state.project, experiment: runs.experiment, file: kind });
+    const r = await fetch(url, { credentials: "same-origin", cache: "no-cache" });  // revalidates by ETag
+    if (r.status === 401) throw new Error("auth");
+    if (r.status === 404) return undefined;  // VERSIONS/HISTORY fall back to the map's embedded copies
+    if (!r.ok) throw new Error(r.status + " RUN_ID_" + kind + ".json");
+    return r.json();
+  }
+  const expStamp = (x) => x ? x.path + "|" + Object.entries(x.files).map(([k, f]) => k + ":" + f.mtime + ":" + f.size).join(",") : "";
+  async function loadExperiments() {
+    const data = await getJSON("/api/experiments?project=" + encodeURIComponent(state.project));
+    runs.project = data.project;
+    runs.experiments = data.experiments;
+    const sel = $("experiment");
+    sel.innerHTML = runs.experiments.length
+      ? runs.experiments.map((x) => '<option value="' + esc(x.path) + '">' + esc(x.path) + (x.files.MAP ? "  ·  " + esc(ago(x.files.MAP.mtime)) : "  ·  no map yet") + "</option>").join("")
+      : "<option>no experiments</option>";
+    sel.disabled = !runs.experiments.length;
+    sel.value = runs.experiment || "";
+  }
+  // Returns whether anything changed.
+  async function loadExperiment(path, { force = false } = {}) {
+    const x = runs.experiments.find((e) => e.path === path) || null;
+    if (!force && runs.experiment === (x && x.path) && runs.stamp === expStamp(x)) return false;
+    runs.experiment = x ? x.path : null;
+    runs.stamp = expStamp(x);
+    $("experiment").value = runs.experiment || "";
+    if (!x) { runs.map = null; runs.versions = []; runs.history = []; buildRuns(); return true; }
+    store.set("experiment:" + state.project, x.path);
+    // MAP comes from evaluations/<exp>/, VERSIONS and HISTORY from the tracked config/<exp>/. When
+    // either of those is missing (404), the copies the map embeds (versions, history) stand in.
+    const get = (kind) => x.files[kind]
+      ? getRunFile(kind).catch((err) => { if (err.message === "auth") throw err; toast("Could not read RUN_ID_" + kind + ".json"); return undefined; })
+      : Promise.resolve(undefined);
+    const [map, versions, history] = await Promise.all([get("MAP"), get("VERSIONS"), get("HISTORY")]);
+    if (runs.experiment !== x.path) return false;  // another experiment was picked meanwhile
+    runs.map = isObj(map) ? map : null;
+    const embedded = (key) => (runs.map && Array.isArray(runs.map[key]) ? runs.map[key] : []);
+    runs.versions = Array.isArray(versions) ? versions : embedded("versions");
+    runs.history = Array.isArray(history) ? history : embedded("history");
+    buildRuns();
+    return true;
+  }
+
+  // Shows the Runs view for the current project; experiment and q come from the URL when routing.
+  async function openRuns(experiment, q, { push = false } = {}) {
+    try {
+      if (!state.project) { renderRuns(); return; }
+      if (runs.project !== state.project) {
+        runs.experiment = null;
+        runs.stamp = "";
+        await loadExperiments();
+      }
+      const has = (p) => p && runs.experiments.some((x) => x.path === p);
+      const saved = store.get("experiment:" + state.project, null);
+      let e = has(experiment) ? experiment : has(runs.experiment) ? runs.experiment : has(saved) ? saved : null;
+      if (!e && runs.experiments.length) e = runs.experiments.slice().sort((a, b) => ((b.files.MAP || {}).mtime || 0) - ((a.files.MAP || {}).mtime || 0))[0].path;
+      // Filters belong to one experiment's columns and hashes; a new experiment starts unfiltered.
+      if (e !== runs.experiment) { runs.colFilters = {}; runs.sort = { key: null, dir: 1 }; runs.hit = null; if (typeof q !== "string") q = ""; }
+      if (typeof q === "string") { runs.filter = q; $("rfilter").value = q; }
+      await loadExperiment(e);
+      renderRuns();
+      writeHash({ replace: !push });
+    } catch (err) { showError(err); }
+  }
+
+  async function refreshRuns() {
+    if (state.view !== "runs" || !state.project) return;
+    if (runs.project !== state.project) { await openRuns(null); return; }
+    await loadExperiments();
+    if (await loadExperiment(runs.experiment)) renderRuns();
+  }
+
+  function setRunsFilter(text) {
+    runs.filter = text;
+    $("rfilter").value = text;
+    renderRunsBody();
+    writeHash({ replace: true });
+  }
+
+  async function copyText(text, done) {
+    try { await navigator.clipboard.writeText(text); toast(done); return; } catch {}
+    // Plain-HTTP pages have no async clipboard; fall back to a selection copy, then to a prompt.
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed"; area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch {}
+    area.remove();
+    if (ok) toast(done); else prompt("Copy:", text);
+  }
+
+  // Plots keep run selection inside the file, keyed by hash, never in the path; the plots that can
+  // show a run are the ones of its experiment, under plots/<experiment>/.
+  function showRunPlots(r) {
+    setView("plots", { push: true });
+    setPlotFilter(runs.experiment + "/");
+    setSidebar(true);
+    toast("Plots of " + runs.experiment + "; pick " + shortHash(r.hash) + " inside a plot");
+  }
+
+  function setView(view, { push = false } = {}) {
+    state.view = view === "runs" ? "runs" : "plots";
+    const isRuns = state.view === "runs";
+    document.body.classList.toggle("view-runs", isRuns);
+    $("plots-view").hidden = isRuns;
+    $("runs").hidden = !isRuns;
+    $("view-plots").setAttribute("aria-pressed", String(!isRuns));
+    $("view-runs").setAttribute("aria-pressed", String(isRuns));
+    if (push) writeHash();
+  }
+
+  $("view-plots").addEventListener("click", () => { if (state.view !== "plots") setView("plots", { push: true }); });
+  $("view-runs").addEventListener("click", () => { if (state.view !== "runs") { setView("runs"); openRuns(null, undefined, { push: true }); } });
+  $("experiment").addEventListener("change", (e) => openRuns(e.target.value, undefined, { push: true }));
+  $("rfilter").addEventListener("input", (e) => setRunsFilter(e.target.value));
+  $("lookup").addEventListener("input", renderLookup);
+  $("lookup-out").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-show]");
+    if (!b) return;
+    runs.hit = b.dataset.show;
+    setRunsFilter(b.dataset.show);
+  });
+  $("allcols").checked = runs.allCols;
+  $("allcols").addEventListener("change", (e) => {
+    runs.allCols = e.target.checked;
+    store.set("runsAllCols", runs.allCols);
+    buildCols();
+    renderRunsHead();
+    renderRunsBody();
+  });
+  $("rtable").addEventListener("input", (e) => {
+    const key = e.target.dataset.col;
+    if (key === undefined) return;
+    runs.colFilters[key] = e.target.value;
+    renderRunsBody();
+  });
+  $("rtable").addEventListener("click", (e) => {
+    const s = e.target.closest("[data-sort]");
+    if (s) {
+      const key = s.dataset.sort;
+      runs.sort = runs.sort.key !== key ? { key, dir: 1 } : runs.sort.dir > 0 ? { key, dir: -1 } : { key: null, dir: 1 };
+      renderRunsHead();
+      renderRunsBody();
+      return;
+    }
+    const b = e.target.closest("[data-act]");
+    const r = b && runs.byHash.get(b.closest("tr").dataset.hash);
+    if (!r) return;
+    if (b.dataset.act === "copy-hash") copyText(r.hash, "Hash copied");
+    else if (b.dataset.act === "copy-config") copyText(JSON.stringify(r.config, null, 2), "Config copied");
+    else if (b.dataset.act === "plots") showRunPlots(r);
+  });
+
   // ── routing ─────────────────────────────────────────────────────────────
+  // Plots: #p=<project>&f=<plot>. Runs: #v=runs&p=<project>&e=<experiment>&q=<filter>.
   function readHash() {
     const h = new URLSearchParams(location.hash.slice(1));
-    return { project: h.get("p"), file: h.get("f") };
+    return { view: h.get("v") === "runs" ? "runs" : "plots", project: h.get("p"), file: h.get("f"), experiment: h.get("e"), q: h.get("q") || "" };
   }
-  function writeHash() {
+  function writeHash({ replace = false } = {}) {
     const h = new URLSearchParams();
+    if (state.view === "runs") h.set("v", "runs");
     if (state.project) h.set("p", state.project);
-    if (state.file) h.set("f", state.file);
+    if (state.view === "runs") {
+      if (runs.experiment) h.set("e", runs.experiment);
+      if (runs.filter.trim()) h.set("q", runs.filter.trim());
+    } else if (state.file) h.set("f", state.file);
     const next = "#" + h.toString();
-    if (location.hash !== next) history.pushState(null, "", next);
+    if (location.hash !== next) history[replace ? "replaceState" : "pushState"](null, "", next);
   }
 
   async function selectProject(id, file, { push = true } = {}) {
@@ -617,9 +1110,11 @@
     let id = exists(h.project) ? h.project : null;
     if (!id) id = exists(store.get("project", null)) ? store.get("project", null) : null;
     if (!id && state.projects.length) id = state.projects.slice().sort((a, b) => (b.latest || 0) - (a.latest || 0))[0].id;
-    if (!id) { renderWelcome(); render(); return; }
-    if (id !== state.project) await selectProject(id, h.file, { push });
-    else if (h.file !== state.file) showFile(h.file, { push: false });
+    setView(h.view);
+    if (!id) { renderWelcome(); render(); if (h.view === "runs") renderRuns(); return; }
+    if (id !== state.project) await selectProject(id, h.view === "plots" ? h.file : null, { push: push && h.view === "plots" });
+    else if (h.view === "plots" && h.file !== state.file) showFile(h.file, { push: false });
+    if (h.view === "runs") await openRuns(h.experiment, h.q, { push });
   }
 
   // ── refresh ─────────────────────────────────────────────────────────────
@@ -633,11 +1128,16 @@
       if (f && loadedMtime !== null && f.mtime > loadedMtime + 1) $("updated").style.display = "inline-block";
       renderBar();
       render();
+      await refreshRuns();
     } catch (err) { showError(err); }
   }
 
   // ── events ──────────────────────────────────────────────────────────────
-  $("project").addEventListener("change", (e) => selectProject(e.target.value, null));
+  $("project").addEventListener("change", async (e) => {
+    if (state.view !== "runs") { selectProject(e.target.value, null); return; }
+    await selectProject(e.target.value, null, { push: false });
+    await openRuns(null, undefined, { push: true });
+  });
   $("list").addEventListener("click", (e) => {
     const row = e.target.closest(".row");
     if (!row) return;
@@ -655,7 +1155,7 @@
     if (!b) return;
     const path = b.dataset.crumb;
     setMode("tree");
-    state.filter = ""; $("filter").value = ""; $("clear").style.display = "none";
+    setPlotFilter("");
     if (path) {
       state.open = new Set([...state.open].filter((p) => !(p === path || p.startsWith(path + "/"))));
       const parts = path.split("/");
@@ -667,12 +1167,14 @@
     const row = [...$("list").querySelectorAll(".row.dir")].find((r) => r.dataset.dir === path);
     if (row) row.scrollIntoView({ block: "center" });
   });
-  $("filter").addEventListener("input", (e) => {
-    state.filter = e.target.value;
-    $("clear").style.display = state.filter ? "block" : "none";
+  function setPlotFilter(text) {
+    state.filter = text;
+    $("filter").value = text;
+    $("clear").style.display = text ? "block" : "none";
     render();
-  });
-  $("clear").addEventListener("click", () => { state.filter = ""; $("filter").value = ""; $("clear").style.display = "none"; render(); $("filter").focus(); });
+  }
+  $("filter").addEventListener("input", (e) => setPlotFilter(e.target.value));
+  $("clear").addEventListener("click", () => { setPlotFilter(""); $("filter").focus(); });
   function setMode(mode) {
     state.mode = mode; store.set("mode", mode);
     $("mode-tree").setAttribute("aria-pressed", mode === "tree");
@@ -729,9 +1231,14 @@
     if (state.visible[next] !== state.file) showFile(state.visible[next]);
   }
   document.addEventListener("keydown", (e) => {
+    const runsView = state.view === "runs";
+    const active = runsView ? $("rfilter") : $("filter");
+    const inField = e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA";
+    if (e.key === "/" && !inField) { e.preventDefault(); active.focus(); active.select(); return; }
+    if (e.key === "Escape" && e.target === active) { runsView ? setRunsFilter("") : setPlotFilter(""); active.blur(); return; }
+    if (e.key === "Escape" && e.target === $("lookup")) { $("lookup").value = ""; renderLookup(); $("lookup").blur(); return; }
+    if (runsView) return;  // the keys below act on plots
     const typing = e.target === $("filter");
-    if (e.key === "/" && !typing) { e.preventDefault(); $("filter").focus(); $("filter").select(); return; }
-    if (e.key === "Escape" && typing) { state.filter = ""; $("filter").value = ""; $("clear").style.display = "none"; render(); $("filter").blur(); return; }
     if (e.metaKey || e.ctrlKey || e.altKey || e.target.tagName === "SELECT") return;
     if (e.key === "ArrowDown" || (e.key === "j" && !typing)) { e.preventDefault(); step(1); }
     else if (e.key === "ArrowUp" || (e.key === "k" && !typing)) { e.preventDefault(); step(-1); }

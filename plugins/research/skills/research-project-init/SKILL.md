@@ -1,6 +1,6 @@
 ---
 name: research-project-init
-description: Scaffold a new or empty Research 2.0 repository with the standard experiment taxonomy, an explicit engineering execution agreement with manual/auto modes, exact uv environment, rig configuration, status helpers, journal guard, and host guidance. Use when starting, initializing, bootstrapping, or scaffolding a fresh research project; do not use to upgrade, migrate, or retrofit an existing project.
+description: Scaffold a new or empty Research 2.0 repository with the standard experiment taxonomy, an explicit engineering execution agreement with manual/auto modes and approval tiers, exact uv environment, rig configuration, status helpers, journal guard, and host guidance, all under one consolidated approval. Use when starting, initializing, bootstrapping, or scaffolding a fresh research project; do not use to upgrade, migrate, or retrofit an existing project.
 ---
 
 # Research Project Init
@@ -30,11 +30,13 @@ values, and material the user supplies explicitly. See "Directives are closed" i
    omits `research`, stop and hand off to `project-init` to tag the project first. Never write or
    edit these three files here; the scaffold leaves them untouched and includes them in the first
    commit.
-3. Confirm project name, path, one-line description, GitHub remote, dispatch branch, exact Python
-   patch, exact uv version, bounded GPU smoke command, and whether evaluations/plots are committed.
-   Ask which single directory name the uv virtual environment should have — the hub development
-   environment; waves use lock-keyed environments under `.envs/` instead. Suggest `.venv` only as
-   an option, and never infer or silently default the name. Reject project-surface collisions.
+3. Gather project name, path, GitHub remote, dispatch branch, exact Python patch, exact uv
+   version, bounded GPU smoke command, and whether evaluations/plots are committed. A one-line
+   description is optional: without one, `{{PROJECT_DESCRIPTION}}` falls back to the project name.
+   The hub development environment's single directory name (waves use lock-keyed environments
+   under `.envs/` instead) and the framework questions are asked in the consolidated approval
+   below, never in a round of their own. Suggest `.venv` only as an option, and never infer or
+   silently default the name. Reject project-surface collisions.
 4. Confirm the rig set this project will ever dispatch to, and require an entry in the user
    registry `~/.config/rigsync/machines.toml`
    (`rig-sync` → `references/configuration.md`) for each one before scaffolding: `ssh`, `hostname`,
@@ -48,7 +50,29 @@ values, and material the user supplies explicitly. See "Directives are closed" i
    volume, never default a cache or `TMPDIR` to `$HOME` or `~/.cache`, and never copy another
    project's values.
 5. Require an explicit `engineering_mode: manual|auto`. Never infer a default. Capture the
-   engineering repo/rig/GPU/budget envelope, approved destinations, and protected choices.
+   engineering repo/rig/GPU/budget envelope, approved destinations, and — when `leonardo` is in
+   the rig set — its account and the **Leonardo core-hour ceiling** (conventions, "Approval
+   tiers").
+
+## Consolidated approval
+
+Ask **once**, in one round, after admission and before writing anything. The single approval
+covers, listed explicitly:
+
+- the scaffold preview: the tree, every templated file, and the execution agreement;
+- the first commit and its push to the approved remote and branch;
+- the hub environment: the staged-lock provision, `verify`, and GPU smoke, plus the hub
+  development environment;
+- rig bring-up for every intended rig, including `rig-sync provision-env` (it edits shell startup
+  files; on a shared machine say that it affects that account's every future shell) and
+  `rig-sync push-env` (it moves secrets);
+- the open questions, asked together: the hub development environment name, the framework, and
+  anything else admission left open.
+
+Both engineering modes ask this round; `engineering_mode` itself is still stated explicitly by the
+user, never inferred. Once approved, every step below runs without another prompt and is reported
+in one line each. A step that turns out to need something the approval did not cover — a new
+destination, a non-empty path, a rig without a registry entry — stops and asks.
 
 ## Scaffold
 
@@ -75,7 +99,7 @@ values, and material the user supplies explicitly. See "Directives are closed" i
    values empty unless the user supplies them through an authorized secret source. Mirror every
    key in `.env.example` with empty values and explanatory comments.
 4. Install `.githooks/pre-commit`. It requires a journal update when experiment-relevant files are
-   committed; the active layer's mode determines whether the entry is user-approved or delegated.
+   committed; `research-journal` appends the entry and shows it afterwards, in both modes.
 5. Create `code/common/run_id.py`, `code/common/status.py`, `code/common/paths.py` (which resolves
    the repo-relative storage values in `.env` against the shared project root, honouring the
    `RESEARCH_PROJECT_ROOT` a wave exports, and tracked inputs against the running source tree), and
@@ -86,17 +110,16 @@ values, and material the user supplies explicitly. See "Directives are closed" i
 
 ## Git, environment, and rigs
 
-1. Initialize Git, configure only the approved remote/branch, and preview the scaffold. In
-   engineering-manual mode, wait before the first commit/push. In engineering-auto mode, commit and
-   push only when the approved envelope explicitly covers that remote and branch. Never force-push
-   or overwrite remote history.
+1. Initialize Git, configure only the approved remote/branch, then make the first commit and
+   push it as the consolidated approval covers. Never force-push or overwrite remote history.
 2. Configure `environment-sync`, run doctor, and require the exact environment plus GPU smoke
    gate on the hub for the staged lock (`provision --staged`, then `verify --staged` with the hub
    lane). Create the hub development environment named in `[environment].name` with the pinned uv
    (`UV_PROJECT_ENVIRONMENT=<name> uv sync --frozen`); it is the user's, and waves never use it.
-   Manual mode requires its preview approval; auto mode may confirm inside the envelope.
-3. Bring up every intended rig in this order; each step's failure stops the ones after it.
-   Manual mode requires preview approval; auto mode may confirm inside the envelope.
+   The consolidated approval covers it; report the result.
+3. Bring up every intended rig in this order; each step's failure stops the ones after it. The
+   consolidated approval covers every step, `provision-env` and `push-env` included; show each dry
+   run in the report, not as a new question.
    1. Confirm the user registry declares every intended rig, storage roots included (admission
       above). A rig with no entry cannot be declared in `sync.toml` at all, and one with no
       storage root fails the path gate below.
@@ -108,11 +131,12 @@ values, and material the user supplies explicitly. See "Directives are closed" i
       than skipping, on a rig whose registry entry declares no storage root.
    4. Run `rig-sync provision-env --dry-run` then `--confirm` for each rig that declares caches.
       Without this a rig has no `HF_HOME`/`UV_CACHE_DIR` and falls back to `~/.cache` — the small
-      quota'd volume on a shared machine. It edits shell startup files, so it is a protected write;
-      on a shared machine say aloud that it affects that account's every future shell.
+      quota'd volume on a shared machine. It edits shell startup files: outside this bundle it
+      always asks, and here the consolidated approval named it.
    5. Run `rig-sync prepare` for each peer. Preserve non-empty paths and report them blocked.
    6. Run `rig-sync push-env` for each peer. `.env` is ignored by Git, so a fresh clone has none
-      and nothing else will put one there. It moves secrets; treat it as a protected write.
+      and nothing else will put one there. It moves secrets: outside this bundle it always asks,
+      and here the consolidated approval named it.
    7. Run `rig-sync doctor` and the `environment-sync` gates for every intended peer.
 4. Finish the local scaffold when remote setup is unavailable, but report remote execution as
    blocked until its independent gates pass.

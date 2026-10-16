@@ -14,6 +14,18 @@ a systemd user service, on the machine where plots are rendered (`rig-4090`).
   else, including code, evaluations and checkpoints, answers 404. `..` segments are refused, and a
   symlink inside `plots/` cannot reach outside it. `plots/` itself may be a symlink to another
   volume.
+- The one exception is each experiment's run-identity records, and only through `/api/runs`: the
+  derived `evaluations/<experiment_path>/RUN_ID_MAP.json`, and the tracked identity files
+  `config/<experiment_path>/RUN_ID_VERSIONS.json` and `config/<experiment_path>/RUN_ID_HISTORY.json`,
+  nothing else. The file name must match `RUN_ID_(MAP|VERSIONS|HISTORY).json` exactly, the
+  experiment path is at most 4 plain segments (no `..`, no hidden folders), and a symlink cannot
+  lead outside the real `evaluations/` (for the map) or the real `config/` (for the other two).
+  Every other file under `evaluations/` and `config/` (`.run_config.json`, `.status.json`,
+  metrics, the YAML configs) answers 404, by path and through the API.
+- **What the Runs view exposes.** `RUN_ID_MAP.json` embeds each run's full resolved config under
+  `configs` (plus copies of the versions and history), so anyone who can open the page can read
+  every run's hyperparameters and config values. `.env` never enters a resolved config, so secrets
+  are not part of it; still treat the configs as exposed to every page viewer.
 - `/` is the plot browser (`assets/plot-browser.html`, read on every request): a project picker,
   the project's `plots/` as a folder tree (single-child folder chains merged into one row) or as a
   newest-first list, a filter box, and the selected plot beside it with its breadcrumb, render time,
@@ -28,9 +40,44 @@ a systemd user service, on the machine where plots are rendered (`rig-4090`).
   offers a reload. Keys: `/` filter, `↑`/`↓` or `j`/`k` previous/next plot, `Esc` clear, `r` reload,
   `d` download, `b` show/hide the list.
   On a narrow screen the list slides in from the menu button. View preferences stay in the browser.
+- The header's **Plots / Runs** toggle switches to the Runs view: hash ↔ params for one experiment.
+  - Pick an experiment: any folder under `evaluations/`, nested ones included, that holds a
+    `RUN_ID_MAP.json`, or under `config/` that holds a `RUN_ID_VERSIONS.json`.
+  - The table has one row per run, with columns for the hash (shortened, full on hover; click to
+    copy), the identity version, one column per identity param of the current version, wave, rig
+    and state. **all config params** adds a column for every key of the runs' resolved configs
+    (nested keys dotted, as in `optim.lr`).
+  - The free filter takes words and `key=value` terms, all ANDed: `lr=1e-4 model=vit seed=0`.
+    Numbers compare by value, so `1e-4` matches `0.0001`. A key can name a column, an identity
+    param, or a config key, including by its last dotted part. Each column also has its own filter:
+    a substring, or `=x` for an exact match. Clicking a header sorts by that column.
+  - The lookup box takes a hash or a prefix (with or without `rid-`). An old hash from before a
+    run_id migration resolves through `RUN_ID_HISTORY.json` and shows as `old → current` with a
+    `migrated vN → vM` badge. When the `VERSIONS` or `HISTORY` endpoint answers 404 (an older
+    sandbox bind list, or a checkout without the tracked files), the page falls back to the
+    `versions` and `history` copies embedded in the map.
+  - Each row can copy its hash or its full config JSON. Its WandB link appears when the config
+    records a WandB URL. **plots** opens the Plots view filtered to `plots/<experiment_path>/`:
+    plots select runs by hash inside the file, never in the path.
+  - Maps from legacy layouts (`segments-*`, `hashed-v1`) get a limited view: the run path or hash
+    and the params recoverable from it.
+  - The address bar carries `#v=runs&p=<project>&e=<experiment>&q=<filter>`; `#p=&f=` plot links
+    work as before. In the Runs view `/` focuses the run filter, `Esc` clears it, and the plot
+    keys (`r`, `d`, `j`/`k`, arrows, `b`) are off.
   Without the page file, `/` falls back to the plain list, which is always at `/plain`.
 - `/api/projects` and `/api/files?project=<absolute project path>` are the JSON behind the page.
   Project discovery is cached for 30 s.
+- `/api/experiments?project=<absolute project path>` lists the project's experiments, each with the
+  `RUN_ID_*` files it holds and their size and mtime, as `{"experiments": [{"path", "files": {"MAP":
+  {"size", "mtime"}, ...}}]}`. An experiment is the union of every folder under `evaluations/` that
+  directly holds a `RUN_ID_MAP.json` and every folder under `config/` that directly holds a
+  `RUN_ID_VERSIONS.json`, at most 4 levels deep. It skips hidden and run folders and visits at most 5000 folders per
+  project. It is cached for 30 s.
+- `/api/runs?project=<path>&experiment=<experiment_path>&file=MAP|VERSIONS|HISTORY` serves that raw
+  file (`file` defaults to `MAP`; `MAP` resolves under `evaluations/`, `VERSIONS` and `HISTORY`
+  under `config/`), with the same ETag, 304 and gzip handling as plots. Any other
+  name, experiment or project answers 404. Both endpoints need the token off this machine, like
+  every other path.
 - `/healthz` answers `ok` without a token.
 - Responses carry `Cache-Control: no-cache` plus an `ETag` (answered with 304 when unchanged), so
   reloading after a rerender shows the new file and an unchanged one is not sent again.
@@ -92,9 +139,14 @@ It reads your `[plots]` table, then:
 
 What the sandbox enforces, whatever the server's code does:
 
-- **Only `plots/` exists.** `/home`, `/root` and `/mnt` are empty; `/media`, `/srv`, `/opt`, most of
-  `/var` and `/boot` are hidden. The root sync job bind-mounts each project's `plots/` back in,
-  read-only. Code, evaluations, checkpoints, `.git`, SSH keys and your registry are not reachable.
+- **Only `plots/` and the run-identity files exist.** `/home`, `/root` and `/mnt` are empty;
+  `/media`, `/srv`, `/opt`, most of `/var` and `/boot` are hidden. The root sync job bind-mounts each
+  project's `plots/` back in, read-only. It also bind-mounts each experiment's
+  `evaluations/<experiment_path>/RUN_ID_MAP.json` and `config/<experiment_path>/RUN_ID_{VERSIONS,HISTORY}.json`,
+  read-only, as single files, never the folder. Code, the rest of `evaluations/` and `config/`
+  (`.run_config.json`, `.status.json`, metrics, YAML), checkpoints, `.git`, SSH keys and your
+  registry are not reachable. The map's embedded `configs` (every run's resolved config, never
+  `.env`) are readable through the Runs view; that is the one config data the sandbox exposes.
 - **Nothing is writable.** The whole filesystem is read-only to the service (`ProtectSystem=strict`
   plus read-only binds); `/tmp` is private.
 - **No privilege.** It runs as `plotserver` with no capabilities, `NoNewPrivileges`, no setuid,
@@ -102,10 +154,13 @@ What the sandbox enforces, whatever the server's code does:
 - **Bounded resources.** 1 GB of memory, 128 tasks, two CPU cores.
 
 `plot-server-sync.timer` runs `plot_server.py sync` as root every 2 minutes: it discovers checkouts
-with `plots/` under the roots, refuses a `plots/` that resolves outside every root or whose path a
+with `plots/` under the roots and their experiments' `RUN_ID_*.json` files, refuses a `plots/` or
+file that resolves outside every root (or a file outside its `evaluations/` or `config/`) or whose path a
 unit file cannot carry safely (spaces, quotes, `:` or `%`), writes the bind list to
 `/etc/systemd/system/plot-server.service.d/plots.conf` and the project list to the manifest, and
-restarts the server only when the list changed. A new project's plots appear within 2 minutes;
+restarts the server only when the list changed. A new project's plots, and a new experiment's
+`RUN_ID_*.json`, appear within 2 minutes. A RUN_ID file rewritten in place shows at once; one
+replaced by a rename gets a new inode, which the next sync detects and re-binds with a restart;
 `sudo systemctl start plot-server-sync.service` publishes them at once.
 
 Re-run the install script after a release that changes `plot_server.py` or `plot-browser.html`:

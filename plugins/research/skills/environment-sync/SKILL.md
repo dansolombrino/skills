@@ -35,10 +35,11 @@ a missing-file error rather than a contract failure. Install both, from the same
 Read `program/00-execution-agreement.md` and the Research 2.0 conventions
 (`../research-project-init/references/conventions.md`, including "Directives are closed" — never
 infer environment contents or defaults from another project on disk) first. Stop when the
-project surfaces are absent. In engineering-manual mode, preview and wait before `--confirm`; in
-engineering-auto mode, confirm only for the exact revision, rigs, and environment mutation covered
-by the approved envelope. Missing tools, new destinations, credentials, and scope expansion remain
-protected.
+project surfaces are absent. `provision` and `verify` are **do, then report** in both engineering
+modes (conventions, "Approval tiers"): run the dry run, confirm it for the exact revision and the
+envelope's rigs without a prompt, and report the result in one line. A new environment key is
+additive and never touches one an active wave uses. Missing tools, new destinations, credentials,
+and scope expansion always ask.
 
 ## Contract
 
@@ -76,7 +77,7 @@ protected.
    hub's environment files must then equal the index). Show pinned uv/Python, the environment key
    and path, every target, and each available
    `uv sync --frozen --exact --no-install-project --dry-run` result; when pinned uv is absent, show
-   its versioned installer plan. Authorize `--confirm` according to engineering mode.
+   its versioned installer plan. Then `--confirm` without a prompt (do, then report).
 3. On confirmation, install pinned uv under ignored `.rigsync_cache/`, install the exact
    uv-managed Python, and exact-sync `.envs/<env_key>`. Building a key that does not exist yet is
    always allowed, even while other waves run. Re-syncing an existing key is refused while any
@@ -117,8 +118,8 @@ drift/incompatibility, not an experiment failure.
 
 - Reuse project `sync.toml` and the user rig registry; never infer aliases, paths, credentials,
   private indexes, or extra `behemoth` GPU authorization.
-- Use only the official versioned uv installer, with no profile changes, after named-target
-  authorization under the active engineering mode. Never log index credentials or values from `.env`.
+- Use only the official versioned uv installer, with no profile changes, on the named targets of
+  the envelope. Never log index credentials or values from `.env`.
 - Keep uv's default dependency-group selection authoritative. Reject per-rig extras, manual
   installs, missing locks, stale locks, and non-exact pins.
 - If any rig fails installation, fingerprint comparison, or GPU smoke, report the exact rig and

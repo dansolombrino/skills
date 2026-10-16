@@ -3,8 +3,10 @@
 
 A plot is served at the URL path equal to its absolute file path, so the URL of any file is
 known without asking the server: http://<host>:<port>/abs/path/to/<project>/plots/<...>.html.
-Only files inside a project's plots/ tree under a configured root are served; everything else
-answers 404. Configuration is the [plots] table of the rigsync registry; see
+Only files inside a project's plots/ tree under a configured root are served, plus each
+experiment's run-identity files through /api/runs for the Runs view: the derived
+evaluations/<experiment>/RUN_ID_MAP.json and the tracked config/<experiment>/RUN_ID_{VERSIONS,HISTORY}.json;
+everything else answers 404. Configuration is the [plots] table of the rigsync registry; see
 references/plot-server.md.
 
 Subcommands:
@@ -12,7 +14,7 @@ Subcommands:
   url            print the URL of one plot file and whether the server serves it
   list           list the discovered projects and their HTML plots
   token          print a fresh access token
-  sync           (root, sandboxed install) publish each project's plots/ into the sandbox
+  sync           (root, sandboxed install) publish each project's plots/ and RUN_ID_*.json into the sandbox
   system-config  (root, sandboxed install) write the system config from a user's [plots] table
 """
 
@@ -20,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import hmac
 import html
 import ipaddress
@@ -57,6 +60,16 @@ DEFAULT_BIND = "127.0.0.1"
 DEFAULT_DEPTH = 4
 PLOTS_DIR = "plots"
 PLOT_SUFFIXES = (".html", ".htm")
+EVAL_DIR = "evaluations"
+CONFIG_DIR = "config"
+# The only files the server reads outside plots/: each experiment's run-identity records. The derived
+# map lives in evaluations/<exp>/; the tracked identity files live in config/<exp>/.
+RUN_ID_FILE = re.compile(r"^RUN_ID_(MAP|VERSIONS|HISTORY)\.json$")
+RUN_ID_KINDS = ("MAP", "VERSIONS", "HISTORY")
+RUN_ID_MAP_NAME = "RUN_ID_MAP.json"
+RUN_ID_VERSIONS_NAME = "RUN_ID_VERSIONS.json"
+EXPERIMENT_DEPTH = 4          # an experiment path has at most this many segments (001_x/002_sub)
+EXPERIMENT_SCAN_LIMIT = 5000  # directories visited per project while discovering experiments
 DISCOVERY_TTL_S = 30.0
 COOKIE_NAME = "plot_server_token"
 GZIP_MIN_BYTES = 64 * 1024
@@ -198,6 +211,87 @@ def resolve_plot(config: PlotsConfig, url_path: str) -> Path | None:
     return lexical
 
 
+def experiment_parts(experiment: str) -> tuple[str, ...] | None:
+    """The segments of an experiment path, or None unless it is a plain relative path within the depth."""
+    if not isinstance(experiment, str) or not experiment or "\x00" in experiment or "\\" in experiment:
+        return None
+    parts = tuple(experiment.split("/"))
+    # Empty, ".", ".." and hidden segments (.run_id_migrations, .superseded-*) are all refused.
+    if len(parts) > EXPERIMENT_DEPTH or any(not part or part.startswith(".") for part in parts):
+        return None
+    return parts
+
+
+def run_id_file_name(kind: str) -> str | None:
+    """RUN_ID_<KIND>.json for MAP|VERSIONS|HISTORY (or the full file name), else None."""
+    name = kind if kind.endswith(".json") else f"RUN_ID_{kind.upper()}.json"
+    return name if RUN_ID_FILE.match(name) else None
+
+
+def run_id_dir(name: str) -> str:
+    """The project folder holding a run-identity file: evaluations/ for the map, config/ otherwise."""
+    return EVAL_DIR if name == RUN_ID_MAP_NAME else CONFIG_DIR
+
+
+def resolve_run_id_file(config: PlotsConfig, project: Path, experiment: str, name: str) -> Path | None:
+    """The allowlisted run-identity file <name> of an experiment, else None.
+
+    RUN_ID_MAP.json resolves under <project>/evaluations/<experiment>/, RUN_ID_VERSIONS.json and
+    RUN_ID_HISTORY.json under <project>/config/<experiment>/. The same rules as resolve_plot: the
+    project must own a plots/ under a root within depth, no `..`, and a symlink may not lead
+    outside the real evaluations/ (or config/) folder."""
+    if not isinstance(name, str) or not RUN_ID_FILE.match(name):
+        return None
+    parts = experiment_parts(experiment)
+    if parts is None or "\x00" in project.as_posix():
+        return None
+    project = Path(os.path.normpath(project))
+    root = next((r for r in config.roots if project.is_relative_to(r) and project != r), None)
+    if root is None or len(project.relative_to(root).parts) > config.depth or not owns_plots(config, project):
+        return None
+    base = project / run_id_dir(name)
+    lexical = base.joinpath(*parts, name)
+    try:
+        real = lexical.resolve(strict=True)
+        real_base = base.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    if not real.is_relative_to(real_base) or not real.is_file():
+        return None
+    return lexical
+
+
+def _experiments_marked(base: Path, marker: str) -> set[str]:
+    """Experiment paths under base that directly hold marker, bounded in depth and size."""
+    if not base.is_dir():
+        return set()
+    found: set[str] = set()
+    visited = 0
+    for current, dirs, files in os.walk(base):  # symlinked folders are not followed
+        visited += 1
+        if visited > EXPERIMENT_SCAN_LIMIT:
+            break
+        rel = Path(current).relative_to(base)
+        if rel.parts and marker in files:
+            found.add(rel.as_posix())
+            dirs[:] = []  # an experiment's own subfolders are its runs (or its config groups)
+            continue
+        if len(rel.parts) >= EXPERIMENT_DEPTH:
+            dirs[:] = []
+            continue
+        # Run folders (rid-*, key=value segments) and hidden folders never hold an experiment.
+        dirs[:] = sorted(d for d in dirs if not d.startswith((".", "rid-")) and "=" not in d)
+    return found
+
+
+def discover_experiments(project: Path) -> list[str]:
+    """Experiments with a run identity: evaluations/ dirs holding RUN_ID_MAP.json, united with
+    config/ dirs holding RUN_ID_VERSIONS.json."""
+    found = _experiments_marked(project / EVAL_DIR, RUN_ID_MAP_NAME)
+    found |= _experiments_marked(project / CONFIG_DIR, RUN_ID_VERSIONS_NAME)
+    return sorted(found)
+
+
 def discover_projects(config: PlotsConfig) -> list[Path]:
     if config.manifest is not None:
         return sorted(p for p in read_manifest(config) if (p / PLOTS_DIR).is_dir())
@@ -249,6 +343,7 @@ class Catalog:
         self._lock = threading.Lock()
         self._at = 0.0
         self._projects: list[Path] = []
+        self._experiments: dict[Path, tuple[float, list[str]]] = {}
 
     def projects(self) -> list[Path]:
         with self._lock:
@@ -256,6 +351,14 @@ class Catalog:
                 self._projects = discover_projects(self.config)
                 self._at = time.monotonic()
             return list(self._projects)
+
+    def experiments(self, project: Path) -> list[str]:
+        with self._lock:
+            at, found = self._experiments.get(project, (0.0, []))
+            if time.monotonic() - at > DISCOVERY_TTL_S:
+                found = discover_experiments(project)
+                self._experiments[project] = (time.monotonic(), found)
+            return list(found)
 
 
 def human_size(size: int) -> str:
@@ -319,8 +422,12 @@ def api_projects(config: PlotsConfig, projects: list[Path]) -> dict:
     return {"host": socket.gethostname(), "projects": entries}
 
 
+def find_project(projects: list[Path], project_id: str) -> Path | None:
+    return next((p for p in projects if p.as_posix() == project_id), None)
+
+
 def api_files(config: PlotsConfig, projects: list[Path], project_id: str) -> dict | None:
-    project = next((p for p in projects if p.as_posix() == project_id), None)
+    project = find_project(projects, project_id)
     if project is None:
         return None
     files = [
@@ -333,6 +440,25 @@ def api_files(config: PlotsConfig, projects: list[Path], project_id: str) -> dic
         for path, stat in project_plots(project)
     ]
     return {"project": project.as_posix(), "files": files}
+
+
+def api_experiments(config: PlotsConfig, project: Path, experiments: list[str]) -> dict:
+    """Each experiment with the run-identity files it holds (size and mtime), for the Runs view."""
+    entries = []
+    for experiment in experiments:
+        files = {}
+        for kind in RUN_ID_KINDS:
+            path = resolve_run_id_file(config, project, experiment, f"RUN_ID_{kind}.json")
+            if path is None:
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            files[kind] = {"size": stat.st_size, "mtime": stat.st_mtime}
+        if files:
+            entries.append({"path": experiment, "files": files})
+    return {"project": project.as_posix(), "experiments": entries}
 
 
 def browser_page(config: PlotsConfig, projects: list[Path]) -> bytes:
@@ -417,6 +543,26 @@ def make_handler(config: PlotsConfig, catalog: Catalog | None = None, access_log
                     self._send(404, "application/json; charset=utf-8", b'{"error": "unknown project"}', set_cookie, head)
                 else:
                     self._send(200, "application/json; charset=utf-8", json.dumps(data).encode(), set_cookie, head)
+                return
+            if url.path == "/api/experiments":
+                project = find_project(catalog.projects(), parse_qs(url.query).get("project", [""])[0])
+                if project is None:
+                    self._send(404, "application/json; charset=utf-8", b'{"error": "unknown project"}', set_cookie, head)
+                else:
+                    data = api_experiments(config, project, catalog.experiments(project))
+                    self._send(200, "application/json; charset=utf-8", json.dumps(data).encode(), set_cookie, head)
+                return
+            if url.path == "/api/runs":
+                # The raw RUN_ID_<file>.json of one experiment; ETag and gzip come from _send_file.
+                query = parse_qs(url.query)
+                project = find_project(catalog.projects(), query.get("project", [""])[0])
+                name = run_id_file_name(query.get("file", ["MAP"])[0])
+                experiment = query.get("experiment", [""])[0]
+                path = resolve_run_id_file(config, project, experiment, name) if project and name else None
+                if path is None:
+                    self._send(404, "application/json; charset=utf-8", b'{"error": "not found"}', set_cookie, head)
+                else:
+                    self._send_file(path, set_cookie, head)
                 return
             path = resolve_plot(config, url.path)
             if path is None:
@@ -590,15 +736,17 @@ def write_if_changed(path: Path, text: str, mode: int) -> bool:
 
 
 def cmd_sync(config: PlotsConfig, args: argparse.Namespace) -> int:
-    """Publish each project's plots/ into the sandboxed service as a read-only bind mount.
+    """Publish each project's plots/, and each experiment's RUN_ID_*.json (the map from evaluations/,
+    the identity files from config/), into the sandboxed service as read-only bind mounts.
 
     Runs as root from a timer. The service sees nothing of /mnt but these mounts, so this is
     the one place that decides what the server can read."""
     if config.manifest is None:
         raise PlotServerError("sync needs plots.manifest (the sandboxed install sets it)")
+    direct = dataclasses.replace(config, manifest=None)
     real_roots = [r.resolve() for r in config.roots if r.is_dir()]
-    binds, projects = [], []
-    for project in discover_projects(dataclasses.replace(config, manifest=None)):
+    binds, projects, inodes = [], [], []
+    for project in discover_projects(direct):
         plots = project / PLOTS_DIR
         try:
             real = plots.resolve(strict=True)
@@ -612,15 +760,36 @@ def cmd_sync(config: PlotsConfig, args: argparse.Namespace) -> int:
             continue
         projects.append(project.as_posix())
         binds.append(real.as_posix() if real == plots else f"{real.as_posix()}:{plots.as_posix()}")
+        # Single files, never the folder: the rest of evaluations/ and config/ stays invisible.
+        for experiment in discover_experiments(project):
+            for kind in RUN_ID_KINDS:
+                lexical = resolve_run_id_file(direct, project, experiment, f"RUN_ID_{kind}.json")
+                if lexical is None:
+                    continue
+                real_file = lexical.resolve(strict=True)
+                if not any(real_file.is_relative_to(r) for r in real_roots):
+                    print(f"skip {lexical}: resolves outside every root ({real_file})", file=sys.stderr)
+                    continue
+                if not (UNIT_SAFE_PATH.match(lexical.as_posix()) and UNIT_SAFE_PATH.match(real_file.as_posix())):
+                    print(f"skip {lexical}: path has characters a unit file cannot carry safely", file=sys.stderr)
+                    continue
+                stat = real_file.stat()
+                inodes.append(f"{lexical.as_posix()} {stat.st_dev} {stat.st_ino}")
+                binds.append(
+                    real_file.as_posix() if real_file == lexical else f"{real_file.as_posix()}:{lexical.as_posix()}"
+                )
     dropin = (
-        "# Generated by plot_server.py sync; do not edit. Each line exposes one project's plots/\n"
-        "# to the sandboxed plot-server, read-only.\n[Service]\n"
+        "# Generated by plot_server.py sync; do not edit. Each line exposes one project's plots/, or one\n"
+        "# experiment's RUN_ID_*.json file, to the sandboxed plot-server, read-only.\n"
+        # A file bind pins its inode: a RUN_ID file rewritten by rename must be re-bound, so its
+        # inode is part of the drop-in and a change restarts the service.
+        f"# RUN_ID inodes: {hashlib.sha256(chr(10).join(inodes).encode()).hexdigest()[:16]}\n[Service]\n"
         + "".join(f"BindReadOnlyPaths=-{b}\n" for b in binds)
     )
     manifest = "# Generated by plot_server.py sync; do not edit.\n" + "".join(f"{p}\n" for p in projects)
     changed = write_if_changed(Path(args.dropin), dropin, 0o644)
     changed = write_if_changed(config.manifest, manifest, 0o644) or changed
-    print(f"{len(projects)} project(s) published; {'changed' if changed else 'unchanged'}")
+    print(f"{len(projects)} project(s) published; {'changed' if changed else 'unchanged'}; {len(inodes)} RUN_ID file(s)")
     if changed and not args.no_reload:
         subprocess.run(["systemctl", "daemon-reload"], check=True)
         subprocess.run(["systemctl", "try-restart", "plot-server.service"], check=True)
@@ -678,7 +847,7 @@ def main(argv: list[str] | None = None) -> int:
     url_parser.add_argument("file")
     sub.add_parser("list", help="list discovered projects and their HTML plots")
     sub.add_parser("token", help="print a fresh access token")
-    sync_parser = sub.add_parser("sync", help="(root) publish each project's plots/ into the sandboxed service")
+    sync_parser = sub.add_parser("sync", help="(root) publish each project's plots/ and RUN_ID_*.json into the sandboxed service")
     sync_parser.add_argument("--dropin", default=SYSTEM_DROPIN)
     sync_parser.add_argument("--no-reload", action="store_true", help="write files only; do not reload systemd")
     cfg_parser = sub.add_parser("system-config", help="(root) write the sandboxed service's config")

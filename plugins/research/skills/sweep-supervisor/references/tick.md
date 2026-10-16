@@ -15,6 +15,8 @@ README first: the wave's **pool** and its standing authorization are your envelo
   the rig), and its `.status.json`. Use bounded, non-interactive SSH
   (`ssh -o BatchMode=yes -o ConnectTimeout=10 <rig> ...`); never open an interactive session.
 - `questions.json` — answers that arrived.
+- Any `collect-failed` event: the rig, the run, and whether it is a transient ssh failure or an
+  identity mismatch.
 
 ## 2. Judge, then act
 
@@ -31,7 +33,8 @@ a code problem.
 | lane `blocked` (revision or environment verification failed) | re-run `rig-sync deploy-revision` / `environment-sync provision` for that wave inside the envelope, then `lane unblock`; if it still fails, leave it blocked and report |
 | lane stopped on 88 | `lane offload-on --rig <rig>` and `lane unblock` if blocked; low disk never removes a rig |
 | cluster `job-timeout` | the service already resized it from measured progress; confirm the number is sane, else `queue constrain --walltime-s`. A run that restarts from scratch and cannot fit 24 h goes to the user |
-| `budget-cap` reached | `ask`; meanwhile the cluster takes no new jobs |
+| `budget-cap` reached | read the execution agreement's Leonardo core-hour ceiling (scripts never read it). Below it: `pool --rig leonardo --core-hours-cap <n> --reason "<why>"` with `<n>` ≤ the ceiling — a standing-policy action, done and reported (`decide`); a raised cap resumes submission. At the ceiling: `ask` — exceeding it is a budget expansion; meanwhile the cluster takes no new jobs |
+| `collect-failed` | read the problem. A transient ssh failure needs nothing: the next cycle retries. An identity mismatch (`.run_id.json`/`.run_config.json` differ between rig and hub) → `ask`, and never overwrite either copy |
 | `claim-refused` (lane `waiting for board`) | nothing to undo: the service already kept the lane out and retries every cycle. Report who holds the card; if the hold looks stale, `rig-board status --reconcile` evidence goes to the user, never a forced release |
 | a card in the envelope became free on the fleet board | run the full `rig-sync` and `environment-sync` gates for it; admitting a lane that was not in the pool is a pool change: `ask` |
 
@@ -56,7 +59,8 @@ consider the in-flight and buffered runs of slower lanes:
   that claimed the run, `eta` is recomputed.
 - One `SUP decide "<what, why, evidence>"` per decision, including "nothing to do" when an event
   needed no action. The user reads these under the table.
-- Journal a meaningful scientific or engineering event per `research-journal`.
+- Journal a meaningful scientific or engineering event per `research-journal` (append; no
+  prompt).
 
 ## 4. Ask without blocking
 
@@ -67,10 +71,15 @@ never treat silence as consent.
 
 ## 5. Finish
 
-When the snapshot says every run is terminal: final reconcile, rebuild the run_id map once per
-machine whose evaluations tree received runs
-(`write_run_id_map(<evaluations experiment dir>, layout=RUN_ID_PATH_LAYOUT)`, never per run), a
-closing `decide` with counts and open problems, then `SUP finish --confirm`. Pruning stays a
+When the snapshot says every run is terminal, the service has already run a final
+`rigsync collect` from every rig. Check `wave-terminal.collect_failed` and any `collect-failed`
+events. Run `rigsync collect --check --wave <id>` and settle what it lists (an identity mismatch
+needs the user) before you rebuild the run_id map. Then do the final reconcile, rebuild the run_id
+map once per machine whose evaluations tree received runs
+(`write_run_id_map(<evaluations experiment dir>, layout=RUN_ID_PATH_LAYOUT)`, plus
+`spec_root=<root>/.waves/<wave_id>/config/<experiment_path>` under `hashed-v2` — that machine's
+wave worktree, which carries the tracked identity files the wave ran with — never per run), add
+a closing `decide` with counts and open problems, then `SUP finish --confirm`. Pruning stays a
 proposal for the user; never prune from a tick.
 
 Exit when done. The next tick starts from the files, not from your memory.

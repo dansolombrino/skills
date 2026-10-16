@@ -76,10 +76,18 @@ Cross-rig workflows require the bundled `rig-sync` and `environment-sync` contra
 access on every rig; the plugin stops before remote dispatch when source or runtime parity cannot
 be proven.
 
-Research 2.0 supports fresh projects only. Every scaffolded project carries an explicit
-engineering execution agreement with a manual/auto mode and an approved envelope; the engineering
-skills read it before any material action and stop when it is absent. `EXPERIMENTS.md` holds run
-state and `JOURNAL.md` holds the narrative. Unsupported legacy layouts stop without migration.
+Research 2.0 supports fresh projects only, scaffolded in one consolidated approval. Every
+scaffolded project carries an explicit engineering execution agreement with a manual/auto mode, an
+approved envelope, and three approval tiers plus mode-owned choices. The three tiers apply in both
+modes: reversible, gated steps (deploys, environment provisioning, journal appends, offload and
+evaluation collection, run_id election, plot communication) run and are reported; dispatch follows
+a standing pool policy; and destructive, secret-moving, budget-expanding, and run_id-migrating
+actions always ask. The mode-owned choices — experiment-design choices, metrics, and which plots to
+make — are the only ones that follow the mode. The engineering skills
+read the agreement before any material action and stop when it is absent. New experiments identify
+runs by a versioned `rid-<32 hex>` hash (`hashed-v2`) that `run-identity` looks up and migrates.
+`EXPERIMENTS.md` holds run state and `JOURNAL.md` holds the narrative. Unsupported legacy layouts
+stop without migration.
 
 Scaffolded projects get `AGENTS.md` as the canonical project doc plus a thin `CLAUDE.md` that
 points at it, so one set of notes serves both hosts.

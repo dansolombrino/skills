@@ -13,15 +13,53 @@ required surface is missing, or legacy status/scripts are detected, stop as unsu
 offer compatibility, migration, or opportunistic upgrades.
 
 Read `program/00-execution-agreement.md` before a material engineering action. It must explicitly
-set `engineering_mode: manual|auto`; never infer it. Manual mode reserves the engineering choices
-for the user. Auto mode delegates them only inside the approved engineering envelope. Integrity
-gates never become optional.
+set `engineering_mode: manual|auto`; never infer it. Integrity gates never become optional.
 
-Always return to the user for destructive operations, history rewrites, deletion of material data,
-overwriting user changes, new repositories/remotes/accounts/destinations, secrets/authentication
-changes, scope/budget/rig expansion, shared-GPU exceptions, or a
-source-to-target deviation governed by `integrate-reference-code` (a `core` skill). System permission prompts are
-independent and always apply.
+### Approval tiers
+
+Three tiers apply identically in **both** engineering modes; the mode owns only the last group.
+What protects the project is Git, reversible operations, and the integrity gates, so a reversible,
+gated step does not stop for a prompt nobody reads.
+
+- **Do, then report.** No prompt. Act, then report in one line what was done and where:
+  - `rig-sync deploy-revision` of the tagged wave commit, and `rig-sync prepare` on a rig already
+    declared in the user registry;
+  - `environment-sync provision` and `verify`;
+  - a `research-journal` append — the entry is shown after it is written;
+  - offload to the hub: every non-hub lane rig is offload-enabled by default (Slurm targets such
+    as `leonardo` excluded; `supervisor.py` rejects offload entries that are not lane rigs), and a
+    rig's checkpoint copy is still freed only once checksum-verified on the hub;
+  - `rig-sync collect` of a wave's evaluation records to the hub (non-destructive);
+  - run_id election and the `hashed-v2` run path of a new experiment (§ run_id);
+  - plot communication: titles, their arrangement across title lines, metric explanations and
+    their placement, interaction affordances, and export paths, including every fully resolved
+    concrete path. Every check stays in force — resolved paths, collision rejection, in-figure
+    verification — and the reasoning is stated in the reply and in the journal (§ Plot
+    communication).
+- **Standing policy** (`sweep-dispatch`). The pool is every free lane on the envelope's rigs as
+  `rig-board` shows them, ordered for the fastest finish; the gate previews are reports, not waits;
+  the wave's standing authorization lets `sweep-supervisor` act inside the pool. **Leonardo:** the
+  execution agreement's **Leonardo core-hour ceiling** (on the account the envelope declares) is the
+  bound. Setting or raising a wave's core-hour cap up to that ceiling — at `register`, or later with
+  `pool --rig leonardo --core-hours-cap <n>` — is a standing-policy action: do it, then report.
+  Exceeding the ceiling always asks. A `budget-cap` event from the supervisor is handled the same
+  way: raise the cap up to the ceiling and report; at the ceiling, ask. The scripts never read the
+  ceiling (it lives in the agreement's prose), so the agent checks cap ≤ ceiling itself before every
+  `register` or `pool` call that sets a cap.
+- **Always ask**, in both modes: destructive operations, history rewrites, deletion of material
+  data, overwriting user changes, new repositories/remotes/accounts/destinations,
+  secrets/authentication changes, scope/budget/rig expansion, shared-GPU exceptions (a `behemoth`
+  card beyond gpu0 above all), a source-to-target deviation governed by `integrate-reference-code`
+  (a `core` skill), cancelling or superseding runs outside the wave's standing authorization
+  (another wave's runs, a supersede, a running Slurm job), `rig-sync prune`, `rig-sync provision-env` or
+  `push-env` outside the `research-project-init` bundle (they touch shell startup files and move
+  secrets), and a **run_id migration** (`run-identity`). System permission prompts are independent
+  and always apply.
+- **Mode-owned.** Experiment-design technical choices, metrics, which plots to make, and any other
+  engineering choice no tier above names: manual mode proposes and waits for the user; auto mode
+  decides inside the approved engineering envelope and records its reasoning.
+
+A report is not a request: say what was done and carry on, never wait for an acknowledgement.
 
 ## Directives are closed
 
@@ -171,142 +209,211 @@ satisfies it, and the dispatch gate never runs `tests/`. Keep the two surfaces s
 
 ## run_id
 
-The per-experiment **ordered** set of config params that uniquely identifies a run.
+The per-experiment set of config params that uniquely identifies a run. New experiments use the
+`hashed-v2` layout. An experiment already pinned to an older layout keeps it with its own rules
+(§ Legacy pins below).
 
-- **Election owner follows `engineering_mode`.** In manual mode, propose and wait for the user.
-  In auto mode, elect and record the smallest ordered identity that prevents collisions inside the
-  approved engineering envelope. The path rendering below is always the user's decision.
+- **Election is agent-decided in both engineering modes** (do, then report). The identity is every
+  param the sweep grid varies plus every behavior-affecting param whose value differs from the
+  config default. State the elected params and the reasoning in the reply and in the journal.
+  There is no rendering dialogue, byte report, or segment spec: the path is one fixed-width hash
+  directory, so nothing about it needs a choice. `run-identity` owns the election rules, lookup,
+  and migration.
+- **Authoritative record.** The experiment's `.py` pins `RUN_ID_PATH_LAYOUT = "hashed-v2"` and
+  reads the current identity with `load_run_id_spec(source_path("config/<experiment_path>"))` from
+  `config/<experiment_path>/RUN_ID_VERSIONS.json` — tracked source, not `evaluations/` (which is
+  gitignored and rig-local) — so every wave worktree pins the identity version it was deployed with
+  and a rig needs no identity file of its own: `[{version, params, date, reason}]`, the last entry
+  current. `RUN_ID_HISTORY.json` beside it records every run_id migration as `{from_version,
+  to_version, date, map: {old hash: new hash}, backfill: {param: {value, source}}}`. There are no
+  `RUN_ID_PARAMS` or `RUN_ID_SEGMENTS` constants under `hashed-v2`. The experiment's EXPERIMENTS.md
+  section header mirrors the pin, the current version and its params, and the map path.
+- Config yamls stay pure hydra params — **no run_id metadata in yaml**; the two identity JSON files
+  sit beside them in `config/<experiment_path>/` and are not hydra configs.
+- **Identity params are top-level config keys.** Elect top-level keys only; to identify a nested
+  value, elect its top-level subtree key (`optim`, never `optim.lr`). `runid migrate plan` and
+  `load_run_id_spec` refuse a dotted param.
+- **Hash.** `rid-` plus the first 32 hex digits (128 bits) of sha256 over the canonical JSON
+  `{"layout": "hashed-v2", "params": {param: value or null}}` with sorted keys: param order never
+  changes it, a param missing from the config hashes as `null`, and the 32-hex width keeps it
+  distinct from a legacy `rid-<16 hex>`.
+- Renderings via `code/common/run_id.py`:
+  - **path form** (`run_id_path(cfg, params, layout="hashed-v2")`) → the one directory
+    `rid-<32 hex>`, so a run lives at
+    `checkpoints|evaluations|scripts|logs/<experiment_path>/rid-<32 hex>/`. Plotting code reads
+    evaluations through it; `plots/` output paths never use it.
+  - **run name** (`run_id_name`) → the hash. It is the EXPERIMENTS.md `run_id` column, the WandB
+    tag that identifies the run, and the Slurm job-name suffix, so every surface carries the
+    identity the directories show.
+  - **label** (`run_id_label(cfg, params)`) → the readable `k=v,…` string: the WandB display name,
+    the EXPERIMENTS.md `label` column, and what a plot shows beside each hash. A label is for
+    reading only; it is never a path or an identity.
+  - **WandB**, one exact form: `wandb.init(name=run_id_label(...), tags=[run_id_name(...)],
+    config=wandb_config(cfg))`. The display name is the readable label and the hash is a tag (36
+    characters, within WandB's 64-character tag limit); the hash is never the WandB run id. A run_id
+    migration renames the display name and swaps the hash tag (`run-identity`'s `wandb_rename.py`).
+  - **run folder** (`<run_id folder>`) → the run-scoped folder under `scripts/` and `logs/`: the
+    same `rid-<32 hex>` directory as `evaluations/`.
+- **Never lossy, never silently colliding.** `guard_run_config(cfg, params, <eval run dir>,
+  layout="hashed-v2", experiment_root=<evaluations experiment dir>,
+  spec_root=source_path("config/<experiment_path>"))` refuses params that are not the
+  current `RUN_ID_VERSIONS.json` entry, requires the run dir to be the hash path, atomically writes
+  `.run_config.json` and `.run_id.json` (`{layout, version, hash, params}`), and hard-fails when
+  the directory already records different params or a different config. Its I/O is O(1) per run:
+  it never scans other runs or writes the map. Before dispatch, `check_run_id_plan(<planned cfgs>,
+  params, None, <evaluations experiment dir>, path_roots=(...), layout="hashed-v2",
+  spec_root=source_path("config/<experiment_path>"))` rescans every
+  existing record and refuses a hash collision, a run planned twice, and a filesystem-limit
+  overflow; under every layout it supports it also compares each planned run's resolved config with
+  the `.run_config.json` already at its path. Identical means resume/retry and passes; any
+  difference refuses, names the differing keys, and calls for the next identity version plus a
+  run_id migration. `write_run_id_map(<evaluations experiment dir>, layout="hashed-v2",
+  spec_root=source_path("config/<experiment_path>"))` rebuilds
+  `evaluations/<experiment_path>/RUN_ID_MAP.json` once per wave as `{layout, version, versions,
+  history, by_hash: {hash: {params, version, wave_id, state, rig}}, by_params, configs}` —
+  `configs` embeds each run's `.run_config.json` and `versions`/`history` are copies of the two
+  identity files, so the plot server's Runs view needs only the map — and hard-fails when one hash
+  maps to two param sets. Between rebuilds the map may lag a
+  running wave. The map is a derived index that any rig may regenerate; the run's `.run_id.json`
+  and `.run_config.json` remain the identity record.
+- **Lookup.** `run-identity` resolves a hash, a hash prefix, or a `k=v` query to its run and
+  params, following `RUN_ID_HISTORY.json` so an old hash resolves to its current one
+  (`resolve_run_id_hash` does the same in code). Never recompute or guess a hash by hand.
+
+The identity is one experiment-wide spec, not a per-artifact preference. Checkpoints, evaluations
+(including `.run_config.json`, `.run_id.json`, and `.status.json`), and the `scripts/` and `logs/`
+run folders all call `run_id_path(..., layout=RUN_ID_PATH_LAYOUT)`; the WandB hash tag (the
+WandB run name under a legacy pin), log-line identity, and the EXPERIMENTS.md `run_id` column use
+`run_id_name(...)`. Do not introduce a second
+layout constant or hand-build a path. Once any checkpoint, evaluation, or plot output or wave
+README/script exists, `RUN_ID_PATH_LAYOUT` is immutable; under `hashed-v2` the identity params then
+evolve only through a run_id migration (§ run_id schema evolution).
+
+### Legacy pins
+
+An experiment that already recorded `segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, or
+`hashed-v1` keeps that pin and every rule in this subsection verbatim. None of them — `segments-v2`
+included — is ever offered to a new experiment; the helper keeps rendering each unchanged.
+
 - Authoritative record: constants in the experiment's `.py` that the path-building code actually
   uses — `RUN_ID_PARAMS`, `RUN_ID_PATH_LAYOUT`, and (for `segments-v2`) `RUN_ID_SEGMENTS`;
   mirrored in the experiment's EXPERIMENTS.md section header.
-- Config yamls stay pure hydra params — **no run_id metadata in yaml**.
 - Renderings via `code/common/run_id.py`:
   - **path form** (`run_id_path`) → used under `checkpoints/` and `evaluations/`, and by plotting
-    code to **read** them; `plots/` output paths never use it. Every experiment records one
+    code to **read** them; `plots/` output paths never use it. The experiment records one
     authoritative `RUN_ID_PATH_LAYOUT` beside `RUN_ID_PARAMS` and passes it as the keyword-only
-    `layout` argument. New experiments always record `"segments-v2"` and pass
-    `segments=RUN_ID_SEGMENTS`: an ordered list of segments, one directory each; items inside a
-    segment are joined with `,`; an item is either an explicit param rendered as its
-    `key=value`, or a user-named hash group rendered as `name=<16 hex>`, e.g.
-    `model=mlp/hidden=64-128/optim_params=b4c2e09f6dbe6b4b,seed=0/`.
-  - **Safe characters only.** Every proposed or rendered run path uses only `A-Z a-z 0-9 . _ -`
+    `layout` argument. A `segments-v2` experiment passes `segments=RUN_ID_SEGMENTS`: an ordered
+    list of segments, one directory each; items inside a segment are joined with `,`; an item is
+    either an explicit param rendered as its `key=value`, or a user-named hash group rendered as
+    `name=<16 hex>`, e.g. `model=mlp/hidden=64-128/optim_params=b4c2e09f6dbe6b4b,seed=0/`.
+  - **Safe characters only.** Every rendered `segments-v2` path uses only `A-Z a-z 0-9 . _ -`
     inside keys and values, plus the structural `=`, `,`, and `/`; nothing is ever percent-encoded
     or otherwise escaped. A list renders its items joined with `-` (`[64, 128]` → `64-128`). A
     value with no such rendering — a space, `/`, a dict, an empty or nested list, or a list item
     containing `-` such as a negative number — is refused by the helper and must be placed in a
-    hash group at the election; never rename or rewrite the value to make it fit.
+    hash group; never rename or rewrite the value to make it fit.
   - A group hash is the first 16 hex digits of sha256 over `segments-v2`, the group name, and the
     group's ordered lossless (percent-encoded) pairs, so identical group values hash identically
     everywhere; the encoded form never appears in a path.
   - **run name** (`run_id_name`) → the `segments-v2` path form as one POSIX string. It is the
-    WandB run name, the EXPERIMENTS.md `run_id` column, and the Slurm job-name suffix, so every
-    surface shows the identity the directories show.
-  - **run folder** (`<run_id folder>`) → the run-scoped folder under `scripts/` and `logs/`: the
-    same `run_id_path` directories as `evaluations/` under `segments-v2`, `<run_id_flat>` under a
-    legacy pin.
+    WandB run name, the EXPERIMENTS.md `run_id` column, and the Slurm job-name suffix.
+  - **run folder** (`<run_id folder>`) → the same `run_id_path` directories as `evaluations/`
+    under `segments-v2` and `segments-v1`, `<run_id_flat>` under `nested`, `collapsed-v1`, and
+    `hashed-v1`.
   - **flat form** (`run_id_flat`) — e.g. `model=mlp,lr=1e-3,seed=0` → the complete, lossless
     identity string with every param explicit. It is recorded in `.run_id.json`,
-    `RUN_ID_MAP.json`, and the WandB config under every layout. Legacy pins also use it as the run
-    folder and WandB run name. One run name ≡ one wandb run, 1:1; it maps to one EXPERIMENTS.md
-    row **per wave** the run took part in (see below).
+    `RUN_ID_MAP.json`, and the WandB config under every legacy layout. `nested`, `collapsed-v1`,
+    and `hashed-v1` also use it as the run folder and WandB run name. One run name
+    ≡ one wandb run, 1:1; it maps to one EXPERIMENTS.md row **per wave** the run took part in.
 - **Never lossy, never silently colliding.** Under `segments-v2`, `guard_run_config` atomically
   writes `.run_id.json` (`{layout, segments, path, run_id_flat, run_id, groups}`) into every run
   directory and hard-fails when that directory already records a different run; its I/O is O(1)
   per run and it never scans other runs or writes the map. `check_run_id_plan` rescans every
-  existing record and checks path and group-hash collisions plus the filesystem-limit preflight
-  for every planned run before dispatch. `write_run_id_map` rebuilds the experiment-wide two-way
-  map `evaluations/<experiment_path>/RUN_ID_MAP.json` (`by_path`, `by_run_id_flat`, and
-  `groups: name -> hash -> params`) once per wave, hard-failing when one group hash maps to two
-  different param sets; between rebuilds the map may lag a running wave. A 64-bit hash is never assumed collision-free;
-  the checks make any collision stop the work instead of overwriting or skipping. The map is a
-  derived index that any rig may regenerate; the run's `.run_id.json` and `.run_config.json` remain
-  the identity record.
-- **Legacy pins.** `segments-v1` is the segments layout with percent-encoded pairs (a list
-  rendered as `hidden=%5B64%2C128%5D`) and group hashes over `segments-v1`; every `segments-v2`
-  rule above except the safe-character rendering applies to it. `nested` (`model=mlp/lr=1e-3/seed=0/`), `collapsed-v1`
-  (`model=mlp,lr=1e-3,seed=0/`), and `hashed-v1` (`rid-<16 hex>` of the collapsed string, with its
-  own `.run_id.json` and `by_hash` map) stay valid only for experiments that already recorded
-  them. The helper keeps rendering them unchanged; never offer them to a new experiment.
+  existing record and checks path and group-hash collisions, the filesystem-limit preflight, and
+  the config comparison for every planned run before dispatch. `write_run_id_map` rebuilds the
+  experiment-wide two-way map `evaluations/<experiment_path>/RUN_ID_MAP.json` (`by_path`,
+  `by_run_id_flat`, and `groups: name -> hash -> params`) once per wave, hard-failing when one
+  group hash maps to two different param sets. A 64-bit hash is never assumed collision-free; the
+  checks make any collision stop the work instead of overwriting or skipping.
+- `segments-v1` is the segments layout with percent-encoded pairs (a list rendered as
+  `hidden=%5B64%2C128%5D`) and group hashes over `segments-v1`; every `segments-v2` rule above
+  except the safe-character rendering applies to it. `nested` (`model=mlp/lr=1e-3/seed=0/`),
+  `collapsed-v1` (`model=mlp,lr=1e-3,seed=0/`), and `hashed-v1` (`rid-<16 hex>` of the collapsed
+  string, with its own `.run_id.json` and `by_hash` map, which hard-fails when one hash maps to two
+  param sets) stay valid only for experiments that already recorded them.
+- **Legacy segments rendering dialogue.** Every election under a legacy segments pin ran the
+  dialogue below with the user, in both engineering modes and even when the all-explicit path fit;
+  neither engineering mode may decide any step alone. A re-election is possible only before the
+  experiment's first output, and a fresh election then uses `hashed-v2`, so the dialogue is never
+  started for new work; it is kept because it defines what an existing `RUN_ID_SEGMENTS` record
+  means. `plots/` is not run-scoped and is out of scope here.
+  1. **Full picture.** Show the complete all-explicit checkpoint and evaluation templates through
+     their leaf names, one directory per param in elected order, with each component's byte count
+     and the full-path total from `preflight_run_id_path`, and flag each overflow.
+  2. **Hide.** The user chooses which params stay explicit and which are hashed. A hashed param
+     starts as its own one-param group named after the param; the user may rename it.
+  3. **Group.** Propose merging hashed params into named groups that follow the Hydra config tree
+     (e.g. everything hashed under `optim/` becomes `optim_params`). The user accepts, renames,
+     splits, or regroups; heterogeneous groups are allowed.
+  4. **Place and render.** The user decides the order of items and which items share a directory;
+     there is no default placement. Show the rendered checkpoint and evaluation paths for a
+     representative run with the same byte report and repeat any step until the user approves a
+     rendering that overflows nothing.
 
-### run-output path layout approval
+  The approval is recorded as `RUN_ID_PATH_LAYOUT = "segments-v2"` plus `RUN_ID_SEGMENTS`. Never
+  silently hash: no hash exists outside a user-approved group (or a pinned legacy `hashed-v1`), and
+  no ad-hoc truncation, dropped param, shortened pair, or fallback exists.
+- Under a legacy pin, all run-scoped surfaces call
+  `run_id_path(..., layout=RUN_ID_PATH_LAYOUT, segments=RUN_ID_SEGMENTS)`; the `scripts/` and
+  `logs/` folders, WandB run names, log-line identity, and EXPERIMENTS.md row identity of
+  `nested`, `collapsed-v1`, and `hashed-v1` continue to use `run_id_flat`. Preflight
+  the exact paths; any collision, ambiguity, or overflow stops.
+- **Immutability.** Once any checkpoint, evaluation, or plot output or wave README/script exists,
+  `RUN_ID_PARAMS`, `RUN_ID_PATH_LAYOUT`, and `RUN_ID_SEGMENTS` are immutable: preserve the literal
+  pin, segment spec, and checked-in renderer, and never propose, approve, or perform an in-place
+  path-layout change, regrouping, or move from a legacy pin to another layout. An existing project
+  with outputs is pinned to its checked-in renderer even when it predates the explicit constant;
+  never reinterpret it through the helper default. If the checked-in renderer is ambiguous, stop.
+  To use another layout after the boundary, create a new numbered sub-experiment with its own
+  `hashed-v2` identity; leave every old artifact, wave record, script/log identity, WandB run, and
+  EXPERIMENTS.md row untouched. A run_id migration applies to `hashed-v2` experiments only.
 
-Every run_id election runs this rendering dialogue with the user, in both engineering modes and
-even when the all-explicit path fits; neither engineering mode may decide any step alone.
-`plots/` is not run-scoped and is out of scope here.
+### Plot communication
 
-1. **Full picture.** Show the complete all-explicit checkpoint and evaluation templates through
-   their leaf names, one directory per param in elected order, with each component's byte count
-   and the full-path total from `preflight_run_id_path`, and flag each overflow.
-2. **Hide.** The user chooses which params stay explicit and which are hashed. A hashed param
-   starts as its own one-param group named after the param; the user may rename it.
-3. **Group.** Propose merging hashed params into named groups that follow the Hydra config tree
-   (e.g. everything hashed under `optim/` becomes `optim_params`). The user accepts, renames,
-   splits, or regroups; heterogeneous groups are allowed.
-4. **Place and render.** The user decides the order of items and which items share a directory;
-   there is no default placement. Show the rendered checkpoint and evaluation paths for a
-   representative run with the same byte report and repeat any step until the user approves a
-   rendering that overflows nothing.
+Plot communication is **agent-decided in both engineering modes** (do, then report); which plots to
+make stays mode-owned. Before every creation or modification of code under `visualizations/`, read
+the producer's identity (`load_run_id_spec` under `hashed-v2`, `RUN_ID_PARAMS` under a legacy pin)
+and metric definitions, then decide one exact communication specification for every plot the code
+produces:
 
-Record the approval as `RUN_ID_PATH_LAYOUT = "segments-v2"` plus `RUN_ID_SEGMENTS`. Never silently
-hash: no hash exists outside a user-approved group (or a pinned legacy `hashed-v1`), and no ad-hoc
-truncation, dropped param, shortened pair, or fallback exists.
-
-The approved value is one experiment-wide layout and segment spec, not a per-artifact preference.
-Checkpoints, evaluations (including `.run_config.json`, `.run_id.json`, and `.status.json`), and
-the `scripts/` and `logs/` run folders must all call
-`run_id_path(..., layout=RUN_ID_PATH_LAYOUT, segments=RUN_ID_SEGMENTS)`; WandB run names, log-line
-identity, and the EXPERIMENTS.md `run_id` column use `run_id_name(...)`. Under a legacy pin, the
-`scripts/` and `logs/` folders, WandB run names, log-line identity, and EXPERIMENTS.md row identity
-continue to use `run_id_flat`. Do not introduce a second layout constant or hand-build a path.
-Preflight the exact proposed paths; any collision, ambiguity, or overflow stops for a revised
-explicit decision.
-
-Layout election is available only while the experiment has no checkpoint, evaluation, or plot
-output and no wave record. Inspect those surfaces before running the dialogue. Once any such
-output or wave README/script exists, `RUN_ID_PATH_LAYOUT` and `RUN_ID_SEGMENTS` are immutable:
-preserve the literal pin, segment spec, and checked-in renderer, and never propose, approve, or
-perform an in-place path-layout change, regrouping, or move from a legacy pin to `segments-v2`.
-
-An existing project with outputs is pinned to its checked-in renderer even when it predates the
-explicit constant; never reinterpret it through the helper default. If the checked-in renderer is
-ambiguous, stop. To use another layout after the boundary, create a new numbered sub-experiment
-with its own `RUN_ID_PARAMS`, `RUN_ID_PATH_LAYOUT`, and `RUN_ID_SEGMENTS`; leave every old
-artifact, wave record, script/log identity, WandB run, and EXPERIMENTS.md row untouched.
-
-### Plot communication approval
-
-Before every creation or modification of code under `visualizations/`, read the producer's
-authoritative ordered `RUN_ID_PARAMS` and metric definitions, then propose one exact communication
-specification for every plot the code produces:
-
-- the title template, including every fixed RUN_ID param as `key={value}` in elected order;
+- the title template, including every fixed identity param as `key={value}`, and its arrangement
+  across title lines — decided per plot for what that plot's reader needs, never copied from
+  another plot's arrangement;
 - visible in-figure text explaining what every plotted metric measures and whether higher, lower,
-  a target/range, or no universal direction is preferable; and
+  a target/range, or no universal direction is preferable;
 - the exact placement of that text in an axis label, subtitle, legend, annotation, or in-figure
-  caption; and
+  caption;
+- the interaction affordances the figure's shape earns; and
 - every complete project-relative export path rooted at `plots/` and ending in its leaf filename.
 
-If runtime values prevent a concrete path before the code edit, propose the complete path template
-and identify every placeholder explicitly. Before rendering, show every fully resolved concrete
-export path, including its leaf filename, and wait for explicit user approval. An approved template
-does not approve any concrete destination. A new or changed resolved path always reopens approval,
-even when it conforms to the approved template; do not render before that approval.
+If runtime values prevent a concrete path before the code edit, decide the complete path template
+and identify every placeholder explicitly. Before rendering, resolve every concrete export path,
+including its leaf filename, and reject any destination that collides with a different script's
+output. A template never stands in for a concrete destination: a new or changed resolved path is
+resolved and collision-checked again, even when it conforms to the template. State the
+specification, every fully resolved concrete export path, and the reasoning behind each choice in
+the reply, and record them in the journal entry for the plot.
 
-Omit aggregated RUN_ID params and describe aggregation semantically only when useful. When no
-RUN_ID param is fixed, propose a semantic title with no fabricated RUN_ID part and state that fact.
+Omit aggregated identity params and describe aggregation semantically only when useful. When no
+identity param is fixed, use a semantic title with no fabricated identity part and state that fact.
 Cover multiple axes, panels, derived metrics, and visual encodings separately unless one shared
 explanation is unambiguous. Stop rather than guess when metric semantics cannot be grounded in the
 producer, evaluation schema, or scientific contract. External or historical figures that the
-workflow did not author are not retroactively subject to this gate.
+workflow did not author are not retroactively subject to this contract.
 
-The agent proposes the exact wording, punctuation, formatting, placement, and export paths, but only
-the user may accept them. Wait for explicit user approval before the code edit. This is always
-protected: engineering-auto cannot approve it, and a prior approval does not
-carry across a later plotting-code edit even when the proposed specification remains unchanged. An
-unchanged-code rerender may reuse approval only when every resolved concrete export path is
-byte-for-byte identical to the previously explicitly approved concrete path.
-After rendering, verify that the accepted text is present, legible, and unchanged inside the figure;
-external prose alone is insufficient.
+After rendering, verify that the decided text is present, legible, and unchanged inside the figure;
+external prose alone is insufficient. The user may override any part of a specification at any
+time; the override becomes that plot's specification.
 
 ### Plot execution
 
@@ -317,40 +424,63 @@ checkout cannot be identified or reached.
 
 Do not invoke `sweep-dispatch`, `rig-sync`, or
 `experiments-tracking` for plotting. Do not create orchestration control state, mint a wave id,
-generate a launch script, dispatch work, start tmux, or add/update `EXPERIMENTS.md` rows. Plot
-plot-specification approval and the applicable engineering-mode decisions remain in force; this
+generate a launch script, dispatch work, start tmux, or add/update `EXPERIMENTS.md` rows. The
+plot-communication checks and the applicable engineering-mode decisions remain in force; this
 fast path only removes experiment-launch machinery from plotting.
 
 ### run_id schema evolution
 
-A run_id election is only valid for the config schema it was elected against. Any change that
-**adds, removes, or renames a behavior-affecting config param** (integration, refactor, new
-feature) invalidates the current election ⇒ **mandatory re-election before any new run launches**.
-In engineering-manual mode the user decides; in engineering-auto mode the agent decides inside the
-approved envelope and records its reasoning. A param may stay out only when the applicable owner
-rules it non-identifying (e.g. a pure logging knob). Otherwise, new runs varying the new param
-would collide with old artifacts at the same `<run_id path>` — silently overwriting them, or
-worse, being skipped by an artifact-guarded wave script as "already done".
+An identity is only valid for the config schema it was elected against. Any change that **adds,
+removes, or renames a behavior-affecting config param** (integration, refactor, new feature)
+invalidates it ⇒ **mandatory re-election before any new run launches**. A param may stay out only
+when it is ruled non-identifying (e.g. a pure logging knob), with the reason recorded. Otherwise,
+new runs varying the new param would collide with old artifacts at the same `<run_id path>` —
+silently overwriting them, or worse, being skipped by an artifact-guarded wave script as "already
+done".
 
-- **Before any checkpoint, evaluation, or plot output or wave README/script exists** — update and
-  re-elect `RUN_ID_PARAMS` normally under the active engineering mode, and rerun the rendering
-  dialogue for `RUN_ID_SEGMENTS`. Update the constants and EXPERIMENTS.md section header before
-  the first launch.
-- **After any one of those surfaces exists** — `RUN_ID_PARAMS` and `RUN_ID_SEGMENTS` are
-  immutable under every layout (`segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, `hashed-v1`). Never change
-  the identity schema in place. Create a new numbered sub-experiment with the re-elected params and
-  its own pinned layout and segments; leave the established experiment and all of
+- **`hashed-v2`, before any checkpoint, evaluation, or plot output or wave README/script exists** —
+  rewrite the current `RUN_ID_VERSIONS.json` entry and the EXPERIMENTS.md section header before
+  the first launch (agent-decided, reported).
+- **`hashed-v2`, after any one of those surfaces exists** — never edit a version in place. Append
+  the next identity version and move every existing run to its new hash with a **run_id
+  migration** through `run-identity` (`migrate plan`, then `migrate apply` only after the user
+  approves the plan — it always asks). The plan refuses while a wave of the experiment is live,
+  while a rig that ran it is unreachable, or while `rigsync collect --check` reports rig records
+  the hub lacks; it backfills each new param for old runs from their `.run_config.json`, or from
+  the code at their wave tag with its source cited, asks the user only for a value it cannot
+  determine, and refuses when two old runs would map to one new hash. `collect --check` needs
+  every rig of the experiment's earlier waves reachable: when one is not (for example an expired
+  `leonardo` certificate), restore access (renew the certificate) and rerun — there is no bypass. `apply` renames the run
+  directories on every machine, replaces each old hash in the run records, wave READMEs and
+  scripts, supervisor state, EXPERIMENTS.md, and JOURNAL.md, renames the WandB runs, appends
+  `config/<experiment_path>/RUN_ID_VERSIONS.json` and `RUN_ID_HISTORY.json` on the hub (tracked;
+  the migration's one commit carries them, and the next wave deploys them to the rigs), rebuilds
+  and verifies the map on every machine, and writes a rollback manifest and `followups.json` under
+  `evaluations/<experiment_path>/.run_id_migrations/<ts>/`. Updating the EXPERIMENTS.md section
+  preamble (`run_id version:` and params line), the new param columns, and each row's label cell
+  from `followups.json` is the migration's follow-up, done by the agent through
+  `experiments-tracking`; `apply` itself only replaces hash strings there.
+  A run_id migration is the **only** operation that may rewrite those surfaces; Git history and
+  tags stay untouched and resolve through `RUN_ID_HISTORY.json`. The experiment stays one
+  experiment: no new sub-experiment is created.
+- **Legacy pins** (`segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, `hashed-v1`) — before
+  any of those surfaces exists, re-elect normally; a fresh election uses `hashed-v2`. After any one
+  of them exists, `RUN_ID_PARAMS` and `RUN_ID_SEGMENTS` are immutable under every legacy layout.
+  Never change the identity schema in place. Create a new numbered sub-experiment with the
+  re-elected params and its own `hashed-v2` identity; leave the established experiment and all of
   its records untouched.
 - **Runtime guard (canon)** — every run writes its **full resolved config snapshot** to
   `evaluations/NNN_exp/<run_id path>/.run_config.json` via `guard_run_config` in
   `code/common/run_id.py`, called before any artifact is written. If a snapshot already exists
   and differs on any param while the run_id is identical ⇒ **hard error** naming the differing
-  params ("run_id collision — re-elect before first output or create a new numbered
-  sub-experiment"); never proceed. Same-config reruns
-  (resume/retry) pass.
-- Corollary: `guard_run_config` catches collisions only once Python starts. An artifact-guarded
-  skip does not enter Python, so the mandatory sweep coverage gate must reject schema drift
-  before scripts are generated. Never describe the runtime guard as validating a skipped run.
+  params (under `hashed-v2` it calls for the next identity version plus a run_id migration; under
+  a legacy pin, "re-elect before first output or create a new numbered sub-experiment"); never
+  proceed. Same-config reruns (resume/retry) pass.
+- Corollary: `guard_run_config` catches collisions only once Python starts, and an
+  artifact-guarded skip never enters Python. So `check_run_id_plan` compares every planned run's
+  resolved config with the `.run_config.json` already at its path before any script is generated:
+  identical passes, any difference blocks the wave. That makes the sweep coverage gate mechanical
+  instead of a reading of the grid. Never describe the runtime guard as validating a skipped run.
 - **External tracking carries the same full config (canon)** — where wandb is used, the run
   config is `wandb_config(cfg)`: the identical `resolved_config(cfg)` payload that
   `.run_config.json` stores, plus a `provenance` namespace. One resolver, every recorder — a
@@ -369,7 +499,7 @@ of those is its own wave. Waves are the unit of launch, of on-disk execution his
 EXPERIMENTS.md rows.
 
 - **wave id** — `YYYYMMDD-HHMMSS` (e.g. `20260731-162043`). Minted **once per dispatch**, on
-  rig-4090 in local time, at the moment the assignment is authorized under the active mode (the id is in the paths, so
+  rig-4090 in local time, at the moment the pool is fixed (the id is in the paths, so
   it must exist before generation). **Shared by every rig and lane in that dispatch** — one
   decision, one id — which is what makes `grep -r <wave_id> scripts/` return the whole dispatch.
 - **Reused verbatim on crash recovery.** A post-reboot relaunch is not a new dispatch: same id,
@@ -396,7 +526,7 @@ Canonical layout — one self-guarded script kind:
 
 ```
 scripts/NNN_exp/<run_id folder>/wave_<wave_id>/
-    README.md                     # what this wave is; written once at launch, never updated
+    README.md                     # what this wave is; written once at launch, never updated (a run_id migration excepted)
     wave.sh                       # this run's invocation in this wave; names no rig and no GPU
 scripts/NNN_exp/_lanes/wave_<wave_id>/
     lane.sh                       # the loop every lane of this wave runs
@@ -441,16 +571,17 @@ contract can still be monitored and reconciled, but not recovered.
 
 Two runs of one identity must never be live in two waves at once: they would share status and
 artifact paths. Dispatch refuses such an overlap; the user may instead **supersede** the old
-placement (its queued or running work is cancelled with approval, and its rows become
-`superseded`). A finished wave's worktree and any environment no remaining worktree uses are
-**pruned** only after the user approves a dry run that the skills propose on their own; a pruned
+placement (its queued or running work is cancelled only with the user's approval in every mode,
+and its rows become `superseded`). A finished wave's worktree and any environment no remaining
+worktree uses are **pruned** only after the user approves a dry run that the skills propose on
+their own; a pruned
 wave remains recoverable, because its worktree is recreated from its tag.
 
 ### Tested Git revision gate
 
 Every current wave is one immutable Git deployment decision:
 
-- Generate its scripts and approved tracking/JOURNAL changes, stage the intended patch, and run
+- Generate its scripts and tracking/JOURNAL changes, stage the intended patch, and run
   the experiment's recorded smoke command on rig-4090. Record the command and pass criterion in
   the experiment's EXPERIMENTS.md section header.
 - If the smoke leaves the staged patch and execution worktree unchanged, commit it and create
@@ -480,7 +611,7 @@ Every wave also carries one immutable user-space environment identity:
   `uv sync --frozen --exact --no-install-project`. `env_key` hashes the revision's `uv.lock`,
   `.python-version`, and uv pin, so waves with identical inputs share an environment. A new key
   can always be built; an existing key is never re-synced while an active wave uses it.
-- `[environment].name` (asked of the user once) names the hub **development** environment, which
+- `[environment].name` (asked of the user once, in `research-project-init`'s consolidated approval) names the hub **development** environment, which
   the user owns and no wave uses. The pre-dispatch smoke runs in the keyed environment of the
   staged lock, which is the same key the committed wave gets.
 - The fingerprint hashes the lock, exact interpreter, and canonical installed package
@@ -546,9 +677,9 @@ templates), which the scripts also enforce at runtime.
 
 The weight is **per GPU**, so a rig's capacity in the assignment math is
 `weight × (number of free GPUs)`. Never hardcode the server's card count — it can change, and
-the number of GPUs actually free varies per dispatch: **read the fleet board (`rig-board`) and,
-in manual mode, confirm with the user which rigs AND which GPUs are free** before proposing an
-assignment (`sweep-dispatch`, pre-launch gates). The board is the only cross-project view: a lane
+the number of GPUs actually free varies per dispatch: **read the fleet board (`rig-board`)
+and take every lane it shows free on the envelope's rigs** before building a pool
+(`sweep-dispatch`, pre-launch gates; a standing policy, reported rather than asked). The board is the only cross-project view: a lane
 held by another project is not free capacity, and a foreign card on a shared rig is never ours. For `behemoth`
 that math defaults to `2.0 × 1` (gpu0), and only a grant for this wave widens it.
 
@@ -601,13 +732,26 @@ Three consequences worth stating explicitly, because each one has bitten:
 Storage exhaustion is a **stop condition, not a warning**: a run that dies partway through leaves
 truncated checkpoints that look like real ones. Gate before launching, not after.
 
-Low disk is a reason to **offload, never a reason to leave a rig's GPU idle**. A wave lists such a
-rig under `offload`; `rig-sync offload` then keeps copying that wave's outputs to the hub and
+Low disk is a reason to **offload, never a reason to leave a rig's GPU idle**. Every non-hub lane
+rig in a wave's pool is listed under `offload` by default (Slurm targets such as `leonardo`
+excluded; `supervisor.py` rejects offload entries that are not lane rigs); `rig-sync offload` then keeps copying that
+wave's outputs to the hub and
 frees a rig's copy of a checkpoint only when it is provably this wave's, no longer being written,
 not the checkpoint a resume needs, and SHA-256-identical on the hub — leaving a
 `<file>.offloaded.json` receipt in its place. Evaluations are copied and kept. This is the one
 deletion that is authorized per wave rather than per action, because nothing is lost: wherever a
 final artifact is a completion signal, its receipt is one too.
+
+Evaluations **converge on the hub**. `rig-sync collect` copies a wave's evaluation records
+(`.run_id.json`, `.run_config.json`, `.status.json`, metrics, results) from every pool rig to the
+same relative path on the hub, never deleting on either side and never touching checkpoints;
+`sweep-supervisor` runs it every cycle and once more when the wave finishes, and it runs without
+asking. A `.run_id.json` or `.run_config.json` that differs between rig and hub is a hard error a
+person settles. `rigsync collect --check` lists every rig run record the hub lacks or holds
+differently; the dispatch run_id gate and a run_id migration both require it to pass (the hub is
+**reconciled**). It needs every rig of the experiment's earlier waves reachable; when one is not
+(for example an expired `leonardo` certificate), restore access (renew the certificate) and rerun.
+There is no bypass.
 
 Passwordless ssh between all rigs. Git/GitHub distributes launch source; selected artifact
 movement is **`rig-sync`'s job**. Run its bundled doctor's checks before dispatch; if they fail,
@@ -629,11 +773,11 @@ provenance is valid, disagreements resolve as **artifacts win**, then `.status.j
    [templates.md](templates.md#codecommonstatuspy)):
 
    ```json
-   {"schema_version": 2, "state": "running|done|failed", "started": "<ISO>",
+   {"schema_version": 3, "state": "running|done|failed", "started": "<ISO>",
     "ended": "<ISO>|null", "elapsed_s": 1234.5, "heartbeat": "<ISO>",
     "progress": "epoch 3/10", "progress_completed": 3, "progress_total": 10,
     "progress_unit": "epoch",
-    "wave_id": "20260731-162043", "gpu": "0",
+    "wave_id": "20260731-162043", "rig": "rig-4090", "gpu": "0",
     "source_revision": "<40-char-sha>", "source_tag": "wave--20260731-162043",
     "environment_fingerprint": "<64-char-sha256>"}
    ```
@@ -642,11 +786,11 @@ provenance is valid, disagreements resolve as **artifacts win**, then `.status.j
    artifact, the wave script atomically ensures `failed` as a fallback. One file per run →
    conflict-free by construction;
    deleting a run's outputs resets its status. `wave_id` is what lets reconciliation match the
-   file to the right EXPERIMENTS.md row (rows are per (run, wave)); `gpu` rides along for
-   awareness. Source fields prove which tested commit executed and must resolve through the wave
+   file to the right EXPERIMENTS.md row (rows are per (run, wave)); `rig` (schema v3, from the
+   lane's `LANE_RIG`) and `gpu` ride along for awareness and for the plot server's Runs view. Source fields prove which tested commit executed and must resolve through the wave
    tag during reconciliation. The placement/source fields and environment fingerprint reach
-   Python as **environment variables** exported by the wave script (`WAVE_ID`,
-   `CUDA_VISIBLE_DEVICES`, `SOURCE_REVISION`, `SOURCE_TAG`, `ENVIRONMENT_FINGERPRINT`), deliberately
+   Python as **environment variables** exported by the wave script or its lane (`WAVE_ID`,
+   `LANE_RIG`, `CUDA_VISIBLE_DEVICES`, `SOURCE_REVISION`, `SOURCE_TAG`, `ENVIRONMENT_FINGERPRINT`), deliberately
    **not** as config params — they must stay
    out of the `guard_run_config` snapshot, or every re-launch in a new wave or on a different
    card would trip the run_id-collision hard error. That is a snapshot rule, not a blanket ban:
@@ -694,7 +838,8 @@ is missing, stop rather than promise supervision nobody will deliver.
   this wave's own runs, jobs, files, and lanes without asking; rigs, cards (a `behemoth` card
   without a grant above all), budget, and other projects' or users' resources outside it always
   return to the user. Every kill first proves the process is this wave's own.
-- The chat's part is a fixed ten-minute printout anchored to the confirmed launch time, emitted
+- The chat's part is a fixed printout every N minutes (the user's N, else every minute, as
+  `sweep-supervisor` defaults) anchored to the confirmed launch time, emitted
   even when nothing changed, using the host's scheduled wake-up — never a blocking shell `sleep`.
   It pastes the supervisor's script-rendered printout verbatim: the wave ETA first, one line per
   rig when there are several, and a warning line only for what needs a look — never free-form
@@ -708,14 +853,15 @@ is missing, stop rather than promise supervision nobody will deliver.
   question on its own line. Per-run progress, heartbeat ages, each lane's next run, and the
   estimate basis belong to the per-GPU table, shown on request. Say `ETA unavailable` when no
   sound basis exists.
-- Treat a schema-v2 heartbeat older than three minutes as stale. Diagnose rig/session/process
-  health before trusting its ETA or declaring a hang. Legacy statuses remain readable, but a
-  future launch must first upgrade target experiment code to schema-v2 structured telemetry.
+- Treat a schema-v2 or schema-v3 heartbeat older than three minutes as stale. Diagnose
+  rig/session/process health before trusting its ETA or declaring a hang. Schema v3 is v2 plus
+  `rig`; both are current. Legacy statuses remain readable, but a future launch must first upgrade
+  target experiment code to schema-v2 structured telemetry.
 
 ## Root-file duties
 
 - EXPERIMENTS.md = **state** (tables, reconciled from the three signals above; includes each
   run's `started`/`ended`/`elapsed` — reference runtimes for estimating future temporal
   budgets). JOURNAL.md = **story** (prose: what, why, what was learned; append-only, never
-  rewritten).
+  rewritten — except that a run_id migration replaces old run hashes with their new ones).
 - New env var read by code → `.env.example` updated in the SAME turn.

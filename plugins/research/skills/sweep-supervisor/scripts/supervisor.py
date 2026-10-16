@@ -92,6 +92,7 @@ URGENT_EVENTS = frozenset(
         "answer",
         "wave-terminal",
         "offload-failed",
+        "collect-failed",
         "claim-refused",
     }
 )
@@ -767,6 +768,35 @@ def simulate(queue: dict, lane_free: dict[tuple[str, str], float | None], vram: 
 # ───────────────────────────── one cycle ─────────────────────────────
 
 
+def run_rigsync(wave: Wave, settings: Settings, *argv: str) -> subprocess.CompletedProcess:
+    """rig-sync as a subprocess against this wave's project, so its output and exit code are its own."""
+    command = [sys.executable, str(RIGSYNC_SCRIPT), "--root", str(wave.project_root), "--registry", str(settings.registry_path), *argv]
+    return subprocess.run(command, capture_output=True, text=True, check=False)
+
+
+def collect_once(wave: Wave, settings: Settings, queue: dict, rig: str, at: datetime) -> dict:
+    """One `rigsync collect` of one rig into `queue["collect_last"]`. Never raises.
+
+    Returns `ok` and, only when the failure is new (it differs from the rig's last recorded one),
+    `problem`: the caller logs that, so a rig that keeps failing the same way is one event, not
+    one a minute.
+    """
+    try:
+        result = run_rigsync(wave, settings, "collect", "--wave", queue["wave_id"], "--machine", rig, "--confirm")
+        code, stdout, stderr = result.returncode, result.stdout, result.stderr
+    except (OSError, subprocess.SubprocessError) as exc:
+        code, stdout, stderr = 1, "", str(exc)
+    last = queue.setdefault("collect_last", {})
+    previous = (last.get(rig) or {}).get("problem")
+    if code != 0:
+        problem = (stderr.strip() or stdout.strip())[-300:] or f"rigsync collect exited {code}"
+        last[rig] = {"at": iso(at), "ok": False, "problem": problem}
+        return {"ok": False, "problem": problem if problem != previous else None}
+    summary = [line for line in stdout.splitlines() if line.startswith("[collect-summary]")]
+    last[rig] = {"at": iso(at), "ok": True, "summary": summary[-1] if summary else "nothing to collect"}
+    return {"ok": True}
+
+
 class Cycle:
     """One pass over one wave. Everything it changes goes through the ledger."""
 
@@ -1112,19 +1142,22 @@ class Cycle:
         with contextlib.suppress(board.BoardError), contextlib.redirect_stdout(io.StringIO()):
             board.release(self.board_config, args)
 
-    # -- offload ----------------------------------------------------------
+    # -- offload and collect ----------------------------------------------
 
     def offload(self, queue: dict, rig: str) -> None:
-        command = [
-            sys.executable, str(RIGSYNC_SCRIPT), "--root", str(self.wave.project_root), "--registry", str(self.settings.registry_path),
-            "offload", "--machine", rig, "--wave", queue["wave_id"], "--confirm",
-        ]
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        result = run_rigsync(self.wave, self.settings, "offload", "--machine", rig, "--wave", queue["wave_id"], "--confirm")
         summary = [line for line in result.stdout.splitlines() if line.startswith("[offload-summary]")]
         if result.returncode != 0:
             self.event("offload-failed", rig=rig, problem=(result.stderr.strip() or result.stdout.strip())[-300:])
         elif summary:
             queue.setdefault("offload_last", {})[rig] = {"at": iso(self.at), "summary": summary[-1]}
+
+    def collect(self, queue: dict, rig: str) -> bool:
+        """Pull one rig's evaluation records to the hub; never raises. Returns whether it succeeded."""
+        outcome = collect_once(self.wave, self.settings, queue, rig, self.at)
+        if outcome.get("problem"):
+            self.event("collect-failed", rig=rig, problem=outcome["problem"])
+        return outcome["ok"]
 
     # -- the pass ---------------------------------------------------------
 
@@ -1187,10 +1220,24 @@ class Cycle:
                 if rig in queue["offload"]:
                     self.offload(queue, rig)
                     sh(machine, 'mkdir -p "$1" && : > "$1/offload"', rig_state_dir(machine, queue["wave_id"]))
+            # every rig's evaluation records converge on the hub, each pass; a rig whose probe failed waits
+            collected: set[str] = set()
+            for rig in queue["pool"]:
+                if views[rig] is not None and not self.config.machines[rig].local:
+                    if self.collect(queue, rig):
+                        collected.add(rig)
             terminal = all(run["state"] in TERMINAL_STATES for run in queue["runs"])
             if terminal and not queue.get("finished_at"):
+                # the final collect: every rig, before the wave is reported terminal and the run_id map is rebuilt
+                missed = [
+                    rig for rig in sorted(queue["pool"])
+                    if not self.config.machines[rig].local and rig not in collected and not self.collect(queue, rig)
+                ]
                 queue["finished_at"] = iso(self.at)
-                self.event("wave-terminal", done=sum(r["state"] == "done" for r in queue["runs"]), failed=sum(r["state"] == "failed" for r in queue["runs"]))
+                self.event(
+                    "wave-terminal", done=sum(r["state"] == "done" for r in queue["runs"]), failed=sum(r["state"] == "failed" for r in queue["runs"]),
+                    collect_failed=missed,
+                )
             snapshot = build_snapshot(queue, runtime, wave, vram, self.at)
             last_refresh = parse_iso(runtime.get("board_refreshed_at"))
             if last_refresh is None or (self.at - last_refresh).total_seconds() >= BOARD_REFRESH_EVERY_S:
@@ -1278,6 +1325,7 @@ def build_snapshot(queue: dict, runtime: dict, wave: Wave, vram: dict, at: datet
         "agent_last_result": runtime.get("agent_last_result"),
         "cycled_at": iso(at),
         "offload": {rig: (queue.get("offload_last") or {}).get(rig) for rig in queue["offload"]},
+        "collect": dict(sorted((queue.get("collect_last") or {}).items())),
         "lanes": rows,
         # per rig, so a Slurm rig (whose rows are only its live jobs) still reports what it finished
         "rigs": {
@@ -1783,7 +1831,7 @@ def decide(wave: Wave, settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
-def finish(wave: Wave, board_config, args: argparse.Namespace) -> int:
+def finish(wave: Wave, board_config, settings: Settings, args: argparse.Namespace) -> int:
     rigsync.require_confirmation(args.dry_run, args.confirm)
     queue = wave.load()
     live = [run["id"] for run in queue["runs"] if run["state"] not in TERMINAL_STATES]
@@ -1794,6 +1842,17 @@ def finish(wave: Wave, board_config, args: argparse.Namespace) -> int:
         return 0
     with WaveLock(wave):
         queue = wave.load()
+        # a last collect from every rig, so the hub holds every evaluation record the wave produced
+        config = project_config(wave, settings)
+        for rig in sorted(queue["pool"]):
+            if rig in config.machines and config.machines[rig].local:
+                continue
+            outcome = collect_once(wave, settings, queue, rig, now())
+            if not outcome["ok"]:
+                problem = queue["collect_last"][rig]["problem"]
+                print(f"[finish] collect from {rig} failed; its evaluation records may be missing on the hub: {problem}")
+                if outcome.get("problem"):
+                    wave.log("collect-failed", rig=rig, problem=problem)
         # rig-sync prune reads this mark: an abandoned wave is over too
         queue["finished_at"] = queue.get("finished_at") or iso(now())
         wave.save(queue)
@@ -1946,7 +2005,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "wake":
             return wake(wave, settings, args.reason)
         if args.command == "finish":
-            return finish(wave, board_config, args)
+            return finish(wave, board_config, settings, args)
     except (SupervisorError, rigsync.RigSyncError, board.BoardError) as exc:
         print(f"supervisor: {exc}", file=sys.stderr)
         return 2

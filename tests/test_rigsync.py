@@ -1527,7 +1527,8 @@ class OffloadTests(unittest.TestCase):
         done = self.add_run("model=done", "done")
         self.register([done])
         with mock.patch.object(rigsync, "_sha256_local", return_value="0" * 64):
-            self.offload()
+            with self.assertRaisesRegex(rigsync.RigSyncError, "does not match rig's after the copy"):
+                self.offload()
         self.assertEqual(sorted(p.name for p in (self.rig_root / done["checkpoint_dir"]).iterdir()), ["step1.pt", "step2.pt"])
 
     def test_offload_dry_run_and_a_full_hub_change_nothing(self) -> None:
@@ -1563,6 +1564,142 @@ class OffloadTests(unittest.TestCase):
         for expected, override in cases.items():
             arguments = {**base, "file": file, **override}
             self.assertIn(expected, rigsync.offload_deletable(**arguments) or "", expected)
+
+    # -- collect ---------------------------------------------------------
+
+    def add_records(self, run: dict, run_id: str = "abc123", age: float = 1000) -> None:
+        import os as _os, time as _time
+
+        old = _time.time() - age
+        for name, body in ((".run_id.json", f'{{"run_id": "{run_id}"}}'), (".run_config.json", '{"lr": 0.1}')):
+            path = self.rig_root / run["eval_dir"] / name
+            write(path, body)
+            _os.utime(path, (old, old))
+
+    def collect(self, machines=None, **kwargs) -> str:
+        out = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(out):
+            rigsync.collect(self.config, machines, WAVE, kwargs.get("dry_run", False), kwargs.get("confirmed", True))
+        return out.getvalue()
+
+    def check(self, waves=(WAVE,)) -> str:
+        out = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(out):
+            rigsync.collect_check(self.config, None, list(waves))
+        return out.getvalue()
+
+    def rig_files(self) -> list[str]:
+        return sorted(str(p.relative_to(self.rig_root)) for p in self.rig_root.rglob("*") if p.is_file())
+
+    def test_collect_copies_evaluations_only_and_deletes_nothing(self) -> None:
+        done = self.add_run("model=done", "done")
+        live = self.add_run("model=live", "running")
+        self.add_records(done)
+        self.add_records(live, run_id="def456")
+        self.register([done, live])
+        hub_only = self.hub_root / done["eval_dir"] / "notes.txt"
+        write(hub_only, "written on the hub")
+        before = self.rig_files()
+        out = self.collect()
+        self.assertEqual(self.rig_files(), before, "collect never deletes or changes anything on the rig")
+        self.assertTrue(hub_only.exists(), "collect never deletes anything on the hub")
+        for run in (done, live):
+            for name in (".run_id.json", ".run_config.json", ".status.json", "result.json"):
+                self.assertTrue((self.hub_root / run["eval_dir"] / name).is_file(), name)
+        self.assertFalse((self.hub_root / "checkpoints").exists(), "checkpoints are offload's, never collect's")
+        self.assertIn("[collect-summary] rig: copied 8", out)
+        self.assertIn("copied 0", self.collect(), "a second pass finds the hub already holds everything")
+
+    def test_collect_waits_on_young_files_of_live_runs_but_takes_status_fresh(self) -> None:
+        import os as _os
+
+        live = self.add_run("model=live", "running")
+        done = self.add_run("model=done", "done")
+        for run in (live, done):
+            path = self.rig_root / run["eval_dir"] / "metrics.jsonl"
+            write(path, "{}")
+            _os.utime(path, None)
+            _os.utime(self.rig_root / run["status_path"], None)
+        self.register([live, done])
+        self.collect()
+        self.assertTrue((self.hub_root / live["status_path"]).exists())
+        self.assertFalse((self.hub_root / live["eval_dir"] / "metrics.jsonl").exists(), "may still be open")
+        self.assertTrue((self.hub_root / done["eval_dir"] / "metrics.jsonl").exists(), "a finished run's files are final")
+
+    def test_collect_replaces_progress_but_never_a_finished_hub_record(self) -> None:
+        import json as _json, os as _os, time as _time
+
+        live = self.add_run("model=live", "running")
+        self.register([live])
+        self.collect()
+        status = self.rig_root / live["status_path"]
+        status.write_text(_json.dumps({"state": "running", "wave_id": WAVE, "step": 9}))
+        _os.utime(status, None)
+        result = self.rig_root / live["eval_dir"] / "result.json"
+        result.write_text('{"step": 9}')
+        older = _time.time() - 500
+        _os.utime(result, (older, older))
+        self.collect()
+        self.assertEqual(_json.loads((self.hub_root / live["status_path"]).read_text())["step"], 9)
+        self.assertEqual((self.hub_root / live["eval_dir"] / "result.json").read_text(), '{"step": 9}')
+        # the hub now says finished (say, the run completed elsewhere): a newer unfinished rig copy is not applied
+        hub_status = self.hub_root / live["status_path"]
+        hub_status.write_text(_json.dumps({"state": "done", "wave_id": WAVE}))
+        _os.utime(hub_status, (older, older))
+        hub_result = self.hub_root / live["eval_dir"] / "result.json"
+        hub_result.write_text('{"final": true}')
+        _os.utime(hub_result, (older - 100, older - 100))
+        status.write_text(_json.dumps({"state": "running", "wave_id": WAVE, "step": 10}))
+        _os.utime(status, None)
+        out = self.collect()
+        self.assertEqual(_json.loads(hub_status.read_text())["state"], "done")
+        self.assertEqual(hub_result.read_text(), '{"final": true}')
+        self.assertIn("[conflict] rig:", out)
+
+    def test_collect_identity_mismatch_is_a_hard_error_and_overwrites_nothing(self) -> None:
+        clash = self.add_run("model=clash", "done")
+        fine = self.add_run("model=fine", "done")
+        self.add_records(clash, run_id="rig-version")
+        self.add_records(fine)
+        self.register([clash, fine])
+        hub_record = self.hub_root / clash["eval_dir"] / ".run_id.json"
+        write(hub_record, '{"run_id": "hub-version"}')
+        out = io.StringIO()
+        with redirect_stdout(out), self.assertRaisesRegex(rigsync.RigSyncError, r"model=clash/\.run_id\.json: the hub's run record differs"):
+            rigsync.collect(self.config, None, WAVE, False, True)
+        self.assertEqual(hub_record.read_text(), '{"run_id": "hub-version"}')
+        self.assertFalse((self.hub_root / clash["eval_dir"] / "result.json").exists(), "nothing of a clashing run moves")
+        self.assertTrue((self.hub_root / fine["eval_dir"] / ".run_id.json").exists(), "other runs still converge")
+
+    def test_collect_check_fails_until_reconciled(self) -> None:
+        done = self.add_run("model=done", "done")
+        self.add_records(done)
+        self.register([done])
+        with self.assertRaisesRegex(rigsync.RigSyncError, "2 rig run record"):
+            self.check()
+        self.assertFalse((self.hub_root / "evaluations").exists(), "--check changes nothing")
+        self.collect()
+        self.assertIn("OK rig wave", self.check())
+        self.assertIn("OK rig wave", self.check(waves=rigsync.registered_waves(self.config)))
+        (self.hub_root / done["eval_dir"] / ".run_config.json").write_text('{"lr": 0.2}')
+        out = io.StringIO()
+        with redirect_stdout(out), self.assertRaises(rigsync.RigSyncError):
+            rigsync.collect_check(self.config, None, [WAVE])
+        self.assertIn("differs on the hub: evaluations/000_exp/model=done/.run_config.json", out.getvalue())
+
+    def test_collect_dry_run_changes_nothing_and_the_hub_is_a_no_op(self) -> None:
+        done = self.add_run("model=done", "done")
+        self.add_records(done)
+        self.register([done])
+        with self.assertRaisesRegex(rigsync.RigSyncError, "refusing write without --confirm"):
+            self.collect(confirmed=False)
+        out = self.collect(dry_run=True, confirmed=False)
+        self.assertIn("[dry-run] rig: copy evaluations/000_exp/model=done/.run_id.json", out)
+        self.assertIn("would copy 4", out)
+        self.assertFalse((self.hub_root / "evaluations").exists())
+        out = self.collect(machines=[self.config.machines["hub"]])
+        self.assertIn("[local] hub is the hub; there is nothing to collect", out)
+        self.assertFalse((self.hub_root / "evaluations").exists())
 
     def test_restore_pushes_hub_checkpoints_without_receipts(self) -> None:
         done = self.add_run("model=done", "done")

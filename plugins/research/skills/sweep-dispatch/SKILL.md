@@ -10,51 +10,69 @@ are running the wave belongs to `sweep-supervisor`, a hub service plus an unatte
 feed, rebalance, recover, offload, and report it; this skill never polls a rig. Canon: `../research-project-init/references/conventions.md`. Templates: [references/templates.md](references/templates.md). CINECA Leonardo is one more target: when a wave assigns any run to `leonardo`, read [references/cineca-slurm.md](references/cineca-slurm.md) before gate 2 and follow it wherever it differs from this file; do not load it otherwise. Dispatch always happens **from rig-4090** (the hub). GitHub distributes one tested, tagged commit through `rig-sync`, which materializes it as the wave's own detached worktree `.waves/<wave_id>/` on every assigned machine; `environment-sync` establishes runtime parity in the wave's lock-keyed environment `.envs/<env_key>/`; rsync is only for artifacts. If either gate fails, stop. Because every wave executes from its own worktree and environment, waves of different revisions may run on the same machine at the same time; GPU exclusivity stays `rig-board`'s job.
 
 Read `program/00-execution-agreement.md` first and require the Research 2.0 surfaces. Stop on a
-legacy layout; do not offer migration or recover it as-is. In engineering-manual mode, preview and
-wait at the assignment/deployment/launch gate. In engineering-auto mode, choose and execute only
-inside the approved repo, branch, rigs/GPUs, compute/budget, and destination envelope. Shared
-`behemoth` cards beyond gpu0, new destinations, destructive actions, and envelope expansion remain
-protected in every mode.
+legacy layout; do not offer migration or recover it as-is. Dispatch is a **standing policy** in
+both engineering modes (conventions, "Approval tiers"): inside the approved repo, branch, rigs/GPUs,
+compute/budget, Leonardo core-hour ceiling, and destination envelope, build the pool, deploy, and
+launch, and report each gate's preview instead of waiting on it. Shared `behemoth` cards beyond
+gpu0, new destinations, destructive actions, cancelling or superseding runs outside the wave's
+standing authorization (another wave's runs, a supersede, a running Slurm job), prune, exceeding
+the Leonardo core-hour ceiling, and envelope expansion always ask, in every mode.
 
 Vocabulary (canon): a **wave** is one dispatch decision, identified by `YYYYMMDD-HHMMSS`; its **pool** is the set of lanes and cluster caps it may use; a **lane** is one GPU set on one rig; a **slice** is whatever part of the wave a rig ends up running. Lanes run in parallel, runs within a lane run sequentially, and a run belongs to the lane that claims it from the wave's queue — never to a lane chosen in advance. A **run** is one experiment execution; a **job** is one Slurm allocation on `leonardo`, which hosts exactly one run — the cluster has jobs, not lanes. Use both words strictly and never call a job a run or a lane.
 
 ## Before anything launches — mandatory gates
 
 1. **run_id coverage check** — every param varied in the sweep grid, AND every behavior-affecting
-config param added/changed since this experiment's last runs, must be in `RUN_ID_PARAMS`. If not,
-**halt** and route through `experiment-design` before generating anything — otherwise new runs
-collide with old artifacts: overwritten, or silently skipped as "done". `RUN_ID_PARAMS` may change
-only while no checkpoint, evaluation, or plot output and no wave README or script exists. After the
-first such surface, any identity-schema change under `segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1`
-(including any change to `RUN_ID_SEGMENTS`) requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the established tree. The artifact
-guard is only sound under this gate: `guard_run_config` catches collisions after Python starts, but
-an artifact-skipped run never enters Python.
-1b. **helper safety check** — verify `code/common/run_id.py` provides the canonical safe-character
+config param added/changed since this experiment's last runs, must be in the identity (the current
+`config/<experiment_path>/RUN_ID_VERSIONS.json` entry under `hashed-v2`; `RUN_ID_PARAMS` under a
+legacy pin). The check is mechanical: first require `rigsync collect --check --wave <id>` to pass
+for every earlier wave of the experiment (the hub must hold every rig's run records, or a
+comparison against it proves nothing). It needs every rig of those waves reachable; when one is
+not (for example an expired `leonardo` certificate), restore access (renew the certificate) and
+rerun — there is no bypass; then `check_run_id_plan` (gate 1c) compares every planned run's resolved config with the
+`.run_config.json` already at its path. Identical passes (resume/retry); any difference **halts**
+before anything is generated and names the differing keys — otherwise new runs collide with old
+artifacts: overwritten, or silently skipped as "done". Under `hashed-v2`, the route is the next
+identity version plus a run_id migration through `run-identity` (always asks; `experiment-design`
+§ 2b). Under a legacy `segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1` pin,
+`RUN_ID_PARAMS` may change only while no checkpoint, evaluation, or plot output and no wave README
+or script exists; after the first such surface, any identity-schema change (including any change to
+`RUN_ID_SEGMENTS`) requires a new numbered sub-experiment; never backfill, rename, move, or rewrite
+the established tree outside a run_id migration. The artifact guard is only sound under this gate:
+`guard_run_config` catches collisions after Python starts, but an artifact-skipped run never enters
+Python.
+1b. **helper safety check** — verify `code/common/run_id.py` provides the canonical
 `run_id_path(cfg, params, *, layout='nested', segments=None)`/`run_id_name`/`run_id_flat`
-renderers with `segments-v2` support (lists joined with `-`, unsafe values refused, never
-escaped), `check_run_id_plan`, `preflight_run_id_path`, the
-`.run_id.json`/`RUN_ID_MAP.json` writer (plus legacy `hashed-v1` support when the experiment pins
-that layout) with atomic identity writes and a `guard_run_config` that never scans other runs or
+renderers with `hashed-v2` support (`load_run_id_spec`, `run_id_hash_v2`, `run_id_label`,
+`resolve_run_id_hash`) and the legacy renderings the experiment's pin needs (`segments-v2`: lists
+joined with `-`, unsafe values refused, never escaped), `check_run_id_plan` with its config
+comparison, `preflight_run_id_path`, the `.run_id.json`/`RUN_ID_MAP.json` writer that hard-fails
+on a hash mapping to two param sets, atomic identity writes, and a `guard_run_config` that never scans other runs or
 rewrites the map (a per-run map rebuild is quadratic in the wave and cannot finish at scale), `hydra_override_arg`, and
 the single config resolver
 `resolved_config`/`wandb_config` (a wandb run whose config is anything less than the whole
 resolved config is unfixable after the fact). Any older helper makes the project
 unsupported; halt without upgrading it in place.
 1c. **run-path layout check** — read the experiment's literal `RUN_ID_PATH_LAYOUT`; it must be
-`segments-v2` (with the experiment's recorded `RUN_ID_SEGMENTS`) or a legacy `segments-v1`,
-`nested`, `collapsed-v1`, or `hashed-v1` pin. Treat that record as pinned for the project, pass it to the canonical
-`run_id_path` helper, and resolve the checkpoint and evaluation run directories before generating
-the wave. They must use the same selected layout. `plots/` is not run-scoped. Under `segments-v2`,
-run `check_run_id_plan(<planned cfgs>, RUN_ID_PARAMS, RUN_ID_SEGMENTS, <evaluations experiment dir>,
-path_roots=(<checkpoints experiment dir>, <scripts experiment dir>, <logs experiment dir>),
-layout=RUN_ID_PATH_LAYOUT)` over
-the whole wave on the hub before generating anything; any overflow, duplicate, path collision, or
-group-hash collision blocks dispatch and routes back to `experiment-design`. Never infer the layout from directory depth, reconstruct it from a
-flat id, or silently adopt a different layout. A missing, unsupported, or mixed layout blocks
-dispatch. Once any checkpoint, evaluation, or plot output or any wave README/script exists, its
-recorded `RUN_ID_PATH_LAYOUT` is immutable. Any disagreement or mixed tree blocks dispatch and
-routes new work to a new numbered sub-experiment with a fresh layout/schema decision; never move,
-rename, or rewrite the existing artifacts, README files, or scripts.
+`hashed-v2` (with its tracked `config/<experiment_path>/RUN_ID_VERSIONS.json`) or a legacy `segments-v2`/`segments-v1` (with the
+recorded `RUN_ID_SEGMENTS`), `nested`, `collapsed-v1`, or `hashed-v1` pin. Treat that record as
+pinned for the project, pass it to the canonical `run_id_path` helper, and resolve the checkpoint
+and evaluation run directories before generating the wave. They must use the same selected layout.
+`plots/` is not run-scoped. Under `hashed-v2`, run `check_run_id_plan(<planned cfgs>, params, None,
+<evaluations experiment dir>, path_roots=(<checkpoints experiment dir>, <scripts experiment dir>,
+<logs experiment dir>), layout="hashed-v2", spec_root=source_path("config/<experiment_path>"))`
+with `params` from `load_run_id_spec(spec_root)`; under a legacy
+segments pin, `check_run_id_plan(<planned cfgs>, RUN_ID_PARAMS, RUN_ID_SEGMENTS, <evaluations
+experiment dir>, path_roots=(...), layout=RUN_ID_PATH_LAYOUT)`. Run it over the whole wave on the
+hub before generating anything; any overflow, duplicate, path or hash collision, or config
+difference against an existing `.run_config.json` blocks dispatch and routes back to
+`experiment-design`. Never infer the layout from directory depth, reconstruct it from a flat id,
+or silently adopt a different layout. A missing, unsupported, or mixed layout blocks dispatch.
+Once any checkpoint, evaluation, or plot output or any wave README/script exists, its recorded
+`RUN_ID_PATH_LAYOUT` is immutable. Any disagreement or mixed tree blocks dispatch; under a legacy
+pin it routes new work to a new numbered sub-experiment with a fresh `hashed-v2` identity. Never
+move, rename, or rewrite the existing artifacts, README files, or scripts, except through an
+approved run_id migration.
 1d. **environment contract check** — require exact uv/Python pins, current `uv.lock`, the standard
 `code/common/environment.py`, and the project GPU smoke. Waves run only in the lock-keyed
 environment `environment-sync` builds under `.envs/`; the `[environment].name` directory is the
@@ -91,15 +109,18 @@ before launch and say exactly what is missing: a wave nobody supervises is not l
 chat promises updates it cannot deliver.
 2. **Resolve usable rigs and GPUs.** First read the fleet board: `rig-board` `status --reconcile`
 shows every lane held by any project on the hub, foreign cards, and unreachable rigs. Held and
-foreign lanes are not free capacity in any mode. In manual mode, present the board and ask. In
-auto mode, use only the named rig/GPU set in the envelope that the board shows free; if the
-envelope's lane is held, stop and report the holder and its ETA rather than waiting silently or
-moving elsewhere. Never infer availability from `nvidia-smi`. On
-`behemoth`, gpu0 is the only default. Any additional named card requires an explicit per-wave user
-grant regardless of mode and is never persisted. For `leonardo`, first pass the certificate
-precondition in `references/cineca-slurm.md` (print the login commands and wait when it fails),
-then require the project account for this wave and check its remaining budget with `saldo -b`;
-every job is one GPU, 8 cores, 128 GB unless the user states that a run needs more.
+foreign lanes are not free capacity in any mode. The pool is **every lane the board shows free on
+the envelope's rigs and GPUs** — a standing policy in both modes: report the board and the pool you
+took, never ask which rigs are free. Held lanes stay out and are reported with their holder and
+ETA; when no envelope lane is free, report that and do not widen the pool, which always asks. Never
+infer availability from `nvidia-smi`. On `behemoth`, gpu0 is the only default. Any additional
+named card requires an explicit per-wave user grant regardless of mode and is never persisted. For
+`leonardo`, first pass the certificate precondition in `references/cineca-slurm.md` (print the
+login commands and wait when it fails), then require the project account declared in the envelope
+and its **Leonardo core-hour ceiling**, and check the account's remaining budget with `saldo -b`;
+every job is one GPU, 8 cores, 128 GB unless the user states that a run needs more. A wave whose
+estimate exceeds the ceiling (or the account's remaining hours) asks before dispatch; one inside it
+does not.
 3. **Build and authorize the pool.** There is no static assignment: the wave is one ordered
 queue, and every lane in the pool takes the next run it is eligible for when it has room, so a
 fast card takes more runs and a wrong estimate corrects itself as real runtimes arrive. The
@@ -108,22 +129,31 @@ lane's capacity is `weight × free GPUs` and the fleet spans a fourfold spread. 
 cost with the `experiments-tracking` hierarchy and order the queue **longest-first** (math in
 [references/templates.md](references/templates.md)). A rig short on disk is **never** left out
 for that reason: list it under `offload`, and `rig-sync offload` keeps freeing it while its lane
-waits instead of stopping. Present or record: the pool (rig, GPU set, per lane), the queue order,
+waits instead of stopping; every non-hub lane rig in the pool is listed under `offload` by
+default (Slurm targets such as `leonardo` excluded; `supervisor.py` rejects offload entries that
+are not lane rigs).
+Report — do not wait on — the pool (rig, GPU set, per lane), the queue order,
 **the simulated wave completion and each lane's expected share**, runs pinned to a rig by VRAM or
 data, offload rigs, exact smoke command, staged files, journal entry, branch/remote, environment
 key and fingerprint, provisioning dry run, commit/tag/push, worktree deployment scope, and any
 supersede, and the chat update interval in minutes (the user's number, else 1).
-`leonardo` is outside the balancing: its queue wait is not predictable, so the user
-sets its job cap and core-hour cap, each run it takes becomes one job, and its ETA is reported as
-scheduler estimate plus run estimate. Preview for it the account, partition/QOS, resource line,
-walltime basis, and the budget ceiling (`runs × walltime_h × 8` core-hours per job). State the
+`leonardo` is outside the balancing: its queue wait is not predictable, so dispatch sets its job
+cap and a core-hour cap, each run it takes becomes one job, and its ETA is reported as scheduler
+estimate plus run estimate. The execution agreement's Leonardo core-hour ceiling is the bound:
+setting the cap up to it at `register` (or raising it later with `pool --rig leonardo
+--core-hours-cap <n>`) is standing policy — do it, then report; exceeding it always asks. The
+scripts never read the ceiling, so check cap ≤ ceiling before `register`. Report for it the
+account, partition/QOS, resource line, walltime basis, and the budget estimate
+(`runs × walltime_h × 8` core-hours per job) against the ceiling. State the
 **standing authorization** this approval grants for the life of the wave: inside the pool,
-`sweep-supervisor` may start, move, requeue, and steal this wave's own runs, resubmit and cancel
-its own jobs, fetch data into declared caches, and free checksum-verified checkpoints on offload
-rigs, without asking again; everything outside the pool comes back to the user. Manual mode
-waits for approval; auto mode records that every item is within the envelope. Restate any
+`sweep-supervisor` may start, move, requeue, and steal this wave's own runs, resubmit its own
+jobs and cancel its own jobs the cluster has not started yet, raise the wave's `leonardo` cap up to
+the ceiling, fetch data into declared caches, and free checksum-verified checkpoints on offload
+rigs, without asking again; everything outside the pool comes back to the user. In both modes
+this preview is a report: record that every item is within the envelope and carry on. Anything
+outside it — a rig, card, or budget beyond the envelope — is an always-ask question. Restate any
 shared-GPU grant verbatim; a granted `behemoth` card is part of the pool for this wave only.
-4. **Mint the wave id** when the assignment is authorized: `date '+%Y%m%d-%H%M%S'` on rig-4090.
+4. **Mint the wave id** when the pool is fixed: `date '+%Y%m%d-%H%M%S'` on rig-4090.
 One id for the whole dispatch, shared by every rig and lane. Never use a semantic slug.
 
 ## Generate
@@ -151,11 +181,14 @@ scripts/NNN_exp/_lanes/wave_<wave_id>/
   `88` rather than dying mid-checkpoint and leaving a truncated artifact that looks real. It
   captures its own timestamped log under the mirror path in `logs/`, named after the lane that
   ran it.
-- The run folder comes from `code/common/run_id.py`. Under `segments-v2` it is the same
-  `run_id_path(..., segments=RUN_ID_SEGMENTS)` directories as `evaluations/`, and the wandb run
-  name, EXPERIMENTS.md `run_id` column, and Slurm job-name suffix are `run_id_name(...)`, so every
-  surface shows one identity. Under a legacy pin the selected `RUN_ID_PATH_LAYOUT` never changes
-  scripts, logs, or wandb naming: those remain flat `run_id_flat`.
+- The run folder comes from `code/common/run_id.py`. Under `hashed-v2` it is the same
+  `rid-<32 hex>` directory as `evaluations/`, and the EXPERIMENTS.md `run_id` column, Slurm
+  job-name suffix, and WandB hash tag are `run_id_name(...)` — the hash — with `run_id_label(...)`
+  as the readable label and WandB display name (`wandb.init(name=run_id_label(...),
+  tags=[run_id_name(...)], config=wandb_config(cfg))`), so every surface carries one identity. Under a legacy `segments-v2` or
+  `segments-v1` pin the same holds with the `run_id_path(..., segments=RUN_ID_SEGMENTS)`
+  directories; under the other legacy pins the selected `RUN_ID_PATH_LAYOUT` never changes scripts, logs, or wandb naming:
+  those remain flat `run_id_flat`.
   `ls scripts/NNN_exp/<run_id folder>/` is that run's execution history.
 - **Placement is recorded where it happens**: the supervisor's ledger records which lane claimed
   each run and when, the run's log file is named after that lane, and EXPERIMENTS.md gets `rig`
@@ -178,7 +211,7 @@ After generation and before any tmux launch:
    `scripts/`, or a root dependency manifest. Record a hash of the staged patch.
 2. Run the experiment's design-time smoke command on rig-4090 with the environment for the
    **staged** lock: `environment-sync provision --staged --machines rig-4090` (a new key is built
-   only if absent; authorize it like any provisioning), then `verify --staged --machines rig-4090`
+   only if absent; do, then report, like any provisioning), then `verify --staged --machines rig-4090`
    prints `ENVIRONMENT_DIR`; substitute it for the smoke command's `<env>` placeholder. Missing smoke
    metadata makes the project unsupported. After the smoke, require the same staged-patch hash and
    a clean execution tree; a test that rewrites source invalidates itself. The committed wave has
@@ -186,12 +219,12 @@ After generation and before any tmux launch:
 3. Commit as `dispatch(<NNN_exp>): wave <wave_id>`. Refuse an existing `wave--<wave_id>` ref, then
    create that annotated tag at `HEAD`. Push the configured branch and exact tag without force;
    verify GitHub resolves both to the full local commit SHA. A push failure blocks dispatch.
-4. Run `rig-sync deploy-revision --wave <wave_id>` first as a dry run, obtain authorization under
-   the active engineering mode, then confirm it for **every rig in the pool plus the hub together**
+4. Run `rig-sync deploy-revision --wave <wave_id>` first as a dry run, then confirm it (do, then
+   report: no prompt) for **every rig in the pool plus the hub together**
 (any lane may claim any run, so every pool rig needs the worktree and the environment). It
    adds the detached worktree `.waves/<wave_id>` at the tagged commit on each machine, only
    verifies one that already exists, and never moves any main checkout — so other waves keep
-   running untouched. Run `verify-revision` across the same set. Then run the approved
+   running untouched. Run `verify-revision` across the same set. Then run
    `environment-sync provision --wave <wave_id> --revision <sha>` when its dry run showed changes
    and `verify --wave <wave_id> --revision <sha>` for the full set plus every pool lane; it
    prints the `ENVIRONMENT_DIR` and fingerprint the wave scripts carry. Do not launch unless
@@ -206,7 +239,7 @@ The chat never launches a lane, polls a rig, or writes the fleet board. After th
 environment gates pass:
 
 1. Write the supervisor manifest and run `sweep-supervisor` `register --wave <wave_id> --manifest
-   <file> --dry-run`, show it, then `--confirm` under the active engineering mode.
+   <file> --dry-run`, then `--confirm`, and report what was registered.
 2. The supervisor service does the rest on its next cycle: it repeats `rig-sync verify-revision`
    and read-only `environment-sync verify` for a lane immediately before starting it (when the
    lane is on the current local hub it runs the same commands without self-SSH), starts each lane
@@ -236,8 +269,10 @@ agent. What stays true here:
 - **Unsupported layouts** — any noncanonical or mixed checkpoint/evaluation layout, or any wave
   whose recorded status/artifact paths disagree with the experiment's pinned `RUN_ID_PATH_LAYOUT`,
   blocks recovery. Never infer slash depth or substitute different paths. Route changed work to a
-  new numbered sub-experiment; otherwise ordinary recovery continues only from the unchanged wave
-  README/script, pin, tag, and revision.
+  new numbered sub-experiment (legacy pin) or a run_id migration (`hashed-v2`); otherwise ordinary
+  recovery continues only from the unchanged wave README/script, pin, tag, and revision. After a
+  run_id migration the comparison is against the post-migration commit: the migration rewrote the
+  README and script to the new hash, and that commit, not the wave tag's text, is "unchanged".
 - **Statically assigned waves** (launched before the pull queue: `wave_<rig>_gpu<ids>` scripts, no
   `.waves/_state/<wave_id>`) may be monitored and reconciled, never recovered or relaunched.
 - **Slurm jobs** — state mapping and the guarded resubmit live in `references/cineca-slurm.md`.
@@ -278,6 +313,7 @@ dirty worktrees by itself; still list only waves whose rows are all terminal.
 
 The periodic table, the urgent reports, the final summary, board refresh and release, and the
 once-per-wave `write_run_id_map(<evaluations experiment dir>, layout=RUN_ID_PATH_LAYOUT)` rebuild
+(`spec_root=` the tracked `config/<experiment_path>` under `hashed-v2`)
 (never per run) belong to `sweep-supervisor`. When its final table is posted, propose the prune
 (§ Pruning finished waves).
 
@@ -285,7 +321,7 @@ once-per-wave `write_run_id_map(<evaluations experiment dir>, layout=RUN_ID_PATH
 
 - Append `todo` rows to EXPERIMENTS.md for every generated run — **one row per (run, wave)**, carrying its wave id, with `rig` and `gpu` blank until a lane claims it. A run re-launched in a later wave gets a **new row**, never an in-place update.
 - After `register`, the supervisor's agent is the single writer of those rows for the life of the wave (format and rules: `experiments-tracking`); the board is written by the supervisor service.
-- Put the exact launch entry in the assignment record (`research-journal` skill). Apply its
-  mode-aware authorization before the dispatch commit; never bypass the journal hook. The entry names
+- Append the exact launch entry with `research-journal` (do, then report: show it after writing)
+  before the dispatch commit; never bypass the journal hook. The entry names
   the wave, rationale, environment fingerprint, the pool and offload rigs, the standing
   authorization, and any one-off behemoth authorization.

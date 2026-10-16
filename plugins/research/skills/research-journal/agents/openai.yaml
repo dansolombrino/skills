@@ -1,4 +1,4 @@
 interface:
   display_name: "Research Journal"
   short_description: "Record research decisions, events, and findings"
-  default_prompt: "Use $research-journal to record this research event according to the active engineering mode."
+  default_prompt: "Use $research-journal to append this research event to JOURNAL.md and show me the entry afterwards."

@@ -70,7 +70,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "9.5.0")
+        self.assertEqual(manifest["version"], "10.0.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -92,7 +92,7 @@ class ResearchContractTests(unittest.TestCase):
             path.parent.name
             for path in (ROOT / "plugins/research/skills").glob("*/SKILL.md")
         }
-        self.assertEqual(len(skill_names), 10)
+        self.assertEqual(len(skill_names), 11)
         self.assertEqual(
             skill_names,
             {
@@ -103,6 +103,7 @@ class ResearchContractTests(unittest.TestCase):
                 "research-project-init",
                 "rig-board",
                 "rig-sync",
+                "run-identity",
                 "sweep-dispatch",
                 "sweep-supervisor",
                 "visualizations",
@@ -147,7 +148,7 @@ class ResearchContractTests(unittest.TestCase):
             self.assertIn("start tmux", contract)
             self.assertIn("`EXPERIMENTS.md` rows", contract)
 
-    def test_plot_export_paths_are_always_user_owned_and_fully_resolved(self) -> None:
+    def test_plot_export_paths_are_agent_decided_fully_resolved_and_recorded(self) -> None:
         skills = ROOT / "plugins/research/skills"
         contracts = {
             "visualizations": skills / "visualizations/SKILL.md",
@@ -160,74 +161,65 @@ class ResearchContractTests(unittest.TestCase):
         for name, path in contracts.items():
             contract = " ".join(path.read_text().lower().split())
             with self.subTest(contract=name):
+                # Every check of the old approval gate survives, minus the wait.
                 self.assertIn("project-relative", contract)
                 self.assertIn("`plots/`", contract)
                 self.assertIn("leaf filename", contract)
                 self.assertIn("placeholder", contract)
-                self.assertIn("resolved", contract)
-                self.assertIn("before rendering", contract)
-                self.assertRegex(
-                    contract,
-                    r"fully resolved concrete export path.{0,100}"
-                    r"(?:wait for|received) explicit user approval",
-                )
                 self.assertIn(
-                    "approved template does not approve any concrete destination",
+                    "before rendering, resolve every concrete export path, including its leaf filename",
                     contract,
                 )
+                self.assertIn("collides with a different script's output", contract)
                 self.assertIn(
-                    "new or changed resolved path always reopens approval",
+                    "new or changed resolved path is resolved and collision-checked again, "
+                    "even when it conforms to the template",
                     contract,
                 )
-                self.assertIn(
-                    "even when it conforms to the approved template",
-                    contract,
-                )
-                self.assertRegex(
-                    contract,
-                    r"do not (?:accept a )?render before that approval",
-                )
-                self.assertIn("byte-for-byte identical", contract)
-                self.assertIn("previously explicitly approved concrete path", contract)
-                self.assertNotRegex(
-                    contract,
-                    r"reopen approval (?:only )?if .{0,60}(?:does not|doesn't) conform",
-                )
+                self.assertIn("every fully resolved concrete export path", contract)
+                # The decision is the agent's in both modes, and its reasoning is recorded.
+                self.assertIn("reasoning", contract)
+                self.assertIn("journal", contract)
+                for gone in (
+                    "wait for explicit user approval",
+                    "reopens approval",
+                    "only the user may",
+                    "engineering-auto cannot",
+                    "engineering-auto may not bypass",
+                    "byte-for-byte identical to the previously explicitly approved",
+                ):
+                    self.assertNotIn(gone, contract)
 
-        pre_edit_evidence = {
-            "visualizations": (
-                "propose the complete path template",
-                "explicit acceptance before editing plotting code",
-            ),
-            "conventions": (
-                "propose the complete path template",
-                "explicit user approval before the code edit",
-            ),
-            "execution agreement": (
-                "user must explicitly approve before the plotting-code edit",
-                "leaf-filename template and every identified placeholder",
-            ),
-        }
         ownership_evidence = {
-            "visualizations": ("engineering-auto may not bypass this gate",),
+            "visualizations": (
+                "is agent-decided in both engineering modes",
+                "decide the complete path template",
+                "state in the reply the specification, every fully resolved concrete export path, "
+                "and the reasoning",
+                "record the same in the `research-journal` entry",
+            ),
             "conventions": (
-                "only the user may accept them",
-                "engineering-auto cannot approve it",
+                "plot communication is **agent-decided in both engineering modes**",
+                "decide the complete path template",
+                "record them in the journal entry for the plot",
+                "verify that the decided text is present, legible, and unchanged inside the figure",
             ),
             "execution agreement": (
-                "only the user may approve these protected path choices",
-                "engineering-auto cannot bypass them",
+                "the agent decides each exact title",
+                "leaf-filename template and every placeholder",
+                "stated in the reply and the journal",
             ),
         }
-
         for name, path in contracts.items():
             contract = " ".join(path.read_text().lower().split())
-            with self.subTest(contract=name, rule="pre-edit approval"):
-                for evidence in pre_edit_evidence[name]:
-                    self.assertIn(evidence, contract)
-            with self.subTest(contract=name, rule="user ownership"):
+            with self.subTest(contract=name, rule="agent ownership"):
                 for evidence in ownership_evidence[name]:
                     self.assertIn(evidence, contract)
+
+        # Which plots to make stays with the mode; the core plugin's gates are untouched.
+        visualization = " ".join(contracts["visualizations"].read_text().split())
+        self.assertIn("**Which plots to make** is mode-owned", visualization)
+        self.assertIn("manual mode asks what the user wants", visualization)
 
     def test_single_producer_plots_preserve_full_experiment_hierarchy(self) -> None:
         skills = ROOT / "plugins/research/skills"
@@ -298,7 +290,8 @@ class ResearchContractTests(unittest.TestCase):
         # Whole file and trimmed selection, both under the leaf name, never gated.
         self.assertIn("Two download buttons, always.", visualization)
         self.assertIn("assets/plot-download.js", visualization)
-        self.assertIn("need no proposal or approval", visualization)
+        self.assertIn("not part of the communication specification", " ".join(visualization.split()))
+        self.assertIn("the user cannot decline them", " ".join(visualization.split()))
         for needle in ("All runs", "Selection", "data-plot-leaf", "plotSelectedRuns", "plot-data"):
             self.assertIn(needle, asset)
         # The shared file must not keep the viewer's injected <base>.
@@ -343,7 +336,7 @@ class ResearchContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid run_id path layout"):
             run_id_path(cfg, params, layout="collapsed")
 
-    def test_hashed_v1_is_consent_gated_and_never_lossy(self) -> None:
+    def test_hashed_v1_stays_legacy_and_never_lossy(self) -> None:
         import hashlib
         import tempfile
 
@@ -391,11 +384,16 @@ class ResearchContractTests(unittest.TestCase):
         )
         tracking = " ".join((skills / "experiments-tracking/SKILL.md").read_text().split())
         for text in (design, conventions):
-            self.assertIn("never silently hash", text.lower())
             self.assertIn("hashed-v1", text)
             self.assertIn("RUN_ID_MAP.json", text)
             self.assertRegex(text, r"(?i)legacy pins")
-            self.assertRegex(text, r"(?i)never offer (?:them|it) to a new experiment")
+            self.assertRegex(
+                text, r"(?i)(?:never offer a legacy pin|is ever offered) to a new experiment"
+            )
+            # every hash map, legacy hashed-v1 included, refuses a hash naming two param sets
+            self.assertRegex(text, r"hard-fail\w* when one hash maps to two param sets")
+        # a legacy segments record never hides a hash the user did not approve
+        self.assertIn("never silently hash", conventions.lower())
         self.assertIn("`hash` column", tracking)
         self.assertIn("RUN_ID_MAP.json", tracking)
 
@@ -424,13 +422,24 @@ class ResearchContractTests(unittest.TestCase):
                 self.assertIn("run_id_flat", contract)
 
         compact_design = " ".join(design.split())
-        self.assertIn("one authoritative experiment-wide", compact_design)
-        self.assertIn("Never mix layouts", compact_design)
+        self.assertIn('Record `RUN_ID_PATH_LAYOUT = "hashed-v2"`', compact_design)
+        self.assertIn("run_id_path(cfg, params, layout=RUN_ID_PATH_LAYOUT)", compact_design)
+        self.assertIn(
+            "Never hand-build a path or mix layouts across run-scoped surfaces", compact_design
+        )
         self.assertIn("RUN_ID_SEGMENTS", compact_design)
         compact_conventions = " ".join(conventions.split())
-        self.assertIn("one experiment-wide layout and segment spec", compact_conventions)
         self.assertIn(
-            "must all call `run_id_path(..., layout=RUN_ID_PATH_LAYOUT, segments=RUN_ID_SEGMENTS)`",
+            "The identity is one experiment-wide spec, not a per-artifact preference",
+            compact_conventions,
+        )
+        self.assertIn(
+            "run folders all call `run_id_path(..., layout=RUN_ID_PATH_LAYOUT)`",
+            compact_conventions,
+        )
+        # legacy segments pins keep passing their recorded spec everywhere
+        self.assertIn(
+            "all run-scoped surfaces call `run_id_path(..., layout=RUN_ID_PATH_LAYOUT, segments=RUN_ID_SEGMENTS)`",
             compact_conventions,
         )
         self.assertIn("must use the same selected layout", dispatch)
@@ -458,16 +467,31 @@ class ResearchContractTests(unittest.TestCase):
             (skills / "experiments-tracking/SKILL.md").read_text().split()
         )
 
-        # segments-v1: one rendered identity on every surface.
-        self.assertIn("so every surface shows the same rendered identity", design)
+        # hashed-v2: the hash is the one identity on every surface; the label is display only.
+        self.assertIn(
+            "the EXPERIMENTS.md `run_id` column and the WandB hash tag use `run_id_name(...)`, the hash",
+            design,
+        )
+        self.assertIn(
+            "It is the EXPERIMENTS.md `run_id` column, the WandB tag that identifies the run, and the Slurm job-name suffix",
+            conventions,
+        )
+        # one exact WandB form everywhere: label as display name, hash as tag, never the run id
+        wandb_form = "wandb.init(name=run_id_label(...), tags=[run_id_name(...)], config=wandb_config(cfg))"
+        for text in (design, conventions, dispatch, tracking):
+            self.assertIn(wandb_form, text)
+        self.assertIn("never the WandB run id", conventions)
+        self.assertIn("A label is for reading only; it is never a path or an identity", conventions)
+        self.assertIn("`label` cell is `run_id_label`", tracking)
+        # Legacy segments pins: one rendered identity on every surface.
         self.assertIn(
             "the WandB run name, the EXPERIMENTS.md `run_id` column, and the Slurm job-name suffix",
             conventions,
         )
-        self.assertIn("so every surface shows one identity", dispatch)
-        # Legacy pins keep their flat naming unchanged.
+        self.assertIn("so every surface carries one identity", dispatch)
+        # Legacy flat pins keep their flat naming unchanged.
         self.assertIn(
-            "Under a legacy pin, the `scripts/` and `logs/` folders, WandB run names, log-line identity, and EXPERIMENTS.md row identity continue to use `run_id_flat`",
+            "WandB run names, log-line identity, and EXPERIMENTS.md row identity of `nested`, `collapsed-v1`, and `hashed-v1` continue to use `run_id_flat`",
             conventions,
         )
         self.assertIn(
@@ -475,7 +499,6 @@ class ResearchContractTests(unittest.TestCase):
             dispatch.lower(),
         )
         self.assertIn("run identity is semantic", tracking.lower())
-        self.assertIn("independent of whether", tracking.lower())
 
     def test_identifying_param_schema_evolution_before_outputs_respects_the_pin(self) -> None:
         namespace: dict[str, object] = {}
@@ -578,35 +601,47 @@ class ResearchContractTests(unittest.TestCase):
 
         design_schema = design.split("## 2b. run_id evolution", 1)[1].split("## 2c.", 1)[0]
         self.assertIn("Inspect checkpoints, evaluations, plots, and wave records", design_schema)
-        self.assertIn("If none exists, update `RUN_ID_PARAMS`", design_schema)
-        self.assertIn("normally before the first launch", design_schema)
-        self.assertIn("immutable under every layout (`segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, `hashed-v1`)", design_schema)
+        self.assertIn(
+            "If none exists, rewrite the current `RUN_ID_VERSIONS.json` entry (legacy: `RUN_ID_PARAMS`)",
+            design_schema,
+        )
+        self.assertIn("before the first launch", design_schema)
+        # hashed-v2: a run_id migration, always asked, never a sub-experiment
+        self.assertIn("**`hashed-v2`** — never edit a version in place", design_schema)
+        self.assertIn("**run_id migration** through `run-identity`", design_schema)
+        self.assertIn("The migration **always asks**", design_schema)
+        self.assertIn("the experiment stays one experiment", design_schema)
+        # legacy pins: unchanged
+        self.assertIn("immutable under every legacy layout (`segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, `hashed-v1`)", design_schema)
         self.assertIn("Never change the identity schema in place", design_schema)
         self.assertRegex(design_schema, r"(?i)create a new numbered sub-experiment")
 
-        self.assertIn("Before any checkpoint, evaluation, or plot output or wave README/script exists", conventions)
-        self.assertIn("After any one of those surfaces exists", conventions)
-        self.assertIn("immutable under every layout (`segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, `hashed-v1`)", conventions)
+        self.assertIn("**`hashed-v2`, before any checkpoint, evaluation, or plot output or wave README/script exists**", conventions)
+        self.assertIn("**`hashed-v2`, after any one of those surfaces exists** — never edit a version in place", conventions)
+        self.assertIn("A run_id migration is the **only** operation that may rewrite those surfaces", conventions)
+        self.assertIn("no new sub-experiment is created", conventions)
+        self.assertIn("immutable under every legacy layout", conventions)
         self.assertIn("new numbered sub-experiment", conventions)
-        self.assertIn("any identity-schema change under `segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1` (including any change to `RUN_ID_SEGMENTS`) requires a new numbered sub-experiment", dispatch)
+        self.assertIn("any identity-schema change (including any change to `RUN_ID_SEGMENTS`) requires a new numbered sub-experiment", dispatch)
+        self.assertIn("the next identity version plus a run_id migration through `run-identity` (always asks", dispatch)
 
         def schema_decision(layout: str, surfaces: set[str]) -> str:
-            if layout not in {"segments-v2", "segments-v1", "nested", "collapsed-v1", "hashed-v1"}:
+            if layout not in {"hashed-v2", "segments-v2", "segments-v1", "nested", "collapsed-v1", "hashed-v1"}:
                 raise ValueError("unsupported layout")
-            return (
-                "update-before-first-launch"
-                if not surfaces
-                else "new-numbered-sub-experiment"
-            )
+            if not surfaces:
+                return "update-before-first-launch"
+            if layout == "hashed-v2":
+                return "run-id-migration"
+            return "new-numbered-sub-experiment"
 
-        for layout in ("segments-v2", "segments-v1", "nested", "collapsed-v1"):
+        for layout in ("hashed-v2", "segments-v2", "segments-v1", "nested", "collapsed-v1"):
             with self.subTest(layout=layout, surfaces="none"):
                 self.assertEqual(schema_decision(layout, set()), "update-before-first-launch")
             for surface in ("checkpoint", "evaluation", "plot", "wave"):
                 with self.subTest(layout=layout, surfaces=surface):
                     self.assertEqual(
                         schema_decision(layout, {surface}),
-                        "new-numbered-sub-experiment",
+                        "run-id-migration" if layout == "hashed-v2" else "new-numbered-sub-experiment",
                     )
 
     def test_experiments_format_durably_records_both_run_id_decisions(self) -> None:
@@ -622,44 +657,55 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIsNotNone(example_match)
         example = example_match.group("example")
 
-        params_match = re.search(
-            r"^run_id params:\s*(?P<params>[^\n(]+?)\s+"
-            r"\(mirrors RUN_ID_PARAMS in (?P<source>[^)]+)\)$",
+        version_match = re.search(
+            r"^run_id version:\s*(?P<version>\d+) — (?P<params>[^\n(]+?)\s+"
+            r"\(mirrors (?P<source>config/[^)]+/RUN_ID_VERSIONS\.json)\)$",
             example,
             re.MULTILINE,
         )
         layout_match = re.search(
-            r"^run_id path layout:\s*(?P<layout>segments-v2|segments-v1|nested|collapsed-v1|hashed-v1)\s+"
+            r"^run_id path layout:\s*(?P<layout>hashed-v2)\s+"
             r"\(mirrors RUN_ID_PATH_LAYOUT in (?P<source>[^)]+)\)$",
             example,
             re.MULTILINE,
         )
-        self.assertIsNotNone(params_match)
+        self.assertIsNotNone(version_match)
         self.assertIsNotNone(layout_match)
-        self.assertEqual(params_match.group("source"), layout_match.group("source"))
+        self.assertIn("run_id map: evaluations/000_grokking/RUN_ID_MAP.json", example)
 
-        ordered_params = [
-            value.strip() for value in params_match.group("params").split(",")
-        ]
+        params = [value.strip() for value in version_match.group("params").split(",")]
         table_header = next(line for line in example.splitlines() if line.startswith("|"))
         table_fields = [field.strip() for field in table_header.strip("|").split("|")]
-        self.assertEqual(table_fields[: len(ordered_params)], ordered_params)
+        self.assertEqual(table_fields[: len(params)], params)
+        # the hash, then its readable label, right after the param columns
+        self.assertEqual(table_fields[len(params) : len(params) + 2], ["run_id", "label"])
+        for row in example.splitlines()[2:]:
+            if row.startswith("|") and not row.startswith("|-"):
+                cells = [cell.strip() for cell in row.strip("|").split("|")]
+                if cells[0] == "model":
+                    continue
+                self.assertRegex(cells[len(params)], r"^rid-[0-9a-f]{32}$")
 
         compact_format = " ".join(format_section.split())
-        self.assertIn("restates both authoritative source decisions", compact_format)
+        self.assertIn("restates the authoritative source decisions", compact_format)
         self.assertIn("layout line is durable experiment metadata", compact_format)
         self.assertIn("not a run-row identity field", compact_format)
+        # legacy segments and hashed-v1 tables keep their columns
+        self.assertIn("one column per hash group", compact_format)
+        self.assertIn("a `hash` column after the param columns", compact_format)
 
         immutable_section = tracking.split(
-            "`RUN_ID_PARAMS` may change only while", 1
+            "Under `hashed-v2`, the identity evolves after", 1
         )[1].split("## Who writes what", 1)[0]
         compact_immutable = " ".join(immutable_section.split())
+        self.assertIn("only through a run_id migration", compact_immutable)
+        self.assertIn("the only thing that may rewrite historical rows", compact_immutable)
         self.assertIn("recorded `RUN_ID_PATH_LAYOUT` is immutable", compact_immutable)
         self.assertIn("exact wave paths remain authoritative", compact_immutable)
         self.assertIn("new numbered sub-experiment", compact_immutable)
         self.assertIn("fresh EXPERIMENTS section", compact_immutable)
 
-    def test_scaffold_guidance_names_both_authoritative_run_id_constants(self) -> None:
+    def test_scaffold_guidance_names_the_hashed_v2_pin_and_legacy_constants(self) -> None:
         readme = markdown_template_block("README.md")
         agents = markdown_template_block("AGENTS.md")
         experiments = markdown_template_block("EXPERIMENTS.md (initial)")
@@ -669,27 +715,37 @@ class ResearchContractTests(unittest.TestCase):
             "AGENTS": agents,
             "EXPERIMENTS": experiments,
         }.items():
+            compact = " ".join(scaffold.split())
             with self.subTest(scaffold=name):
-                self.assertIn("RUN_ID_PARAMS", scaffold)
-                self.assertIn("RUN_ID_PATH_LAYOUT", scaffold)
-                self.assertLess(
-                    scaffold.index("RUN_ID_PARAMS"),
-                    scaffold.index("RUN_ID_PATH_LAYOUT"),
-                )
+                self.assertIn("RUN_ID_PATH_LAYOUT", compact)
+                self.assertIn("hashed-v2", compact)
+                self.assertIn("RUN_ID_VERSIONS.json", compact)
+                # new experiments come first; legacy constants are named only as legacy
+                self.assertIn("RUN_ID_PARAMS", compact)
+                self.assertLess(compact.index("hashed-v2"), compact.index("RUN_ID_PARAMS"))
+                self.assertIn("RUN_ID_SEGMENTS", compact)
+                self.assertRegex(compact, r"(?i)legacy")
 
-        self.assertIn("experiment's `.py` is authoritative for both", readme)
-        self.assertIn("authoritative ordered run identity", agents)
-        self.assertIn("authoritative literal", agents)
-        self.assertIn("header mirrors the experiment .py's ordered RUN_ID_PARAMS", experiments)
-        self.assertIn("exact literal pin", experiments)
-        self.assertIn("`RUN_ID_PATH_LAYOUT: segments-v2`", experiments)
-        self.assertIn("`RUN_ID_PATH_LAYOUT: segments-v1`", experiments)
-        self.assertIn("RUN_ID_SEGMENTS", experiments)
-        self.assertIn("`RUN_ID_PATH_LAYOUT: nested`", experiments)
-        self.assertIn("`RUN_ID_PATH_LAYOUT: collapsed-v1`", experiments)
-        self.assertIn("`RUN_ID_PATH_LAYOUT: hashed-v1`", experiments)
-        self.assertIn("RUN_ID_SEGMENTS", readme)
-        self.assertIn("RUN_ID_SEGMENTS", agents)
+        compact_readme = " ".join(readme.split())
+        self.assertIn('`RUN_ID_PATH_LAYOUT = "hashed-v2"`', compact_readme)
+        self.assertIn("`rid-<32 hex>`", compact_readme)
+        self.assertIn("RUN_ID_HISTORY.json", compact_readme)
+        self.assertIn("`run_id_label`", compact_readme)
+        self.assertIn("<run_id folder>", compact_readme)
+        self.assertNotIn("<flat run_id>", compact_readme)
+        compact_agents = " ".join(agents.split())
+        self.assertIn("authoritative literal output-path pin (`hashed-v2`", compact_agents)
+        self.assertIn("`RUN_ID_PARAMS` is the authoritative ordered run identity", compact_agents)
+        self.assertIn("`run-identity` looks up a run hash", compact_agents)
+        compact_experiments = " ".join(experiments.split())
+        self.assertIn("exact literal pin `RUN_ID_PATH_LAYOUT: hashed-v2`", compact_experiments)
+        self.assertIn("| run_id | label |", compact_experiments)
+        self.assertIn("a run_id migration rewrites old hashes", compact_experiments)
+        for legacy in ("segments-v2", "segments-v1", "nested", "collapsed-v1", "hashed-v1"):
+            self.assertIn(legacy, compact_experiments)
+        journal = " ".join(markdown_template_block("JOURNAL.md (initial)").split())
+        self.assertIn("append-only", journal)
+        self.assertIn("only a run_id migration may replace old run hashes", journal)
 
     def test_existing_output_layout_is_immutable(self) -> None:
         skills = ROOT / "plugins/research/skills"
@@ -703,7 +759,10 @@ class ResearchContractTests(unittest.TestCase):
             contract = " ".join(path.read_text().lower().split())
             with self.subTest(contract=name):
                 self.assertIn("new numbered sub-experiment", contract)
-        self.assertIn("preserve the checked-in renderer, `run_id_path_layout`, and `run_id_segments` forever", " ".join(contracts["experiment design"].read_text().lower().split()))
+        self.assertIn(
+            "preserve the checked-in renderer and `run_id_path_layout` forever (and, under a legacy pin, `run_id_segments`)",
+            " ".join(contracts["experiment design"].read_text().lower().split()),
+        )
         for name in ("project conventions", "dispatch", "tracking"):
             contract = " ".join(contracts[name].read_text().lower().split())
             self.assertIn("immutable", contract)
@@ -713,10 +772,15 @@ class ResearchContractTests(unittest.TestCase):
             self.assertRegex(contract, r"never (?:move|rename|rewrite)")
 
         agreement = " ".join(PROJECT_TEMPLATES.read_text().lower().split())
-        self.assertIn("offer this choice only before any checkpoint, evaluation, or wave readme/script exists", agreement)
-        self.assertIn("preserve the checked-in renderer and literal pin forever", agreement)
-        self.assertIn("never propose or perform an in-place layout change", agreement)
-        self.assertIn("another layout requires a new numbered sub-experiment", agreement)
+        self.assertIn("new experiments use `hashed-v2` with no dialogue", agreement)
+        self.assertIn(
+            "evolving a `hashed-v2` identity after its first output is a run_id migration through `run-identity`, which always asks",
+            agreement,
+        )
+        self.assertIn("is never offered", agreement)
+        self.assertIn("preserves its checked-in renderer and literal pin forever", agreement)
+        self.assertIn("never gets an in-place layout change", agreement)
+        self.assertIn("another layout for it requires a new numbered sub-experiment", agreement)
 
     def test_layout_election_closes_at_first_artifact_or_wave(self) -> None:
         def elect_layout(
@@ -779,8 +843,8 @@ class ResearchContractTests(unittest.TestCase):
                 self.assertRegex(contract, r"(?:artifact|output).{0,100}(?:wave|wave record)")
                 self.assertIn("new numbered sub-experiment", contract)
 
-        self.assertIn("preserve the checked-in renderer, `run_id_path_layout`, and `run_id_segments` forever", compact["experiment design"])
-        self.assertIn("preserve the checked-in renderer and literal pin forever", compact["execution agreement"])
+        self.assertIn("preserve the checked-in renderer and `run_id_path_layout` forever", compact["experiment design"])
+        self.assertIn("preserves its checked-in renderer and literal pin forever", compact["execution agreement"])
         for name in ("conventions", "tracking", "dispatch", "dispatch templates"):
             self.assertIn("immutable", compact[name])
         for name in ("tracking", "dispatch", "dispatch templates"):
@@ -795,7 +859,13 @@ class ResearchContractTests(unittest.TestCase):
             self.assertNotIn(forbidden, joined)
 
         design = compact["experiment design"]
-        self.assertIn("only while the experiment has no checkpoint, evaluation, or plot", compact["conventions"])
+        self.assertIn(
+            "once any checkpoint, evaluation, or plot output or wave readme/script exists, `run_id_path_layout` is immutable",
+            compact["conventions"],
+        )
+        # only an approved run_id migration may rewrite an established tree, never a move of layout
+        for name in ("conventions", "tracking", "dispatch", "dispatch templates"):
+            self.assertIn("run_id migration", compact[name])
         self.assertIn("once any output or wave record exists", design)
         self.assertIn("never propose or perform an in-place layout change", design)
         self.assertIn("collapsed-v1", design)
@@ -979,54 +1049,82 @@ class ResearchContractTests(unittest.TestCase):
         self.assertEqual(len(distinct["separate_alternatives"]), 1)
         self.assertNotEqual(distinct["paths"][0], distinct["paths"][1])
 
-    def test_every_election_runs_the_segments_rendering_dialogue(self) -> None:
+    def test_segments_rendering_dialogue_governs_legacy_pins_only(self) -> None:
         skills = ROOT / "plugins/research/skills"
-        contracts = {
-            "experiment design": (
-                skills / "experiment-design/SKILL.md",
-                "## 2. run_id election",
-                "## 2b.",
-            ),
-            "project conventions": (
-                skills / "research-project-init/references/conventions.md",
-                "### run-output path layout approval",
-                "### plot communication approval",
-            ),
-        }
-
-        for name, (path, marker, end) in contracts.items():
-            text = " ".join(path.read_text().lower().split())
-            self.assertIn(marker, text, name)
-            section = text[text.index(marker) : text.index(end)]
-            with self.subTest(contract=name):
-                self.assertRegex(section, r"every (?:run_id )?election")
-                self.assertRegex(section, r"neither (?:engineering|automatic) mode may decide any step")
-                self.assertIn("segments-v2", section)
-                # The four steps, in order.
-                steps = [
-                    section.index("full picture"),
-                    section.index("hide."),
-                    section.index("group."),
-                    section.index("place and render"),
-                ]
-                self.assertEqual(steps, sorted(steps))
-                self.assertIn("preflight_run_id_path", section)
-                self.assertRegex(section, r"all-explicit")
-                self.assertRegex(section, r"hydra config tree")
-                self.assertRegex(section, r"optim_params")
-                self.assertRegex(section, r"rename")
-                self.assertRegex(section, r"no default placement")
-                self.assertIn("never silently hash", section)
-                # The removed nested-first / exactly-one-alternative protocol stays gone.
-                self.assertNotRegex(section, r"(?:show|require|display) exactly one")
-                self.assertNotIn("byte-identical", section)
+        conventions = " ".join(
+            (skills / "research-project-init/references/conventions.md").read_text().lower().split()
+        )
+        marker = "- **legacy segments rendering dialogue.**"
+        self.assertIn(marker, conventions)
+        section = conventions[
+            conventions.index(marker) : conventions.index("- under a legacy pin, all run-scoped surfaces call")
+        ]
+        self.assertIn("every election under a legacy segments pin", section)
+        self.assertIn("even when the all-explicit path fit", section)
+        self.assertRegex(section, r"neither engineering mode may decide any step")
+        self.assertIn("segments-v2", section)
+        # The four steps, in order.
+        steps = [
+            section.index("full picture"),
+            section.index("hide."),
+            section.index("group."),
+            section.index("place and render"),
+        ]
+        self.assertEqual(steps, sorted(steps))
+        self.assertIn("preflight_run_id_path", section)
+        self.assertRegex(section, r"hydra config tree")
+        self.assertRegex(section, r"optim_params")
+        self.assertRegex(section, r"rename")
+        self.assertRegex(section, r"no default placement")
+        self.assertIn("never silently hash", section)
+        # ...and it is never started for new work: a fresh election is hashed-v2.
+        self.assertIn("a fresh election then uses `hashed-v2`", section)
+        self.assertIn("never started for new work", section)
+        # The removed nested-first / exactly-one-alternative protocol stays gone.
+        self.assertNotRegex(section, r"(?:show|require|display) exactly one")
+        self.assertNotIn("byte-identical", section)
 
         design = " ".join((skills / "experiment-design/SKILL.md").read_text().split())
-        self.assertIn("even when the all-explicit path fits", " ".join(
-            (skills / "research-project-init/references/conventions.md").read_text().lower().split()
-        ))
-        self.assertIn("none of them is skipped because the path happens to fit", design)
-        self.assertIn("A 64-bit truncation is never assumed collision-free", design)
+        legacy = design.split("**Legacy pins.**", 1)[1].split("## 2b.", 1)[0]
+        self.assertIn("ran the legacy segments rendering dialogue", legacy)
+        self.assertIn("a fresh election uses `hashed-v2`", legacy)
+        self.assertIn("Never offer a legacy pin to a new experiment", legacy)
+
+    def test_hashed_v2_election_is_agent_decided_and_reported(self) -> None:
+        skills = ROOT / "plugins/research/skills"
+        design = " ".join((skills / "experiment-design/SKILL.md").read_text().split())
+        conventions = " ".join(
+            (skills / "research-project-init/references/conventions.md").read_text().split()
+        )
+        election = design.split("## 2. run_id election", 1)[1].split("**Legacy pins.**", 1)[0]
+        self.assertIn("Agent-decided in both engineering modes", election)
+        self.assertIn("do, then report", election)
+        self.assertIn("There is no rendering dialogue", election)
+        self.assertIn(
+            "every param the sweep grid varies plus every behavior-affecting param whose value "
+            "differs from the config default",
+            election,
+        )
+        self.assertIn("State the elected params and the reasoning", election)
+        self.assertIn('`RUN_ID_PATH_LAYOUT = "hashed-v2"`', election)
+        self.assertIn("RUN_ID_VERSIONS.json", election)
+        self.assertIn("load_run_id_spec", election)
+        self.assertIn("128 bits are never assumed collision-free", election)
+        self.assertNotIn("wait for the user after each step", election)
+        self.assertNotIn("Neither engineering mode may decide", election)
+
+        run_id = conventions.split("## run_id", 1)[1].split("### Legacy pins", 1)[0]
+        self.assertIn("Election is agent-decided in both engineering modes", run_id)
+        self.assertIn("There is no rendering dialogue, byte report, or segment spec", run_id)
+        self.assertIn("in the reply and in the journal", run_id)
+        self.assertIn("checkpoints|evaluations|scripts|logs/<experiment_path>/rid-<32 hex>/", run_id)
+        self.assertIn('`{"layout": "hashed-v2", "params": {param: value or null}}`', run_id)
+        self.assertIn("by_hash: {hash: {params, version, wave_id, state, rig}}", run_id)
+        # the config comparison is what makes the coverage gate mechanical
+        self.assertIn("compares each planned run's resolved config", run_id)
+        tiers = conventions.split("### Approval tiers", 1)[1].split("## Directives are closed", 1)[0]
+        do_then_report = tiers.split("**Do, then report.**", 1)[1].split("**Standing policy**", 1)[0]
+        self.assertIn("run_id election and the `hashed-v2` run path", do_then_report)
 
     def test_segments_v1_renders_losslessly_and_fails_hard_on_collisions(self) -> None:
         import hashlib
@@ -1481,7 +1579,7 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("TORCH_NUM_WORKERS=16", templates)
         self.assertIn("never copy or commit a token", templates)
         self.assertIn("`.gitkeep` in every directory", skill)
-        self.assertIn("Ask which single directory name", skill)
+        self.assertIn("single directory name", skill)
         self.assertIn('name = "{{ENVIRONMENT_NAME}}"', templates)
         self.assertIn("{{ENVIRONMENT_NAME}}/", templates)
 
@@ -1655,7 +1753,12 @@ class ResearchContractTests(unittest.TestCase):
 
         self.assertIn("ask the user", environment_sync.lower())
         self.assertIn("virtual environment should have", environment_sync.lower())
-        self.assertIn("Ask which single directory name", project_init)
+        self.assertIn("single directory name", project_init)
+        # asked once, together with the other open questions, in the consolidated approval
+        self.assertIn(
+            "asked in the consolidated approval below, never in a round of their own",
+            " ".join(project_init.split()),
+        )
         for skill in (environment_sync, project_init):
             self.assertRegex(skill, r"(?i)never infer|never .*default")
         self.assertIn("hub development environment", environment_sync.lower())
@@ -1723,9 +1826,9 @@ class ResearchContractTests(unittest.TestCase):
         values = {
             '"<0 | the granted set>"': '"0"',
             '"<wave_id>"': f'"{wave}"',
-            '"<flat run_id>"': '"seed=0"',
-            '"<run_id_name: the rendered run_id under segments-v2; the flat run_id under a legacy pin>"': '"seed=0"',
-            '"<segments-v2, or a legacy segments-v1 | nested | collapsed-v1 | hashed-v1, copied from the experiment record>"': '"nested"',
+            '"<run_id_name: the hash under hashed-v2; the rendered run_id under a segments pin; the flat run_id under another legacy pin>"': '"rid-' + "a" * 32 + '"',
+            '"<run_id_label under hashed-v2; the flat run_id under a legacy pin>"': '"seed=0"',
+            '"<hashed-v2, or a legacy segments-v2 | segments-v1 | nested | collapsed-v1 | hashed-v1, copied from the experiment record>"': '"hashed-v2"',
             '"<exact checkpoint directory resolved by canonical run_id_path>"': f'"checkpoints/000_x/{wave}"',
             '"<exact evaluation directory resolved by canonical run_id_path>"': f'"evaluations/000_x/{wave}"',
             '"logs/<NNN_exp>/<run_id folder>/wave_<wave_id>"': f'"logs/000_x/seed=0/wave_{wave}"',
@@ -2072,7 +2175,7 @@ class ResearchContractTests(unittest.TestCase):
 
         self.assertEqual(dispatch_templates.count("class StatusWriter"), 0)
         self.assertIn("../../research-project-init/references/templates.md", dispatch_templates)
-        self.assertIn('"schema_version": 2', project_templates)
+        self.assertIn('"schema_version": 3', project_templates)
         self.assertIn('"progress_completed": None', project_templates)
         self.assertIn("datetime.datetime.now().astimezone()", project_templates)
         self.assertIn("threading.Thread", project_templates)
@@ -2094,7 +2197,7 @@ class ResearchContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with status_writer(tmp, heartbeat_interval_s=0.02) as writer:
                 started = json.loads(writer.path.read_text())
-                self.assertEqual(started["schema_version"], 2)
+                self.assertEqual(started["schema_version"], 3)
                 self.assertIsNotNone(datetime.fromisoformat(started["started"]).tzinfo)
 
                 writer.heartbeat(completed=1, total=4, unit="epoch")
@@ -2269,6 +2372,574 @@ class ResearchContractTests(unittest.TestCase):
         envsync_skill = (ROOT / "plugins/research/skills/environment-sync/SKILL.md").read_text()
         self.assertIn('`gpus = "job"`', envsync_skill)
         self.assertIn("gpus=deferred to job", envsync_skill)
+
+def compact_text(path: Path) -> str:
+    return " ".join(path.read_text().split())
+
+
+SKILLS = ROOT / "plugins/research/skills"
+
+
+class ApprovalTierContractTests(unittest.TestCase):
+    """Three approval tiers apply in both engineering modes; the mode owns only a few choices."""
+
+    def tiers(self) -> dict[str, str]:
+        conventions = compact_text(SKILLS / "research-project-init/references/conventions.md")
+        section = conventions.split("### Approval tiers", 1)[1].split("## Directives are closed", 1)[0]
+        bounds = ["**Do, then report.**", "**Standing policy**", "**Always ask**", "**Mode-owned.**"]
+        tiers = {}
+        for start, end in zip(bounds, bounds[1:] + ["A report is not a request"]):
+            tiers[start] = section.split(start, 1)[1].split(end, 1)[0]
+        return tiers
+
+    def test_conventions_define_three_tiers_in_both_modes_plus_mode_owned_choices(self) -> None:
+        conventions = compact_text(SKILLS / "research-project-init/references/conventions.md")
+        self.assertIn("Three tiers apply identically in **both** engineering modes", conventions)
+        self.assertIn("never infer it", conventions)
+        tiers = self.tiers()
+        do = tiers["**Do, then report.**"]
+        for action in (
+            "`rig-sync deploy-revision` of the tagged wave commit",
+            "`rig-sync prepare` on a rig already declared in the user registry",
+            "`environment-sync provision` and `verify`",
+            "a `research-journal` append — the entry is shown after it is written",
+            "every non-hub lane rig is offload-enabled by default (Slurm targets such as `leonardo` excluded; `supervisor.py` rejects offload entries that are not lane rigs)",
+            "checksum-verified on the hub",
+            "`rig-sync collect`",
+            "run_id election and the `hashed-v2` run path",
+            "plot communication",
+            "fully resolved concrete path",
+            "collision rejection",
+            "in-figure verification",
+            "the reasoning is stated in the reply and in the journal",
+        ):
+            self.assertIn(action, do)
+        standing = tiers["**Standing policy**"]
+        self.assertIn("every free lane on the envelope's rigs as `rig-board` shows them", standing)
+        self.assertIn("ordered for the fastest finish", standing)
+        self.assertIn("the gate previews are reports, not waits", standing)
+        self.assertIn("**Leonardo core-hour ceiling**", standing)
+        self.assertIn("Exceeding the ceiling always asks", standing)
+        self.assertIn("up to that ceiling", standing)
+        self.assertIn("checks cap ≤ ceiling itself", standing)
+        always = tiers["**Always ask**"]
+        for action in (
+            "in both modes",
+            "destructive operations",
+            "history rewrites",
+            "deletion of material data",
+            "overwriting user changes",
+            "new repositories/remotes/accounts/destinations",
+            "secrets/authentication changes",
+            "scope/budget/rig expansion",
+            "a `behemoth` card beyond gpu0",
+            "`integrate-reference-code`",
+            "cancelling or superseding runs outside the wave's standing authorization (another wave's runs, a supersede, a running Slurm job)",
+            "`rig-sync prune`",
+            "`rig-sync provision-env` or `push-env` outside the `research-project-init` bundle",
+            "a **run_id migration** (`run-identity`)",
+            "System permission prompts are independent and always apply",
+        ):
+            self.assertIn(action, always)
+        mode = tiers["**Mode-owned.**"]
+        for choice in ("Experiment-design technical choices", "metrics", "which plots to make"):
+            self.assertIn(choice, mode)
+        self.assertIn("manual mode proposes and waits for the user", mode)
+        self.assertIn("auto mode decides inside the approved engineering envelope", mode)
+
+    def test_journal_appends_without_waiting_in_both_modes(self) -> None:
+        journal = compact_text(SKILLS / "research-journal/SKILL.md")
+        self.assertIn("Appending is **do, then report** in both engineering modes", journal)
+        self.assertIn("without a per-entry prompt", journal)
+        self.assertIn("show the entry in the reply", journal)
+        self.assertNotIn("suggest the entry", journal.lower())
+        self.assertNotIn("wait for approval", journal.lower())
+        # append-only, with the one run_id migration exception
+        self.assertIn("Append-only: never rewrite or delete past entries", journal)
+        self.assertIn("except that a run_id migration (`run-identity`, always user-approved) replaces old run hashes", journal)
+        metadata = (SKILLS / "research-journal/agents/openai.yaml").read_text()
+        self.assertIn("show me the entry afterwards", metadata)
+        for path in (
+            SKILLS / "sweep-dispatch/SKILL.md",
+            SKILLS / "experiment-design/SKILL.md",
+            SKILLS / "research-project-init/SKILL.md",
+        ):
+            text = compact_text(path)
+            self.assertNotIn("mode-aware authorization", text)
+            self.assertNotIn("according to `engineering_mode`", text)
+
+    def test_dispatch_reports_the_pool_and_previews_instead_of_waiting(self) -> None:
+        dispatch = compact_text(SKILLS / "sweep-dispatch/SKILL.md")
+        templates = compact_text(SKILLS / "sweep-dispatch/references/templates.md")
+        self.assertIn("Dispatch is a **standing policy** in both engineering modes", dispatch)
+        self.assertIn("report each gate's preview instead of waiting on it", dispatch)
+        self.assertIn("The pool is **every lane the board shows free on the envelope's rigs and GPUs**", dispatch)
+        self.assertIn("never ask which rigs are free", dispatch)
+        self.assertIn("every non-hub lane rig in the pool is listed under `offload` by default (Slurm targets such as `leonardo` excluded", dispatch)
+        self.assertIn("this preview is a report", dispatch)
+        self.assertIn("do, then report: no prompt", dispatch)
+        self.assertNotIn("present the board and ask", dispatch.lower())
+        self.assertNotIn("Manual mode waits for approval", dispatch)
+        # irreversible actions still ask in every mode
+        self.assertIn(
+            "cancelling or superseding runs outside the wave's standing authorization (another wave's runs, "
+            "a supersede, a running Slurm job), prune, exceeding the Leonardo core-hour ceiling, and envelope "
+            "expansion always ask",
+            dispatch,
+        )
+        self.assertIn("with an explicit user authorization per action in every engineering mode", dispatch)
+        self.assertIn("Every lane the fleet board shows free on the envelope's rigs and GPUs", templates)
+        self.assertNotIn("Ask which rigs and GPUs are free", templates)
+        self.assertIn("`offload` lists every non-hub lane rig of the pool by default", templates)
+        self.assertNotIn("non-hub pool rig", templates)
+        self.assertNotIn("non-hub pool rig", dispatch)
+
+    def test_leonardo_core_hour_ceiling_is_an_envelope_field(self) -> None:
+        agreement = markdown_template_block("program/00-execution-agreement.md (initial)")
+        self.assertIn("- Leonardo account and core-hour ceiling:", agreement)
+        self.assertIn("exceeding it always asks", " ".join(agreement.split()))
+        self.assertIn("`pool --rig leonardo --core-hours-cap <n>`", agreement)
+        self.assertLess(len(agreement.splitlines()), 200)
+        dispatch = compact_text(SKILLS / "sweep-dispatch/SKILL.md")
+        slurm = compact_text(SKILLS / "sweep-dispatch/references/cineca-slurm.md")
+        tick = compact_text(SKILLS / "sweep-supervisor/references/tick.md")
+        init = compact_text(SKILLS / "research-project-init/SKILL.md")
+        self.assertIn("the project account declared in the envelope and its **Leonardo core-hour ceiling**", dispatch)
+        self.assertIn("A wave whose estimate exceeds the ceiling (or the account's remaining hours) asks before dispatch; one inside it does not", dispatch)
+        self.assertIn("never above the execution agreement's **Leonardo core-hour ceiling**", slurm)
+        self.assertIn("is a standing-policy action — do it, then report", slurm)
+        self.assertIn("an account the envelope does not declare asks first", slurm)
+        # one Leonardo rule: caps up to the ceiling are standing policy, exceeding it asks, and the
+        # agent (not the scripts) checks cap <= ceiling
+        conventions = compact_text(SKILLS / "research-project-init/references/conventions.md")
+        supervisor = compact_text(SKILLS / "sweep-supervisor/SKILL.md")
+        for text in (conventions, supervisor, slurm, dispatch):
+            self.assertIn("pool --rig leonardo --core-hours-cap <n>", text)
+        for text in (conventions, supervisor, slurm):
+            self.assertIn("ceiling", text)
+            self.assertRegex(text, r"(scripts never read the ceiling|The scripts never read the ceiling)")
+        self.assertIn("`budget-cap` reached | read the execution agreement's Leonardo core-hour ceiling", tick)
+        self.assertIn("`pool --rig leonardo --core-hours-cap <n> --reason", tick)
+        self.assertIn("At the ceiling: `ask`", tick)
+        self.assertIn("**Leonardo core-hour ceiling**", init)
+
+    def test_project_init_asks_one_consolidated_approval(self) -> None:
+        init = compact_text(SKILLS / "research-project-init/SKILL.md")
+        section = init.split("## Consolidated approval", 1)[1].split("## Scaffold", 1)[0]
+        self.assertIn("Ask **once**, in one round", section)
+        for item in (
+            "the scaffold preview",
+            "the first commit and its push",
+            "the hub environment",
+            "rig bring-up for every intended rig, including `rig-sync provision-env`",
+            "`rig-sync push-env` (it moves secrets)",
+            "the hub development environment name, the framework",
+        ):
+            self.assertIn(item, section)
+        self.assertIn("`engineering_mode` itself is still stated explicitly by the user, never inferred", section)
+        self.assertIn("every step below runs without another prompt", section)
+        self.assertRegex(init, r"Never\s+infer a default")
+        self.assertIn("A one-line description is optional: without one, `{{PROJECT_DESCRIPTION}}` falls back to the project name", init)
+        self.assertNotIn("wait before the first commit/push", init)
+        self.assertNotIn("Manual mode requires preview approval", init)
+        templates = compact_text(SKILLS / "research-project-init/references/templates.md")
+        self.assertIn("the description is optional and falls back to the project name", templates)
+        metadata = (SKILLS / "research-project-init/agents/openai.yaml").read_text()
+        self.assertIn("one consolidated approval round", metadata)
+
+    def test_secret_and_shell_writes_and_prune_always_ask_outside_init(self) -> None:
+        rig_sync = compact_text(SKILLS / "rig-sync/SKILL.md")
+        self.assertIn("`provision-env` edits shell startup files on the rig, so it **always asks**", rig_sync)
+        self.assertIn("It **moves secrets**, so it always asks", rig_sync)
+        self.assertIn("`prune` (below) runs only with explicit user approval of its dry run in every engineering mode", rig_sync)
+        self.assertIn("`prepare` on a rig already declared in the user registry and in `sync.toml` is do-then-report", rig_sync)
+        env_sync = compact_text(SKILLS / "environment-sync/SKILL.md")
+        self.assertIn("`provision` and `verify` are **do, then report** in both engineering modes", env_sync)
+        self.assertNotIn("preview and wait before `--confirm`", env_sync)
+
+    def test_run_id_migration_always_asks_and_is_the_only_rewrite(self) -> None:
+        texts = {
+            "conventions": compact_text(SKILLS / "research-project-init/references/conventions.md"),
+            "design": compact_text(SKILLS / "experiment-design/SKILL.md"),
+            "dispatch": compact_text(SKILLS / "sweep-dispatch/SKILL.md"),
+            "tracking": compact_text(SKILLS / "experiments-tracking/SKILL.md"),
+            "journal": compact_text(SKILLS / "research-journal/SKILL.md"),
+            "supervisor": compact_text(SKILLS / "sweep-supervisor/SKILL.md"),
+        }
+        for name, text in texts.items():
+            with self.subTest(contract=name):
+                self.assertIn("run_id migration", text)
+                self.assertIn("`run-identity`", text)
+        self.assertIn("then `migrate apply` only after the user approves the plan — it always asks", texts["conventions"])
+        self.assertIn("while `rigsync collect --check` reports rig records the hub lacks", texts["conventions"])
+        self.assertIn("The migration **always asks**", texts["design"])
+        self.assertIn("always user-approved", texts["tracking"])
+        self.assertIn("a run_id migration (`run-identity`); and settling an identity mismatch", texts["supervisor"])
+        # wave README "never updated" and recovery both name the migration exception
+        dispatch_templates = compact_text(SKILLS / "sweep-dispatch/references/templates.md")
+        self.assertIn("The one exception is a run_id migration (`run-identity`)", dispatch_templates)
+        self.assertIn("After a run_id migration the comparison is against the post-migration commit", texts["dispatch"])
+
+    def test_evaluations_converge_on_the_hub_through_collect(self) -> None:
+        rig_sync = compact_text(SKILLS / "rig-sync/SKILL.md")
+        supervisor = compact_text(SKILLS / "sweep-supervisor/SKILL.md")
+        tick = compact_text(SKILLS / "sweep-supervisor/references/tick.md")
+        dispatch = compact_text(SKILLS / "sweep-dispatch/SKILL.md")
+        conventions = compact_text(SKILLS / "research-project-init/references/conventions.md")
+        self.assertIn("### Collect evaluation records to the hub", rig_sync)
+        self.assertIn("It never deletes on either side and never copies checkpoints", rig_sync)
+        self.assertIn("It is additive and runs without asking", rig_sync)
+        self.assertIn("`rigsync collect --check [--wave <wave_id>]` changes nothing", rig_sync)
+        self.assertIn('python3 "$RIGSYNC_SCRIPT" collect --check --wave 20260802-120000', rig_sync)
+        self.assertIn("**Evaluations converge on the hub.**", supervisor)
+        self.assertIn("`collect-failed` ledger event per new problem", supervisor)
+        self.assertIn("`SUP finish` collects one last time before closing the wave", supervisor)
+        self.assertIn("Run `rigsync collect --check --wave <id>` and settle what it lists", tick)
+        self.assertLess(tick.index("rigsync collect --check --wave <id>"), tick.index("write_run_id_map("))
+        self.assertIn("| `collect-failed` |", tick)
+        self.assertIn("never overwrite either copy", tick)
+        self.assertIn("first require `rigsync collect --check --wave <id>` to pass", dispatch)
+        self.assertIn("Evaluations **converge on the hub**", conventions)
+        metadata = (SKILLS / "rig-sync/agents/openai.yaml").read_text()
+        self.assertIn("collect a wave's evaluation records to the hub", metadata)
+
+    def test_status_schema_docs_match_the_v3_writer(self) -> None:
+        conventions = compact_text(SKILLS / "research-project-init/references/conventions.md")
+        self.assertIn('{"schema_version": 3,', conventions)
+        self.assertIn('"rig": "rig-4090"', conventions)
+        self.assertNotIn('"schema_version": 2,', conventions)
+        dispatch_templates = (SKILLS / "sweep-dispatch/references/templates.md").read_text()
+        self.assertIn('s.setdefault("schema_version", 3)', dispatch_templates)
+        self.assertIn('rig=os.environ.get("LANE_RIG")', dispatch_templates)
+        self.assertNotIn('setdefault("schema_version", 2)', dispatch_templates)
+        self.assertIn('"schema_version": 3', template_block("code/common/status.py"))
+
+    def test_hashed_v2_reaches_slurm_tracking_and_plots(self) -> None:
+        slurm = compact_text(SKILLS / "sweep-dispatch/references/cineca-slurm.md")
+        self.assertIn("Under `hashed-v2` the job name is `<wave_id>__rid-<32 hex>`", slurm)
+        visualization = compact_text(SKILLS / "visualizations/SKILL.md")
+        self.assertIn("every run is the directory `evaluations/<experiment_path>/rid-<32 hex>/`", visualization)
+        self.assertIn("the selection is keyed by run hash and always shows each run's label beside it", visualization)
+        self.assertIn("**Runs** view", visualization)
+        design = compact_text(SKILLS / "experiment-design/SKILL.md")
+        self.assertNotIn("like its run name, **cannot be changed retroactively**", design)
+        self.assertIn("a run_id migration renames runs, it never refills a config", design)
+        readme = compact_text(ROOT / "README.md")
+        self.assertIn("three approval tiers plus mode-owned choices", readme)
+        self.assertIn("`rid-<32 hex>` hash (`hashed-v2`)", readme)
+
+
+class HashedV2RunIdTemplateTests(unittest.TestCase):
+    """The hashed-v2 run_id layout, its identity files, and the status rig field."""
+
+    PARAMS = ["model", "lr", "seed"]
+
+    def setUp(self) -> None:
+        self.ns: dict[str, object] = {}
+        exec(compile(run_id_template(), "run_id.py", "exec"), self.ns)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.project = Path(tmp.name)
+        self.root = self.project / "evaluations" / "001_scale"
+        self.root.mkdir(parents=True)
+        # the identity files live in the tracked source tree, read via source_path("config/<exp>")
+        self.spec = self.project / "config" / "001_scale"
+        self.spec.mkdir(parents=True)
+        self.write_versions([{"version": 1, "params": self.PARAMS, "date": "2026-10-16", "reason": "first"}])
+
+    def write_versions(self, entries) -> None:
+        (self.spec / "RUN_ID_VERSIONS.json").write_text(json.dumps(entries))
+
+    def guard(self, cfg, params=None, run_dir=None, **kwargs) -> Path:
+        params = params or self.PARAMS
+        run_dir = run_dir or self.root / self.ns["run_id_path"](cfg, params, layout="hashed-v2")
+        kwargs.setdefault("spec_root", self.spec)
+        self.ns["guard_run_config"](
+            cfg, params, run_dir, layout="hashed-v2", experiment_root=self.root, **kwargs
+        )
+        return run_dir
+
+    def test_hash_is_canonical_order_independent_and_null_for_missing(self) -> None:
+        import hashlib
+
+        h = self.ns["run_id_hash_v2"]
+        from_values = self.ns["run_id_hash_v2_from_values"]
+        cfg = {"model": "vit/base", "lr": 0.001, "seed": 3, "batch": 32}
+        value = h(cfg, self.PARAMS)
+        canonical = json.dumps(
+            {"layout": "hashed-v2", "params": {"model": "vit/base", "lr": 0.001, "seed": 3}},
+            sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        )
+        self.assertEqual(value, "rid-" + hashlib.sha256(canonical.encode()).hexdigest()[:32])
+        self.assertRegex(value, r"^rid-[0-9a-f]{32}$")
+        self.assertEqual(h(cfg, list(reversed(self.PARAMS))), value)
+        self.assertEqual(h(dict(reversed(list(cfg.items()))), self.PARAMS), value)
+        self.assertEqual(from_values({"seed": 3, "lr": 0.001, "model": "vit/base"}), value)
+        # a param missing from the config hashes as null
+        self.assertEqual(
+            h(cfg, [*self.PARAMS, "wd"]),
+            from_values({"model": "vit/base", "lr": 0.001, "seed": 3, "wd": None}),
+        )
+        self.assertNotEqual(h(cfg, [*self.PARAMS, "wd"]), value)
+        # a stored .run_config.json hashes the same as the launch-time config
+        stored = json.loads(json.dumps(self.ns["resolved_config"](cfg)))
+        self.assertEqual(from_values({p: stored.get(p) for p in self.PARAMS}), value)
+
+    def test_path_name_label_and_record(self) -> None:
+        cfg = {"model": "mlp", "lr": 0.1, "seed": 0}
+        value = self.ns["run_id_hash_v2"](cfg, self.PARAMS)
+        self.assertEqual(self.ns["run_id_path"](cfg, self.PARAMS, layout="hashed-v2"), Path(value))
+        self.assertEqual(self.ns["run_id_name"](cfg, self.PARAMS, layout="hashed-v2"), value)
+        self.assertEqual(self.ns["run_id_label"](cfg, self.PARAMS), "model=mlp,lr=0.1,seed=0")
+        record = self.ns["run_id_record"](cfg, self.PARAMS, layout="hashed-v2", version=2)
+        self.assertEqual(
+            record,
+            {"layout": "hashed-v2", "version": 2, "hash": value,
+             "params": {"model": "mlp", "lr": 0.1, "seed": 0}},
+        )
+        with self.assertRaisesRegex(ValueError, "version"):
+            self.ns["run_id_record"](cfg, self.PARAMS, layout="hashed-v2")
+        # legacy renderings are untouched
+        self.assertEqual(
+            self.ns["run_id_path"](cfg, self.PARAMS, layout="hashed-v1"),
+            Path(self.ns["run_id_hash"](cfg, self.PARAMS)),
+        )
+        self.assertEqual(len(self.ns["run_id_hash"](cfg, self.PARAMS)), 4 + 16)
+
+    def test_guard_writes_record_and_refuses_mismatches(self) -> None:
+        cfg = {"model": "mlp", "lr": 0.1, "seed": 0, "batch": 32}
+        run_dir = self.guard(cfg)
+        record = json.loads((run_dir / ".run_id.json").read_text())
+        self.assertEqual(record["layout"], "hashed-v2")
+        self.assertEqual(record["version"], 1)
+        self.assertEqual(record["hash"], run_dir.name)
+        self.assertEqual(json.loads((run_dir / ".run_config.json").read_text()), cfg)
+        self.assertFalse((self.root / "RUN_ID_MAP.json").exists())
+        self.guard(cfg)  # resume/retry is idempotent
+
+        with self.assertRaisesRegex(RuntimeError, "is not the hashed-v2 path"):
+            self.guard(cfg, run_dir=self.root / "elsewhere")
+        with self.assertRaisesRegex(ValueError, "requires experiment_root"):
+            self.ns["guard_run_config"](cfg, self.PARAMS, run_dir, layout="hashed-v2")
+        with self.assertRaisesRegex(ValueError, "requires spec_root"):
+            self.guard(cfg, spec_root=None)
+        # evaluations/ holds no identity file: it is never read from there
+        self.assertFalse(any(self.root.glob("RUN_ID_*.json")))
+        with self.assertRaisesRegex(RuntimeError, "not the current RUN_ID_VERSIONS.json"):
+            self.guard(cfg, params=["model", "lr"])
+        with self.assertRaisesRegex(RuntimeError, "version 7"):
+            self.guard(cfg, version=7)
+        # an existing record naming other params is a hash collision
+        (run_dir / ".run_id.json").write_text(json.dumps({**record, "params": {"model": "x"}}))
+        with self.assertRaisesRegex(RuntimeError, "hashed-v2 hash collision"):
+            self.guard(cfg)
+        (run_dir / ".run_id.json").write_text(json.dumps(record))
+        # a non-identifying difference trips the config diff, pointing at a migration
+        with self.assertRaisesRegex(RuntimeError, "(?s)batch.*run_id migration"):
+            self.guard({**cfg, "batch": 64})
+
+    def test_map_structure_embeds_configs_and_status(self) -> None:
+        a = {"model": "mlp", "lr": 0.1, "seed": 0}
+        b = {"model": "mlp", "lr": 0.1, "seed": 1}
+        dir_a, dir_b = self.guard(a), self.guard(b)
+        (dir_a / ".status.json").write_text(
+            json.dumps({"schema_version": 3, "state": "done", "wave_id": "w1", "rig": "rig-a"})
+        )
+        history = [{"from_version": 0, "to_version": 1, "date": "d", "map": {}, "backfill": {}}]
+        (self.spec / "RUN_ID_HISTORY.json").write_text(json.dumps(history))
+        with self.assertRaisesRegex(ValueError, "requires spec_root"):
+            self.ns["write_run_id_map"](self.root, layout="hashed-v2")
+        map_file = self.ns["write_run_id_map"](self.root, layout="hashed-v2", spec_root=self.spec)
+        self.assertEqual(map_file, self.root / "RUN_ID_MAP.json")
+        run_map = json.loads(map_file.read_text())
+        self.assertEqual(
+            set(run_map),
+            {"layout", "version", "versions", "history", "by_hash", "by_params", "configs"},
+        )
+        self.assertEqual((run_map["layout"], run_map["version"]), ("hashed-v2", 1))
+        # viewers need only the map: it embeds copies of both identity files
+        self.assertEqual(run_map["versions"], json.loads((self.spec / "RUN_ID_VERSIONS.json").read_text()))
+        self.assertEqual(run_map["history"], history)
+        self.assertEqual(
+            run_map["by_hash"][dir_a.name],
+            {"params": a, "version": 1, "wave_id": "w1", "state": "done", "rig": "rig-a"},
+        )
+        self.assertEqual(
+            run_map["by_hash"][dir_b.name],
+            {"params": b, "version": 1, "wave_id": None, "state": None, "rig": None},
+        )
+        key = json.dumps(a, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        self.assertEqual(run_map["by_params"][key], dir_a.name)
+        self.assertEqual(run_map["configs"], {dir_a.name: a, dir_b.name: b})
+
+        # a moved or hand-edited record blocks the map
+        record = json.loads((dir_b / ".run_id.json").read_text())
+        (dir_b / ".run_id.json").write_text(json.dumps({**record, "params": {**b, "seed": 9}}))
+        with self.assertRaisesRegex(RuntimeError, "does not match its params"):
+            self.ns["write_run_id_map"](self.root, layout="hashed-v2", spec_root=self.spec)
+        moved = self.root / "rid-moved"
+        dir_b.rename(moved)
+        (moved / ".run_id.json").write_text(json.dumps(record))
+        with self.assertRaisesRegex(RuntimeError, "does not match hashed-v2 path"):
+            self.ns["write_run_id_map"](self.root, layout="hashed-v2", spec_root=self.spec)
+
+    def test_hashed_v1_map_hard_fails_on_hash_collision(self) -> None:
+        params = self.PARAMS
+        cfg = {"model": "mlp", "lr": 0.1, "seed": 0}
+        root = self.root.parent / "002_legacy"
+        first = root / self.ns["run_id_path"](cfg, params, layout="hashed-v1")
+        self.ns["guard_run_config"](cfg, params, first, layout="hashed-v1")
+        record = json.loads((first / ".run_id.json").read_text())
+        clash = root / "rid-copy"
+        clash.mkdir()
+        (clash / ".run_id.json").write_text(
+            json.dumps({**record, "run_id_flat": "model=other", "run_id": {"model": "other"}})
+        )
+        with self.assertRaisesRegex(RuntimeError, "hashed-v1 hash collision"):
+            self.ns["write_run_id_map"](root)
+        (clash / ".run_id.json").write_text(json.dumps(record))  # same identity: fine
+        self.ns["write_run_id_map"](root)
+
+    def test_hashed_v2_plan_hard_fails_on_hash_collision(self) -> None:
+        a = {"model": "mlp", "lr": 0.1, "seed": 0}
+        self.guard(a)
+        existing = self.ns["run_id_hash_v2"](a, self.PARAMS)
+        real = self.ns["run_id_hash_v2_from_values"]
+        self.ns["run_id_hash_v2_from_values"] = lambda values: existing
+        try:
+            with self.assertRaisesRegex(RuntimeError, "run_id hash collision"):
+                self.ns["check_run_id_plan"](
+                    [{**a, "seed": 5}], self.PARAMS, None, self.root, layout="hashed-v2",
+                    spec_root=self.spec,
+                )
+        finally:
+            self.ns["run_id_hash_v2_from_values"] = real
+
+    def test_plan_refuses_config_drift_but_allows_same_config_resume(self) -> None:
+        plan = self.ns["check_run_id_plan"]
+
+        def check(*args, **kwargs):
+            if kwargs.get("layout") == "hashed-v2":
+                kwargs.setdefault("spec_root", self.spec)
+            return plan(*args, **kwargs)
+
+        cfg = {"model": "mlp", "lr": 0.1, "seed": 0, "batch": 32}
+        run_dir = self.guard(cfg)
+        fresh = {**cfg, "seed": 1}
+        self.assertEqual(
+            check([cfg, fresh], self.PARAMS, experiment_root=self.root, layout="hashed-v2"),
+            [Path(run_dir.name), Path(self.ns["run_id_hash_v2"](fresh, self.PARAMS))],
+        )
+        with self.assertRaisesRegex(RuntimeError, r"(?s)\['batch'\].*run_id migration"):
+            check([{**cfg, "batch": 64}], self.PARAMS, None, self.root, layout="hashed-v2")
+        with self.assertRaisesRegex(RuntimeError, "planned twice"):
+            check([fresh, dict(fresh)], self.PARAMS, None, self.root, layout="hashed-v2")
+        with self.assertRaisesRegex(RuntimeError, "not the current RUN_ID_VERSIONS.json"):
+            check([fresh], ["model"], None, self.root, layout="hashed-v2")
+        with self.assertRaisesRegex(ValueError, "does not apply to hashed-v2"):
+            check([fresh], self.PARAMS, [("model",)], self.root, layout="hashed-v2")
+        with self.assertRaisesRegex(ValueError, "hashed-v2 or a segments layout"):
+            check([fresh], self.PARAMS, None, self.root, layout="nested")
+        with self.assertRaisesRegex(ValueError, "requires spec_root"):
+            plan([fresh], self.PARAMS, None, self.root, layout="hashed-v2")
+
+        # the same gate under a legacy segments-v2 pin, positional as before
+        segments = [("model",), ({"optim": ("lr",)}, "seed")]
+        legacy = self.root.parent / "003_segments"
+        seg_dir = legacy / self.ns["run_id_path"](cfg, self.PARAMS, layout="segments-v2", segments=segments)
+        self.ns["guard_run_config"](
+            cfg, self.PARAMS, seg_dir, layout="segments-v2", segments=segments, experiment_root=legacy
+        )
+        self.assertEqual(len(check([cfg], self.PARAMS, segments, legacy)), 1)
+        with self.assertRaisesRegex(RuntimeError, r"(?s)\['batch'\].*new numbered sub-experiment"):
+            check([{**cfg, "batch": 64}], self.PARAMS, segments, legacy)
+
+    def test_load_run_id_spec_validates_the_versions_file(self) -> None:
+        load = self.ns["load_run_id_spec"]
+        self.write_versions([
+            {"version": 1, "params": ["model"], "date": "d", "reason": "r"},
+            {"version": 2, "params": ["model", "lr"], "date": "d", "reason": "r"},
+        ])
+        self.assertEqual(load(self.spec), (2, ["model", "lr"]))
+        bad = {
+            "is empty": [],
+            "lacks": [{"version": 1, "params": ["a"]}],
+            "positive integer": [{"version": "1", "params": ["a"], "date": "d", "reason": "r"}],
+            "does not follow": [
+                {"version": 2, "params": ["a"], "date": "d", "reason": "r"},
+                {"version": 2, "params": ["b"], "date": "d", "reason": "r"},
+            ],
+            "non-empty list": [{"version": 1, "params": [], "date": "d", "reason": "r"}],
+            "duplicated params": [{"version": 1, "params": ["a", "a"], "date": "d", "reason": "r"}],
+            "JSON list": {"version": 1},
+            "top-level": [{"version": 1, "params": ["optim.lr"], "date": "d", "reason": "r"}],
+        }
+        for message, entries in bad.items():
+            with self.subTest(message=message):
+                self.write_versions(entries)
+                with self.assertRaisesRegex(ValueError, message):
+                    load(self.spec)
+        (self.spec / "RUN_ID_VERSIONS.json").write_text("[{")
+        with self.assertRaisesRegex(ValueError, "not valid JSON"):
+            load(self.spec)
+        (self.spec / "RUN_ID_VERSIONS.json").unlink()
+        with self.assertRaisesRegex(FileNotFoundError, "RUN_ID_VERSIONS.json"):
+            load(self.spec)
+
+    def test_resolve_run_id_hash_follows_the_history_chain(self) -> None:
+        resolve = self.ns["resolve_run_id_hash"]
+        self.assertEqual(resolve(self.spec, "rid-a"), "rid-a")  # no history yet
+        (self.spec / "RUN_ID_HISTORY.json").write_text(json.dumps([
+            {"from_version": 1, "to_version": 2, "date": "d", "map": {"rid-a": "rid-b", "rid-x": "rid-y"}, "backfill": {}},
+            {"from_version": 2, "to_version": 3, "date": "d", "map": {"rid-b": "rid-c", "rid-y": "rid-z"},
+             "backfill": {"wd": {"value": 0.0, "source": "config default"}}},
+        ]))
+        self.assertEqual(resolve(self.spec, "rid-a"), "rid-c")
+        self.assertEqual(resolve(self.spec, "rid-b"), "rid-c")
+        self.assertEqual(resolve(self.spec, "rid-c"), "rid-c")
+        self.assertEqual(resolve(self.spec, "rid-x"), "rid-z")
+        self.assertEqual(resolve(self.spec, "rid-unknown"), "rid-unknown")
+        (self.spec / "RUN_ID_HISTORY.json").write_text(json.dumps([{"from_version": 1}]))
+        with self.assertRaisesRegex(ValueError, "'map'"):
+            resolve(self.spec, "rid-a")
+
+    def test_guard_on_a_rig_reads_identity_from_the_source_tree_not_evaluations(self) -> None:
+        # A non-hub rig: its project root (RESEARCH_PROJECT_ROOT) holds evaluations/ storage with
+        # no identity file at all; the wave worktree (source root) carries config/<exp>/.
+        rig = self.project / "rig"
+        (rig / ".git").mkdir(parents=True)
+        (rig / "evaluations" / "001_scale").mkdir(parents=True)
+        source = rig / ".waves" / "20260921-093000"
+        (source / "config" / "001_scale").mkdir(parents=True)
+        (source / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+        (source / "config" / "001_scale" / "RUN_ID_VERSIONS.json").write_text(
+            json.dumps([{"version": 1, "params": self.PARAMS, "date": "d", "reason": "r"}])
+        )
+        paths: dict[str, object] = {"__file__": str(source / "code" / "common" / "paths.py")}
+        exec(compile(template_block("code/common/paths.py"), "paths.py", "exec"), paths)
+        with mock.patch.dict(os.environ, {"RESEARCH_PROJECT_ROOT": str(rig)}):
+            spec_root = paths["source_path"]("config/001_scale")
+            exp_root = paths["project_path"]("evaluations/001_scale")
+            cfg = {"model": "mlp", "lr": 0.1, "seed": 0}
+            run_dir = exp_root / self.ns["run_id_path"](cfg, self.PARAMS, layout="hashed-v2")
+            self.ns["guard_run_config"](
+                cfg, self.PARAMS, run_dir, layout="hashed-v2", experiment_root=exp_root, spec_root=spec_root
+            )
+        self.assertEqual(spec_root, source / "config" / "001_scale")
+        self.assertEqual(exp_root, rig / "evaluations" / "001_scale")
+        self.assertEqual(json.loads((run_dir / ".run_id.json").read_text())["version"], 1)
+        self.assertEqual(sorted(p.name for p in exp_root.iterdir()), [run_dir.name])
+
+    def test_status_writer_records_the_lane_rig(self) -> None:
+        namespace: dict[str, object] = {}
+        exec(compile(template_block("code/common/status.py"), "status.py", "exec"), namespace)
+        with mock.patch.dict(os.environ, {"LANE_RIG": "rig-4090", "WAVE_ID": "w1"}):
+            with namespace["StatusWriter"](self.root / "run") as writer:
+                started = json.loads(writer.path.read_text())
+        ended = json.loads(writer.path.read_text())
+        self.assertEqual(started["schema_version"], 3)
+        self.assertEqual((started["rig"], ended["rig"]), ("rig-4090", "rig-4090"))
+        self.assertIn("rig", status_provenance_fields())
 
 
 if __name__ == "__main__":

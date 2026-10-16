@@ -9,8 +9,9 @@ wave-isolation contract in conventions); nothing is ever executed from the main 
 ## wave.sh — one per (run, wave), self-contained, self-guarded, and placed at run time
 
 Committed at `scripts/<NNN_exp>/<run_id folder>/wave_<wave_id>/wave.sh` and executed
-as `.waves/<wave_id>/scripts/...` from the project root (the rendered
-`run_id_path` directories under `segments-v2`; `<run_id_flat>` under a legacy pin). It is the only
+as `.waves/<wave_id>/scripts/...` from the project root (the `rid-<32 hex>` directory under
+`hashed-v2`; the rendered `run_id_path` directories under a legacy segments pin;
+`<run_id_flat>` under the other legacy pins). It is the only
 per-run script kind. It names **no rig and no GPU**: the lane that claims it supplies `LANE_RIG`
 and `LANE_GPUS` (and its rig's `MIN_FREE_KIB`/`QUOTA_FS`), which is what lets the wave's queue
 hand any run to whichever lane is free first. The artifact guard travels with each run, which is
@@ -19,7 +20,7 @@ what keeps a lane relaunch idempotent.
 ```bash
 #!/usr/bin/env bash
 # run: <run_id_name>   experiment: <NNN_exp>
-# run_id_flat: <flat run_id>
+# label: <run_id_label under hashed-v2; the flat run_id under a legacy pin>
 # wave: <wave_id>   placement: the claiming lane (LANE_RIG, LANE_GPUS)
 set -uo pipefail
 export WAVE_ID="<wave_id>"
@@ -31,9 +32,10 @@ PROJECT_ROOT="${SLURM_SUBMIT_DIR:-$PWD}"
 cd "$PROJECT_ROOT" || exit 1
 WAVE_TREE="$PROJECT_ROOT/.waves/$WAVE_ID"
 
-RUN_ID_FLAT="<flat run_id>"
-RUN_ID_NAME="<run_id_name: the rendered run_id under segments-v2; the flat run_id under a legacy pin>"
-RUN_ID_PATH_LAYOUT="<segments-v2, or a legacy segments-v1 | nested | collapsed-v1 | hashed-v1, copied from the experiment record>"
+RUN_ID_NAME="<run_id_name: the hash under hashed-v2; the rendered run_id under a segments pin; the flat run_id under another legacy pin>"
+RUN_ID_LABEL="<run_id_label under hashed-v2; the flat run_id under a legacy pin>"
+RUN_ID_PATH_LAYOUT="<hashed-v2, or a legacy segments-v2 | segments-v1 | nested | collapsed-v1 | hashed-v1, copied from the experiment record>"
+# RUN_ID_VERSION: <hashed-v2 only: the current RUN_ID_VERSIONS.json version>
 # RUN_ID_SEGMENTS: <segments-v2/segments-v1 only: the experiment's recorded spec, copied verbatim>
 CHECKPOINT_DIR="<exact checkpoint directory resolved by canonical run_id_path>"
 EVAL_DIR="<exact evaluation directory resolved by canonical run_id_path>"
@@ -43,7 +45,7 @@ ARTIFACT="<exact expected final artifact path under CHECKPOINT_DIR or EVAL_DIR>"
 
 # self-guard (idempotency): the expected final artifact is the only completion signal
 if [ -e "$ARTIFACT" ]; then
-  echo "[skip] $RUN_ID_NAME already done (artifact present)"; exit 0
+  echo "[skip] $RUN_ID_NAME ($RUN_ID_LABEL) already done (artifact present)"; exit 0
 fi
 # an offloaded artifact leaves a receipt: the hub holds the checksum-verified copy (rig-sync offload)
 if [ -e "$ARTIFACT.offloaded.json" ]; then
@@ -171,10 +173,11 @@ if [ $rc -ne 0 ] && [ ! -e "$ARTIFACT" ]; then
 import json, os, sys, datetime, pathlib
 p = pathlib.Path(sys.argv[1])
 s = json.loads(p.read_text()) if p.exists() else {}
-s.setdefault("schema_version", 2)
+s.setdefault("schema_version", 3)
 ended = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 s.update(state="failed", ended=ended, heartbeat=ended,
-         wave_id=os.environ.get("WAVE_ID"), gpu=os.environ.get("CUDA_VISIBLE_DEVICES"),
+         wave_id=os.environ.get("WAVE_ID"), rig=os.environ.get("LANE_RIG"),
+         gpu=os.environ.get("CUDA_VISIBLE_DEVICES"),
          source_revision=os.environ.get("SOURCE_REVISION"),
          source_tag=os.environ.get("SOURCE_TAG"),
          environment_fingerprint=os.environ.get("ENVIRONMENT_FINGERPRINT"))
@@ -190,18 +193,24 @@ Notes:
 - The overrides list is the FULL run_id (and any non-default fixed params) — explicit, so the
   script is meaningful standalone. Produce each array token with
   `code/common/run_id.py::hydra_override_arg`; never interpolate raw config values into shell.
-- Read the experiment's literal `RUN_ID_PATH_LAYOUT` (`segments-v2` with its `RUN_ID_SEGMENTS`, or a
-  legacy `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1`). After `check_run_id_plan` passed for the whole
+- Read the experiment's literal `RUN_ID_PATH_LAYOUT` (`hashed-v2` with the current
+  `config/<experiment_path>/RUN_ID_VERSIONS.json` entry, or a legacy `segments-v2`/`segments-v1` with its `RUN_ID_SEGMENTS`,
+  `nested`, `collapsed-v1`, or `hashed-v1`). After `check_run_id_plan` passed for the whole
   wave, produce the checkpoint and evaluation suffix once with canonical
-  `run_id_path(cfg, params, layout=RUN_ID_PATH_LAYOUT, segments=RUN_ID_SEGMENTS)`, and materialize the resulting exact
+  `run_id_path(cfg, params, layout=RUN_ID_PATH_LAYOUT, segments=RUN_ID_SEGMENTS)` (`segments`
+  omitted under `hashed-v2`), and materialize the resulting exact
   `CHECKPOINT_DIR`, `EVAL_DIR`, `STATUS_PATH`, and `ARTIFACT` in the generated script. The
   checkpoint and evaluation directories must use the same selected layout. Never hand-compose a
-  path, infer slash depth, or reconstruct a path from `RUN_ID_FLAT`. Plot outputs are the
+  path, infer slash depth, or reconstruct a path from a label or flat id. Plot outputs are the
   exception: they are not run-scoped, carry no run_id segments, and never go through the helper.
-- Produce `<flat run_id>` with canonical `run_id_flat` and `<run_id_name>` with canonical
-  `run_id_name` at generation time. Under `segments-v2` the run folder in `scripts/` and `logs/` is
-  the same suffix as `EVAL_DIR`, and wandb and Slurm names use `RUN_ID_NAME`; under a legacy pin
-  scripts, logs, and wandb names remain flat and unchanged.
+- Produce `<run_id_name>` with canonical `run_id_name` and the label with canonical
+  `run_id_label` (`run_id_flat` under a legacy pin) at generation time. Under `hashed-v2` and a
+  legacy segments pin the run folder in `scripts/` and `logs/` is the same suffix as
+  `EVAL_DIR`, and the Slurm name uses `RUN_ID_NAME`. WandB under `hashed-v2` is
+  `wandb.init(name=run_id_label(...), tags=[run_id_name(...)], config=wandb_config(cfg))`: the
+  label is the display name and the hash a tag; a legacy segments pin keeps
+  `name=RUN_ID_NAME`. Under the other legacy pins scripts, logs, and wandb names remain flat and
+  unchanged.
 - The artifact guard runs **before** anything else, so relaunching a lane after
   a crash re-executes only runs whose declared completion artifact (or its offload receipt) is absent — resuming or
   restarting per the experiment's design-time resume decision. `.status.json` is inspected only
@@ -220,8 +229,8 @@ Notes:
 - `LANE_RIG` and `LANE_GPUS` arrive from the lane loop (or `sbatch --export` on a cluster) and are
   the run's only placement input; the log file name carries them, so `ls logs/.../wave_<wave_id>/`
   shows where every attempt ran. `CUDA_VISIBLE_DEVICES`, `WAVE_ID`, `SOURCE_REVISION`, `SOURCE_TAG`, and
-  `ENVIRONMENT_FINGERPRINT` are exported here and read
-  by StatusWriter. They are env vars, **not** config params, so they never enter the
+  `ENVIRONMENT_FINGERPRINT` are exported here, `LANE_RIG` by the lane, and all are read
+  by StatusWriter (schema v3 records `rig`). They are env vars, **not** config params, so they never enter the
   `guard_run_config` snapshot — otherwise relaunch placement/provenance would trip the collision
   guard.
 - The environment guard uses the wave's keyed environment `ENVIRONMENT_DIR` (`.envs/<env_key>`,
@@ -270,7 +279,9 @@ nothing else in this file changes for a job.
 ## README.md — one per (run, wave), written once at launch
 
 Lives beside the wave script. It records **what was launched and why** — a launch-time statement
-of intent. It is never updated afterwards: no results, no evaluations, no conclusions. Live
+of intent. It is never updated afterwards: no results, no evaluations, no conclusions. The one
+exception is a run_id migration (`run-identity`), which replaces the old hash with the new one in
+the README and the script and nothing else. Live
 state belongs in EXPERIMENTS.md, which is reconciled from disk; if results leaked in here, a
 wave would accumulate N stale copies of them.
 
@@ -289,28 +300,32 @@ Why this wave: <the reason these runs are being launched now — first probe of 
 after a promising probe, re-launch of what failed in <earlier wave id>, re-run after a code fix,
 moving work to a freer rig, ...>
 
-This run: `model=mlp/optim_params=b4c2e09f6dbe6b4b,seed=0` → rig-4090, gpu 0.
-Full run_id: `model=mlp,lr=0.001,wd=0.01,beta1=0.9,seed=0`.
+This run: `rid-3f0c9a1e5b7d24c8a6e1f09b2d4c6e8a` → claimed by the first free lane of the pool.
+Label: `model=mlp,lr=0.001,wd=0.01,beta1=0.9,seed=0`.
 
-Run path layout: `segments-v2`, segments `[("model",), ({"optim_params": ("lr", "wd", "beta1")}, "seed")]`.
+Run path layout: `hashed-v2`, identity version 1 (`config/000_grokking/RUN_ID_VERSIONS.json`).
 
-Checkpoint directory: `checkpoints/000_grokking/model=mlp/optim_params=b4c2e09f6dbe6b4b,seed=0`.
-Evaluation directory: `evaluations/000_grokking/model=mlp/optim_params=b4c2e09f6dbe6b4b,seed=0`.
-Status path: `evaluations/000_grokking/model=mlp/optim_params=b4c2e09f6dbe6b4b,seed=0/.status.json`.
-Expected final artifact: `evaluations/000_grokking/model=mlp/optim_params=b4c2e09f6dbe6b4b,seed=0/result.json`.
+Checkpoint directory: `checkpoints/000_grokking/rid-3f0c9a1e5b7d24c8a6e1f09b2d4c6e8a`.
+Evaluation directory: `evaluations/000_grokking/rid-3f0c9a1e5b7d24c8a6e1f09b2d4c6e8a`.
+Status path: `evaluations/000_grokking/rid-3f0c9a1e5b7d24c8a6e1f09b2d4c6e8a/.status.json`.
+Expected final artifact: `evaluations/000_grokking/rid-3f0c9a1e5b7d24c8a6e1f09b2d4c6e8a/result.json`.
 
-Full wave: 4 runs — 3 on rig-4090 (gpu 0), 1 on behemoth (gpu 0).
+Pool: rig-4090 (gpu 0), behemoth (gpu 0); offload: behemoth. Full wave: 4 runs.
 ```
 
 The four run-path fields above are concrete launch records, not templates. Generate all of them
-from the same selected `RUN_ID_PATH_LAYOUT` and `RUN_ID_SEGMENTS`; for legacy `nested`, `collapsed-v1`, and `hashed-v1` pins their concrete values differ.
+from the same selected `RUN_ID_PATH_LAYOUT` (and `RUN_ID_SEGMENTS` under a legacy segments pin,
+whose README records `Run path layout: segments-v2, segments [...]` and the flat run_id instead of
+a label); for legacy `nested`, `collapsed-v1`, and `hashed-v1` pins their concrete values differ.
 Monitoring and recovery consume these recorded paths verbatim and never infer a layout from slash
-depth. `RUN_ID_PARAMS` may change only while no checkpoint or evaluation and no wave
-README or script exists. After the first such surface, any identity-schema or segment change under
-`segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1` requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the
-established tree. The experiment's layout is likewise immutable after that boundary. A mismatch or
-mixed tree blocks the wave and routes changed work to a new numbered sub-experiment; never move,
-rename, or rewrite the old README, script, log, or artifact paths.
+depth. Under `hashed-v2` the identity evolves only through a run_id migration, which rewrites
+these hashes in place. Under a legacy pin `RUN_ID_PARAMS` may change only while no checkpoint or
+evaluation and no wave README or script exists; after the first such surface, any identity-schema
+or segment change under `segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1`
+requires a new numbered sub-experiment; never backfill, rename, move, or rewrite the established
+tree. The experiment's layout is immutable after that boundary in every case. A mismatch or mixed
+tree blocks the wave; never move, rename, or rewrite the old README, script, log, or artifact paths
+outside a run_id migration.
 
 When the user has granted extra cards on `behemoth` for this wave, the README says so, in the
 same words as the script header — e.g. `Full wave: 6 runs — 3 on rig-4090 (gpu 0), 3 on
@@ -320,7 +335,7 @@ behemoth (gpu 0, gpu 3; gpu 3 user-authorized 2026-08-02 for this wave only).`
 
 Use the single canonical `code/common/status.py` implementation in
 [research-project-init templates](../../research-project-init/references/templates.md#codecommonstatuspy).
-It writes schema-v2 numeric progress, timezone-aware timestamps, live elapsed time, and an
+It writes schema-v3 status (schema-v2 numeric progress plus the lane's `rig`), timezone-aware timestamps, live elapsed time, and an
 automatic 60-second heartbeat. Experiment code calls
 `heartbeat(completed=<done>, total=<total>, unit=<label>)`; monitors compute ETA from those facts
 and never persist ETA in `.status.json`. Do not copy a second implementation into this skill.
@@ -436,7 +451,8 @@ execution file), one JSON object:
   "offload": ["behemoth"],
   "runs": [
     {
-      "id": "<run_id_name>",
+      "id": "<run_id_name: the rid-<32 hex> hash under hashed-v2>",
+      "label": "<run_id_label under hashed-v2; the flat run_id under a legacy pin>",
       "script": "scripts/<NNN_exp>/<run_id folder>/wave_<wave_id>/wave.sh",
       "status_path": "<exact status path>",
       "artifact": "<exact expected final artifact>",
@@ -453,7 +469,12 @@ execution file), one JSON object:
 
 `runs` order is the queue order (longest first, see below). `cost_s` is the run's estimate in
 weight-1.0 seconds from the `experiments-tracking` hierarchy, omitted when there is no basis.
-`min_vram_mib` and `needs` come from the experiment's design record. A `behemoth` lane beyond
+`min_vram_mib` and `needs` come from the experiment's design record. `offload` lists every non-hub
+lane rig of the pool by default (Slurm targets such as `leonardo` excluded; `supervisor.py` rejects
+offload entries that are not lane rigs). The `leonardo` `core_hours_cap` never exceeds the
+execution agreement's Leonardo core-hour ceiling: setting it up to the ceiling here, or raising it
+later with `pool --rig leonardo --core-hours-cap <n>`, is standing policy (done, then reported);
+the scripts never read the ceiling, so the agent checks cap ≤ ceiling before `register`. A `behemoth` lane beyond
 gpu0 appears only under a user grant for this wave. Weights are copied from conventions § Rig
 fleet at generation time and are only the prior: the supervisor replaces them with rates measured
 in this wave as soon as runs finish.
@@ -465,9 +486,12 @@ takes the next run it is eligible for when it has room, so a fast card simply ta
 a wrong estimate corrects itself once real runtimes arrive. What dispatch decides is the pool, the
 queue order, and the estimate it shows the user.
 
-1. **Pool.** Every authorized lane: rig and GPU set, from the fleet board and the envelope. Ask
-   which rigs and GPUs are free; never infer it from `nvidia-smi`. Low disk never excludes a rig:
-   list it under `offload` instead. `leonardo` joins with a job cap and a core-hour cap.
+1. **Pool.** Every lane the fleet board shows free on the envelope's rigs and GPUs — a standing
+   policy, reported, never asked; never infer availability from `nvidia-smi`. Low disk never
+   excludes a rig: every non-hub lane rig is under `offload` by default (Slurm targets such as
+   `leonardo` excluded; `supervisor.py` rejects offload entries that are not lane rigs).
+   `leonardo` joins with a job cap and a core-hour cap up to the execution agreement's Leonardo
+   core-hour ceiling (set without asking; exceeding the ceiling asks).
 2. **Cost.** Estimate every run's cost in rig-independent units with the `experiments-tracking`
    hierarchy (`cost = elapsed_s × weight`, preferring same-rig history). With no history at all,
    omit `cost_s` — say so, and treat the first estimate as provisional.
@@ -475,7 +499,7 @@ queue order, and the estimate it shows the user.
    leaves one lane working alone at the end of the wave.
 4. **Estimate.** Simulate the feeder (each run to the eligible lane predicted free first, runtime
    `cost / weight`) and report the predicted wave completion and each lane's share in the gate-3
-   preview. A run pinned by VRAM or data to one rig is named as such.
+   report. A run pinned by VRAM or data to one rig is named as such.
 
 Worked example — 12 equal-cost runs, one hour each on `rig-4090`, across `rig-4090` gpu0 (1.0),
 `rig-3090-ti` gpu0 (0.5), and `behemoth` gpu0 (2.0). The feeder lands 3 / 2 / 7 and the wave takes

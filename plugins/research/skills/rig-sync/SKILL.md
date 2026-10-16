@@ -1,6 +1,6 @@
 ---
 name: rig-sync
-description: Deploy exact tested Git revisions as per-wave worktrees and move artifacts across configured Research 2.0 GPU rigs, including the continuous hub-ward offload that keeps a disk-constrained rig usable. Use when preparing an approved empty rig clone, verifying GitHub and rig identity, materializing an authorized wave commit as its own worktree, checking cross-rig revision consistency, listing which waves are active on a machine, proposing or running an approved prune of finished wave worktrees and unused wave environments, transferring selected artifacts, offloading a supervised wave's checkpoints from a rig short on disk, restoring a run's checkpoints to the rig that resumes it, or copying a subtree of a declared shared cache to a rig. Pair with environment-sync; do not use for legacy projects, environment provisioning, destructive Git recovery, deletion of anything but approved prune targets and checksum-verified offloaded checkpoints, or writes outside an approved engineering envelope.
+description: Deploy exact tested Git revisions as per-wave worktrees and move artifacts across configured Research 2.0 GPU rigs, including the continuous hub-ward offload that keeps a disk-constrained rig usable. Use when preparing an approved empty rig clone, verifying GitHub and rig identity, materializing an authorized wave commit as a worktree, checking cross-rig revision consistency, listing which waves are active on a machine, proposing or running an approved prune of finished wave worktrees and unused environments, transferring selected artifacts, collecting wave evaluations to the hub, offloading a supervised wave's checkpoints from a rig short on disk, restoring a run's checkpoints to the rig resuming it, or copying a declared shared-cache subtree to a rig. Pair with environment-sync; do not use for legacy projects, environment provisioning, destructive Git recovery, deletion of anything but approved prune targets and checksum-verified offloaded checkpoints, or writes outside an approved engineering envelope.
 ---
 
 # rig-sync
@@ -22,9 +22,18 @@ holds shell wave scripts only and has no `rigsync.py`.
 Read `program/00-execution-agreement.md` and the Research 2.0 conventions
 (`../research-project-init/references/conventions.md`, including "Directives are closed" — never
 infer paths, machine entries, or defaults from another project on disk) first. Stop when the
-project surfaces are absent. In engineering-manual mode, show the dry run and wait; in
-engineering-auto mode, confirm only the named source, destination, revision, and selector covered
-by the approved envelope. New destinations and any destructive recovery remain protected.
+project surfaces are absent. Approval follows the tiers in conventions, "Approval tiers",
+identically in both engineering modes:
+
+- **Do, then report** (dry run, then `--confirm`, then one line): `deploy-revision` of the tagged
+  wave commit, `prepare` on a rig already declared in the user registry, `offload` (on by default
+  for every non-hub lane rig; Slurm targets such as `leonardo` excluded, and `supervisor.py`
+  rejects offload entries that are not lane rigs), and `collect`.
+- **Always ask**: `prune`, `provision-env` and `push-env` outside `research-project-init`'s
+  consolidated approval, new destinations, `--overwrite`, and any destructive recovery.
+- Every other write (`pull`, `push`, `sync-cache`, `restore` outside a supervised wave) is
+  mode-owned: manual mode shows the dry run and waits; auto mode confirms only the named source,
+  destination, revision, and selector covered by the approved envelope.
 
 ## Safety contract
 
@@ -32,14 +41,16 @@ by the approved envelope. New destinations and any destructive recovery remain p
   `verify-revision` before every initial/recovery launch, and `status` before artifact movement.
   Run `environment-sync verify` separately after revision deployment; Git consistency does not
   prove installed-environment consistency.
-- Show a `--dry-run` before every remote write, then authorize it under the active engineering
-  mode for the named source, destination, and selector. The engineering envelope may authorize its commit, tag,
-  push, and worktree deployment to the named rigs.
+- Run a `--dry-run` before every remote write, then confirm it by its tier above for the named
+  source, destination, and selector. Deploying the tagged wave commit as worktrees on the
+  envelope's rigs is do-then-report.
 - Never force-push, reset, stash, clean, merge, add `--delete`, delete remote files, or infer an
   SSH alias/path. This skill performs exactly two deletions. `prune` (below) runs only with
   explicit user approval of its dry run in every engineering mode. `offload` (below) removes a
-  rig's copy of a checkpoint only under its fixed predicate, and is authorized **per wave** at the
-  `sweep-dispatch` gate rather than per pass — the data still exists, checksum-verified, on the hub.
+  rig's copy of a checkpoint only under its fixed predicate, and is on by default for every non-hub
+  lane rig of a wave's pool (Slurm targets such as `leonardo` excluded; `supervisor.py` rejects
+  offload entries that are not lane rigs) rather than authorized per pass — the data still exists, checksum-verified,
+  on the hub. `collect` deletes nothing on either side.
   Never delete a file by hand because `offload` kept it: the clause it names is the reason.
 - Treat `rig-4090` as local when its configured name or hostname matches the current host; do not
   require self-SSH. Use bounded, noninteractive SSH for peers.
@@ -54,12 +65,14 @@ by the approved envelope. New destinations and any destructive recovery remain p
   than `df` alone,
   probes a **non-interactive** shell for the cache values, and fails a project `.env` that
   re-declares any of them.
-- `provision-env` edits shell startup files on the rig, so it is a protected write: show its
-  `--dry-run` and authorize under the active engineering mode before `--confirm`. On a shared
-  machine, say so explicitly — the change affects that account's every future shell.
-- `push-env` places the hub's `.env` on a peer that Git left without one. It is a protected write
-  that **moves secrets**: say so, show the `--dry-run`, and never pass `--overwrite` to clobber a
-  peer's existing file without explicit approval.
+- `provision-env` edits shell startup files on the rig, so it **always asks**: show its
+  `--dry-run` and wait for the user before `--confirm`, in both modes. The only exception is
+  `research-project-init`, whose consolidated approval names it explicitly. On a shared machine,
+  say so explicitly — the change affects that account's every future shell.
+- `push-env` places the hub's `.env` on a peer that Git left without one. It **moves secrets**, so
+  it always asks (the same `research-project-init` exception applies): say so, show the
+  `--dry-run`, and never pass `--overwrite` to clobber a peer's existing file without explicit
+  approval.
 - Never spell a rig's project path or storage floor by hand. Read them back with `repo-path` and
   `storage-env`; a second copy of a declared fact is a second thing that can be wrong.
 - Stop dispatch when `doctor` fails for an assigned rig.
@@ -98,6 +111,9 @@ python3 "$RIGSYNC_SCRIPT" prune --machines rig-4090,leonardo --waves 20260802-12
 python3 "$RIGSYNC_SCRIPT" offload --machine behemoth --wave 20260802-120000 --dry-run
 python3 "$RIGSYNC_SCRIPT" offload --machine behemoth --wave 20260802-120000 --confirm
 python3 "$RIGSYNC_SCRIPT" restore --machine rig-3090-ti --wave 20260802-120000 --run <run_id_name> --confirm
+python3 "$RIGSYNC_SCRIPT" collect --wave 20260802-120000 --machine behemoth --dry-run
+python3 "$RIGSYNC_SCRIPT" collect --wave 20260802-120000 --confirm
+python3 "$RIGSYNC_SCRIPT" collect --check --wave 20260802-120000
 python3 "$RIGSYNC_SCRIPT" sync-cache --var HF_DATASETS_CACHE --subpath <relative subtree> --to rig-3090-ti --dry-run
 python3 "$RIGSYNC_SCRIPT" status --group evaluations
 python3 "$RIGSYNC_SCRIPT" pull evaluations/000_exp --from rig-3090-ti --dry-run
@@ -147,6 +163,32 @@ shared cache (`[machines.<rig>.caches]`) hub → rig, never deletes, and seriali
 rig's cache so two lanes never fetch the same data at once; it refuses undeclared variables and
 paths with `..`.
 
+### Collect evaluation records to the hub
+
+`rigsync collect --wave <wave_id> [--machine <rig>] --confirm` (run on the hub) copies the wave's
+evaluation directories (`eval_dir`: `.run_id.json`, `.run_config.json`, `.status.json`, metrics and
+results) from each rig in the wave's pool to the same relative path on the hub. It never deletes
+on either side and never copies checkpoints (`offload` owns those). It is additive and runs
+without asking; `--dry-run` prints the plan.
+
+- Files are collected once 120 s old; `.status.json` and every file of a finished (`done`/`failed`)
+  run are collected at once.
+- A differing hub copy is replaced only by a newer rig copy of a run the hub does not yet record as
+  finished; `.status.json` never turns a finished hub record back into an unfinished one. A
+  finished hub copy that differs is a `[conflict]`: reported, kept.
+- A `.run_id.json` / `.run_config.json` that differs between rig and hub is a hard error: nothing
+  of that run is copied, the command exits non-zero, and a person settles it.
+- Every copied file is sha256-verified against the rig.
+- Naming the hub is a no-op. Slurm rigs work like any other (listing over `ssh`, copy over
+  `transfer_ssh`).
+
+`rigsync collect --check [--wave <wave_id>]` changes nothing and exits non-zero, listing every rig
+run record (`.run_id.json`, `.run_config.json`) that is missing or different on the hub; without
+`--wave` it checks every wave registered on the hub. This is the "reconciled" precondition the
+dispatch gate and `runid migrate plan` (`run-identity`) require.
+
+`offload` copies evaluations by these same rules before freeing checkpoints.
+
 Artifact selectors are `<group>` or `<group>/<relative/path>`, where `<group>` is declared under
 `[artifacts]` in `sync.toml`. `pull` means peer → current rig; `push` means current rig → peer.
 
@@ -156,9 +198,10 @@ Artifact selectors are `<group>` or `<group>/<relative/path>`, where `<group>` i
   is written once per machine and shared by every project on it, so a rig with no entry cannot be
   declared at all. Require `check-paths` to pass before `prepare`: it catches a `repo_path` under
   none of the rig's storage roots while that is still a one-line edit rather than a misplaced clone.
-- For a new destination, preview and authorize `prepare` under the active engineering mode; with
-  `[git]` configured it clones the hub remote into an absent/empty path and refuses a non-empty
-  non-Git directory. Follow it with `push-env`: `.env` is ignored by Git, so the fresh clone has
+- `prepare` on a rig already declared in the user registry and in `sync.toml` is do-then-report
+  (dry run, `--confirm`, one line); a destination that is not declared is a new destination and
+  always asks. With `[git]` configured it clones the hub remote into an absent/empty path and
+  refuses a non-empty non-Git directory. Follow it with `push-env`: `.env` is ignored by Git, so the fresh clone has
   none and nothing else will put one there.
 - Preserve existing registry entries. Add canonical rig aliases only from discovered SSH config
   and hostname facts or explicit user input.
