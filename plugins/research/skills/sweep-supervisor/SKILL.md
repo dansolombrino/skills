@@ -59,6 +59,10 @@ until the holder releases it. A lane whose card the board gives to another wave 
 
 ## In a chat
 
+The plugin's hook reminds every session in this project of each live wave (at session start, and
+on prompts at most every five minutes): when the reminder names a wave, resume its printout and
+re-arm the wake-up if this chat has none.
+
 1. **Never block while a wave is non-terminal.** Do not use a blocking-question tool and do not
    end the turn waiting on the user: a blocked chat cannot print, and an unanswered question at
    02:00 must cost nothing. Monitoring does not depend on the chat, so a stalled chat loses only

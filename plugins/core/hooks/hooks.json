@@ -1,0 +1,17 @@
+{
+  "description": "progress-updates: after a shell command that was backgrounded or looks long-running, remind the agent to put it on a status board. Silent otherwise.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/skills/progress-updates/scripts/long_task_reminder.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

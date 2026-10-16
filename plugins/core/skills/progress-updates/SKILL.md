@@ -32,6 +32,10 @@ python3 "$PROGRESS" stop --board <id>                     # delete the board
 - A wave dispatched through `sweep-dispatch` belongs to `sweep-supervisor`: paste its table
   instead, and never put the wave's runs on a board as well. Other runs, such as a single
   experiment or an eval started by hand, go on the board.
+- The plugin's hook adds a "possibly long-running task started" reminder after a shell command
+  that was backgrounded or looks like a transfer, download, or training/eval launch. It is a
+  nudge to apply this skill, not proof: judge the two-minute rule, and ignore it for a task
+  already on a board or in a wave.
 
 ## Make the task measurable at launch
 
