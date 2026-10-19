@@ -249,6 +249,27 @@ name = "venv"
         record = template["run_id_record"]({"model": "mlp", "seed": 0}, ["model", "seed"], layout="hashed-v2", version=1)
         self.assertEqual(agent.record_bytes(record), (exp_root / self.runs[("mlp", 0)] / ".run_id.json").read_bytes())
 
+    def test_param_glossary_returns_entries_and_names_every_missing_param(self) -> None:
+        load = run_id_template()["load_param_glossary"]
+        root = self.base / "glossary"
+        root.mkdir()
+        with self.assertRaisesRegex(FileNotFoundError, "PARAM_GLOSSARY.json is missing"):
+            load(root, ["lr"])
+        entries = {
+            "lr": {"name": "Learning rate", "explanation": "Step size of each update."},
+            "seed": {"name": "Random seed", "explanation": "Initialization and data-order seed."},
+        }
+        write(root / "PARAM_GLOSSARY.json", json.dumps(entries))
+        self.assertEqual(load(root, ["seed", "lr"]), {"seed": entries["seed"], "lr": entries["lr"]})
+        with self.assertRaisesRegex(ValueError, r"no entry for \['model', 'wd'\]"):
+            load(root, ["lr", "model", "wd"])
+        write(root / "PARAM_GLOSSARY.json", json.dumps({"lr": {"name": "Learning rate", "explanation": " "}}))
+        with self.assertRaisesRegex(ValueError, "non-empty 'name' and 'explanation'"):
+            load(root, ["lr"])
+        write(root / "PARAM_GLOSSARY.json", json.dumps([entries]))
+        with self.assertRaisesRegex(ValueError, "JSON object keyed by param"):
+            load(root, ["lr"])
+
     # ---------------------------------------------------------------- lookup
 
     def test_lookup_resolves_a_unique_prefix_and_refuses_an_ambiguous_one(self) -> None:

@@ -1,6 +1,6 @@
 ---
 name: visualizations
-description: Create or update Research 2.0 plots as self-contained interactive HTML from provenance-valid experiment evaluation outputs, keep run_id selection inside the file instead of the export path, preserve each single producer's complete numbered hierarchy, run plotting directly on rig-4090 without orchestration or wave machinery, and decide exact titles, title line arrangement, metric explanations, interaction affordances, and fully resolved export paths on every plotting-code edit, stating the reasoning in the reply and the journal. Use when the user asks to plot, visualize, chart, make figures from results, add or modify scripts under visualizations/, or open, view, or serve rendered plots through the read-only plot server; do not use to recompute missing evaluation data.
+description: Create or update Research 2.0 plots as self-contained interactive HTML from provenance-valid experiment evaluation outputs, keep run_id selection inside the file instead of the export path, preserve each single producer's complete numbered hierarchy, run plotting directly on rig-4090 without orchestration or wave machinery, decide exact titles, title line arrangement, metric explanations, interaction affordances, and fully resolved export paths on every plotting-code edit, stating the reasoning in the reply and the journal, and show every selectable run_id param by its full name with an (i) hover explanation from the user-approved PARAM_GLOSSARY.json. Use when the user asks to plot, visualize, chart, make figures from results, add or modify scripts under visualizations/, or open, view, or serve rendered plots through the read-only plot server; do not use to recompute missing evaluation data.
 ---
 
 # visualizations
@@ -16,8 +16,11 @@ is mode-owned: manual mode asks what the user wants; auto mode chooses inside th
 **Plot communication** — titles, their line arrangement, metric explanations and placement,
 interaction affordances, library, and export paths — is agent-decided in both engineering modes
 (conventions, "Approval tiers": do, then report), with every check below kept and the reasoning
-stated in the reply and the journal. Scientific interpretation and claim changes remain owned by
-the user, who may override any part of a plot's specification at any time.
+stated in the reply and the journal. **One exception: param full names and explanations** (the
+`PARAM_GLOSSARY.json` entries below) are always user-approved — propose each new or changed entry
+and wait; an approved entry is reused by every later plot without asking again. Scientific
+interpretation and claim changes remain owned by the user, who may override any part of a plot's
+specification at any time.
 
 ## Placement
 
@@ -37,6 +40,9 @@ the user, who may override any part of a plot's specification at any time.
   params through `.run_id.json`, `RUN_ID_MAP.json`, or `run-identity`, never recomputed by hand.
   Never infer layout from slash depth or force `nested`. Viz never reads checkpoints or recomputes; if a quantity is absent
   from evaluations, the producer experiment must export it first.
+- Param names: `load_param_glossary(source_path("config/<experiment_path>"), params)` reads the
+  tracked `config/<experiment_path>/PARAM_GLOSSARY.json` (§ Param glossary) for every identity
+  param the page lets the reader select, under every layout.
 - Output: under `plots/<experiment_path>/<script_stem>/` — one subfolder per script (stem =
   filename without `.py`) after the complete producer hierarchy, holding one HTML file per figure.
   `RUN_ID_PATH_LAYOUT` governs reads only; it never shapes a plot output path.
@@ -111,6 +117,14 @@ network, no server, and no sibling files:
 - **Selection first, figure second.** The page lets the user choose among the run_id params the
   file covers, then renders the figure for that selection. Under `hashed-v2` the selection is keyed
   by run hash and always shows each run's label beside it, so a reader never has to decode a hash.
+- **Every selectable param is self-explaining.** Each run_id param in the selector is shown by its
+  glossary **full name only** — never the raw config key — followed by an **(i)** icon whose hover
+  tooltip shows the glossary explanation. Under `hashed-v2` the per-run label beside each hash is
+  rendered with the same full names (`Full name = value, …`), built in the page from the run's
+  params; `run_id_label` stays the raw WandB form and is not what the selector shows. Embed the
+  glossary entries the page uses in the `plot-data` JSON block, so the file still explains itself
+  offline. A selectable param with no glossary entry stops the render: propose the entry (§ Param
+  glossary) instead of falling back to the raw key. Axis and metric text is unaffected.
 - **Two download buttons, always.** Every plot carries an "All runs" button that saves the whole
   file and a "Selection" button that saves a trimmed self-contained file holding only the runs the
   current view shows; both save under the leaf filename. Inline this skill's
@@ -127,6 +141,26 @@ network, no server, and no sibling files:
   epoch, step, or checkpoint. Decide each one as part of the specification and say why; the user
   may decline one. Never impose a fixed interaction checklist beyond what the shape implies.
 
+## Param glossary
+
+`config/<experiment_path>/PARAM_GLOSSARY.json` is the tracked, per-experiment source of every
+param's full name and explanation, beside `RUN_ID_VERSIONS.json` under every layout. It is neither
+a hydra config nor identity: editing it never changes a run_id. Shape:
+
+```json
+{"lr": {"name": "Learning rate", "explanation": "Step size of each optimizer update; higher learns faster but can diverge."}}
+```
+
+- A name is the param's plain-language full name; an explanation says what the param controls
+  and what changing it does, in one or two sentences a reader understands without the code.
+- **User-approved, always, in both engineering modes.** Before a plot needs a param with no
+  entry, or when an entry's wording should change, propose the exact `name` and `explanation`
+  grounded in the producer's config and code, and wait for the user's acceptance before writing
+  the file. Never invent an entry silently and never render a raw key in its place.
+- An approved entry is approved once: every later plot of the experiment reuses it without asking
+  again. Only a new or changed entry is proposed for approval again.
+- Commit the glossary with the plotting code that first needs it.
+
 ## Design & execution
 
 - Before every creation or modification of plotting code, read the producer's authoritative
@@ -139,8 +173,9 @@ network, no server, and no sibling files:
   at `plots/` and ending in its leaf filename. Explain what every plotted metric measures and its
   higher/lower/target/range/no-universal-direction interpretation, and decide that text's exact
   placement.
-- The title states **every** selected identity param as `key={value}`, so a figure is never
-  ambiguous about which runs it shows. Titles are dynamic: they re-render with the selection.
+- The title states **every** selected identity param as `Full name = {value}`, using its glossary
+  full name (never the raw key), so a figure is never ambiguous about which runs it shows and
+  never needs decoding. Titles are dynamic: they re-render with the selection.
   Decide the title template with every placeholder identified, and give one fully resolved
   example in the report.
 - **Decide how the params are arranged across title lines** — which params share a line, in what
@@ -167,7 +202,8 @@ network, no server, and no sibling files:
   decides, checks, and reports its specification again, even when it is unchanged.
 - After rendering, open the file and verify that the decided text is present, legible, and
   unchanged in the page's default view, that every decided affordance actually works, and that
-  the decided strings are present in the HTML source, that the page and plot area
+  the decided strings are present in the HTML source, that every selectable param shows its
+  glossary full name with a working (i) hover explanation, that the page and plot area
   are white, and that both download buttons save a file that reopens offline — the selection
   file holding only the runs in view. When a check fails, fix the code, render again, and report
   the correction; never hide a failed check.

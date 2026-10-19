@@ -1,4 +1,4 @@
 interface:
   display_name: "Research Visualizations"
   short_description: "Interactive HTML plots from evaluations, agent-decided"
-  default_prompt: "Use $visualizations to preserve the full numbered producer hierarchy, decide exact RUN_ID-aware titles, their line arrangement, visible metric explanations, interaction affordances, and fully resolved, collision-checked export paths, give every plot its All runs and Selection download buttons, then hand me each rendered plot as a plot-server URL with the reasoning stated and journaled."
+  default_prompt: "Use $visualizations to preserve the full numbered producer hierarchy, decide exact RUN_ID-aware titles with full param names, their line arrangement, visible metric explanations, interaction affordances, and fully resolved, collision-checked export paths, show every selectable param by its full name with an (i) hover explanation from the PARAM_GLOSSARY.json I approve, give every plot its All runs and Selection download buttons, then hand me each rendered plot as a plot-server URL with the reasoning stated and journaled."

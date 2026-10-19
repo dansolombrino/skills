@@ -35,7 +35,8 @@ gated step does not stop for a prompt nobody reads.
     their placement, interaction affordances, and export paths, including every fully resolved
     concrete path. Every check stays in force — resolved paths, collision rejection, in-figure
     verification — and the reasoning is stated in the reply and in the journal (§ Plot
-    communication).
+    communication). Param full names and explanations (`PARAM_GLOSSARY.json`) are excluded: they
+    always ask.
 - **Standing policy** (`sweep-dispatch`). The pool is every free lane on the envelope's rigs as
   `rig-board` shows them, ordered for the fastest finish; the gate previews are reports, not waits;
   the wave's standing authorization lets `sweep-supervisor` act inside the pool. **Leonardo:** the
@@ -53,7 +54,9 @@ gated step does not stop for a prompt nobody reads.
   (a `core` skill), cancelling or superseding runs outside the wave's standing authorization
   (another wave's runs, a supersede, a running Slurm job), `rig-sync prune`, `rig-sync provision-env` or
   `push-env` outside the `research-project-init` bundle (they touch shell startup files and move
-  secrets), and a **run_id migration** (`run-identity`). System permission prompts are independent
+  secrets), a **run_id migration** (`run-identity`), and a new or changed **`PARAM_GLOSSARY.json`
+  entry** (a param's full name and explanation, approved once and then reused; § Plot
+  communication). System permission prompts are independent
   and always apply.
 - **Mode-owned.** Experiment-design technical choices, metrics, which plots to make, and any other
   engineering choice no tier above names: manual mode proposes and waits for the user; auto mode
@@ -229,7 +232,10 @@ The per-experiment set of config params that uniquely identifies a run. New expe
   `RUN_ID_PARAMS` or `RUN_ID_SEGMENTS` constants under `hashed-v2`. The experiment's EXPERIMENTS.md
   section header mirrors the pin, the current version and its params, and the map path.
 - Config yamls stay pure hydra params — **no run_id metadata in yaml**; the two identity JSON files
-  sit beside them in `config/<experiment_path>/` and are not hydra configs.
+  sit beside them in `config/<experiment_path>/` and are not hydra configs. So does the tracked
+  `PARAM_GLOSSARY.json` (`{param: {name, explanation}}`, under every layout), which gives plots each
+  param's full name and explanation; it is not identity, so editing it never changes a run_id
+  (§ Plot communication).
 - **Identity params are top-level config keys.** Elect top-level keys only; to identify a nested
   value, elect its top-level subtree key (`optim`, never `optim.lr`). `runid migrate plan` and
   `load_run_id_spec` refuse a dotted param.
@@ -386,15 +392,25 @@ the producer's identity (`load_run_id_spec` under `hashed-v2`, `RUN_ID_PARAMS` u
 and metric definitions, then decide one exact communication specification for every plot the code
 produces:
 
-- the title template, including every fixed identity param as `key={value}`, and its arrangement
-  across title lines — decided per plot for what that plot's reader needs, never copied from
-  another plot's arrangement;
+- the title template, including every fixed identity param as `Full name = {value}` with its
+  `PARAM_GLOSSARY.json` full name (never the raw key), and its arrangement across title lines —
+  decided per plot for what that plot's reader needs, never copied from another plot's
+  arrangement;
 - visible in-figure text explaining what every plotted metric measures and whether higher, lower,
   a target/range, or no universal direction is preferable;
 - the exact placement of that text in an axis label, subtitle, legend, annotation, or in-figure
   caption;
 - the interaction affordances the figure's shape earns; and
 - every complete project-relative export path rooted at `plots/` and ending in its leaf filename.
+
+**Param full names are the one exception, and always ask.** Every run_id param the page lets the
+reader select is shown by its full name only, with an (i) hover tooltip explaining what it
+controls; under `hashed-v2` the label beside each hash uses the same full names. Both come from the
+tracked `config/<experiment_path>/PARAM_GLOSSARY.json` (`{param: {name, explanation}}`), read with
+`load_param_glossary` and embedded in the file. A selectable param with no entry stops the render.
+Propose each new or changed entry's exact name and explanation, grounded in the producer's config
+and code, and wait for the user's acceptance before writing it; an approved entry is reused by every
+later plot without asking again. Axis and metric text stay agent-decided as above.
 
 If runtime values prevent a concrete path before the code edit, decide the complete path template
 and identify every placeholder explicitly. Before rendering, resolve every concrete export path,

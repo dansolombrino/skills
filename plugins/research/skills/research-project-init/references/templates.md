@@ -42,7 +42,9 @@ derived `evaluations/<experiment>/RUN_ID_MAP.json` indexes every run. Every
 run-scoped folder is `<root>/<experiment>/rid-<32 hex>/`, and `run_id_label` gives the readable
 `k=v,…` shown beside the hash. Experiments pinned before `hashed-v2` keep their legacy
 `"segments-v2"|"segments-v1"|"nested"|"collapsed-v1"|"hashed-v1"` pin with `RUN_ID_PARAMS` (and
-`RUN_ID_SEGMENTS` for the segments layouts) in the `.py`.
+`RUN_ID_SEGMENTS` for the segments layouts) in the `.py`. The tracked
+`config/<experiment>/PARAM_GLOSSARY.json` gives each param's full name and explanation, which
+plots show instead of raw keys.
 
 ## Tracking
 
@@ -190,7 +192,8 @@ Approval tiers (conventions, "Approval tiers"; identical in both engineering mod
   changes, new repositories/remotes/accounts/destinations, secrets/authentication, scope/budget/rig
   expansion, shared-GPU exceptions, `integrate-reference-code` deviations, cancelling or
   superseding runs outside the wave's standing authorization (another wave's runs, a supersede, a
-  running Slurm job), exceeding the Leonardo core-hour ceiling, prune, `provision-env`/`push-env` outside project init, and run_id migrations.
+  running Slurm job), exceeding the Leonardo core-hour ceiling, prune, `provision-env`/`push-env` outside project init, run_id migrations, and new or changed `PARAM_GLOSSARY.json`
+  entries (param full names and explanations, approved once and then reused).
 - Mode-owned (manual asks, auto decides inside this envelope): experiment-design technical
   choices, metrics, which plots to make.
 
@@ -215,7 +218,9 @@ Approval tiers (conventions, "Approval tiers"; identical in both engineering mod
     reused from another plot's arrangement. Every plot is one self-contained interactive HTML file
     at `plots/<experiment_path>/<script_stem>/<leaf>.html`; run_id selection lives inside the
     file, so no plot path carries run_id segments and plot communication never touches
-    RUN_ID_PATH_LAYOUT. The title states every selected identity param. If runtime values require
+    RUN_ID_PATH_LAYOUT. The title states every selected identity param by its full name, and the
+    selector shows each selectable param by its full name with an (i) hover explanation; both come
+    from the user-approved `config/<experiment_path>/PARAM_GLOSSARY.json`. If runtime values require
     a path template, it names its leaf-filename template and every placeholder. Before rendering,
     resolve every concrete export path, including its leaf filename, and reject any destination
     that collides with a different script's output; a new or changed resolved path is resolved and
@@ -640,6 +645,14 @@ WandB display name; the hash (run_id_name) is a WandB tag, never the WandB id.
 Changing the identifying params means a new version plus a run_id migration
 that renames every hash through RUN_ID_HISTORY.json.
 
+``config/<exp>/PARAM_GLOSSARY.json`` (any layout) maps each param to the full
+name and explanation plots show instead of the raw key; it is not identity:
+
+    PARAM_GLOSSARY.json   {"lr": {"name": "Learning rate",
+                                  "explanation": "Step size of each optimizer update."}}
+
+    glossary = load_param_glossary(spec_root, params)   # hard-fails on a missing entry
+
 Experiments already pinned to an older layout keep declaring, in their own .py,
 the authoritative ordered list of config params that uniquely identify a run,
 its experiment-wide path layout, and (for segments-v2) the user-approved
@@ -698,6 +711,7 @@ RUN_ID_HASH_HEX = 16
 RUN_ID_MAP_NAME = "RUN_ID_MAP.json"
 RUN_ID_VERSIONS_NAME = "RUN_ID_VERSIONS.json"
 RUN_ID_HISTORY_NAME = "RUN_ID_HISTORY.json"
+PARAM_GLOSSARY_NAME = "PARAM_GLOSSARY.json"
 HASHED_V2_LAYOUT = "hashed-v2"
 HASHED_V2_HEX = 32
 SEGMENTS_LAYOUT = "segments-v2"
@@ -1057,6 +1071,42 @@ def resolve_run_id_hash(spec_root: Path, run_hash: str) -> str:
     for entry in load_run_id_history(spec_root):
         current = entry["map"].get(current, current)
     return current
+
+
+def load_param_glossary(spec_root: Path, params) -> dict[str, dict[str, str]]:
+    """``{param: {"name", "explanation"}}`` for every param in ``params``.
+
+    ``spec_root`` is ``source_path("config/<exp>")``. The user approves every
+    entry; plots show ``name`` instead of the raw key and ``explanation`` as its
+    hover text. Hard-fails on a missing or malformed file, an entry without a
+    non-empty name and explanation, or any of ``params`` lacking an entry (all
+    named at once, so one proposal covers them).
+    """
+    path = Path(spec_root) / PARAM_GLOSSARY_NAME
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"{path} is missing: propose a full name and explanation for {list(params)} "
+            "and write it once the user approves"
+        )
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError as error:
+        raise ValueError(f"{path} is not valid JSON: {error}") from error
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} must hold a JSON object keyed by param")
+    for param, entry in payload.items():
+        if not (
+            isinstance(entry, dict)
+            and all(isinstance(entry.get(k), str) and entry[k].strip() for k in ("name", "explanation"))
+        ):
+            raise ValueError(f"{path} entry {param!r} needs a non-empty 'name' and 'explanation'")
+    missing = [p for p in params if p not in payload]
+    if missing:
+        raise ValueError(
+            f"{path} has no entry for {missing}: propose a full name and explanation for each "
+            "and add them once the user approves"
+        )
+    return {p: {"name": payload[p]["name"], "explanation": payload[p]["explanation"]} for p in params}
 
 
 def _require_spec_root(spec_root, what: str) -> Path:

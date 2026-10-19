@@ -70,7 +70,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "10.1.0")
+        self.assertEqual(manifest["version"], "10.2.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -280,6 +280,44 @@ class ResearchContractTests(unittest.TestCase):
 
         # plots/ stays gitignored, so the file must describe its own provenance.
         self.assertIn("gitignored", visualization)
+
+    def test_plot_params_show_user_approved_full_names_with_hover_explanations(self) -> None:
+        skills = ROOT / "plugins/research/skills"
+        visualization = " ".join((skills / "visualizations/SKILL.md").read_text().split())
+        metadata = (skills / "visualizations/agents/openai.yaml").read_text()
+        conventions = " ".join(
+            (skills / "research-project-init/references/conventions.md").read_text().split()
+        )
+        templates = " ".join(
+            (skills / "research-project-init/references/templates.md").read_text().split()
+        )
+
+        # One tracked glossary per experiment, beside the identity files, under every layout.
+        for contract in (visualization, conventions, templates):
+            self.assertIn("config/<experiment_path>/PARAM_GLOSSARY.json", contract)
+        self.assertIn("load_param_glossary", visualization)
+        self.assertIn("def load_param_glossary(spec_root", templates)
+
+        # Selector: full name only, an (i) hover explanation, hashed-v2 labels too; no raw-key fallback.
+        self.assertIn("**full name only** — never the raw config key", visualization)
+        self.assertIn("**(i)** icon whose hover tooltip shows the glossary explanation", visualization)
+        self.assertIn("`run_id_label` stays the raw WandB form", visualization)
+        self.assertIn("A selectable param with no glossary entry stops the render", visualization)
+        self.assertIn("embed the glossary entries the page uses", visualization.lower())
+        self.assertIn("full name with a working (i) hover explanation", visualization)
+        self.assertIn("(i) hover explanation", metadata)
+
+        # Titles spell params out instead of key={value}.
+        for contract in (visualization, conventions):
+            self.assertIn("`Full name = {value}`", contract)
+            self.assertNotIn("as `key={value}`", contract)
+
+        # The one carve-out from agent-decided plot communication: the user approves each entry once.
+        self.assertIn("**One exception: param full names and explanations**", visualization)
+        self.assertIn("an approved entry is reused by every later plot without asking again", visualization)
+        self.assertIn("**Param full names are the one exception, and always ask.**", conventions)
+        self.assertIn("new or changed **`PARAM_GLOSSARY.json` entry**", conventions)
+        self.assertIn("new or changed `PARAM_GLOSSARY.json` entries", templates)
 
     def test_every_plot_carries_both_download_buttons_without_approval(self) -> None:
         skills = ROOT / "plugins/research/skills"
