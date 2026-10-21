@@ -70,7 +70,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "12.0.0")
+        self.assertEqual(manifest["version"], "12.1.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -2117,7 +2117,7 @@ class ResearchContractTests(unittest.TestCase):
         configuration = (
             ROOT / "plugins/research/skills/rig-sync/references/configuration.md"
         ).read_text()
-        self.assertIn("GitHub remote", init_skill)
+        self.assertIn("## GitHub repository", init_skill)
         self.assertIn("Pre-dispatch smoke test", design)
         self.assertIn("[git]", configuration)
         self.assertIn("source_revision", design)
@@ -2456,12 +2456,13 @@ class ApprovalTierContractTests(unittest.TestCase):
             "deletion of material data",
             "overwriting user changes",
             "new repositories/remotes/accounts/destinations",
-            "secrets/authentication changes",
+            "creating, rotating, or revoking credentials and any authentication login",
+            "`rig-sync push-env --overwrite`",
+            "except the project's own private GitHub repository",
             "scope/budget/rig expansion",
             "a `behemoth` card beyond gpu0",
             "a behavioral source-to-target deviation governed by `integrate-reference-code`",
             "cancelling or superseding runs outside the wave's standing authorization (another wave's runs, a supersede, a running Slurm job)",
-            "`rig-sync provision-env` or `push-env` outside the `research-project-init` bundle",
             "a run_id migration backfill value that neither config nor code settles",
             "System permission prompts are independent and always apply",
         ):
@@ -2559,16 +2560,20 @@ class ApprovalTierContractTests(unittest.TestCase):
         for text in (dispatch, slurm, tick, supervisor, conventions, init, agreement):
             self.assertNotIn("core-hour ceiling", text)
 
-    def test_project_init_asks_at_most_one_question(self) -> None:
+    def test_project_init_asks_nothing_and_creates_its_private_repo(self) -> None:
         init = compact_text(SKILLS / "research-project-init/SKILL.md")
-        section = init.split("## The one question", 1)[1].split("## Scaffold", 1)[0]
-        self.assertIn("Ask **once**", section)
-        self.assertIn("only for what falls under conventions' **Always ask**", section)
-        self.assertIn("the GitHub remote (a new remote; skip it when the request names one)", section)
-        self.assertIn("`rig-sync provision-env` (it edits shell startup files", section)
-        self.assertIn("`rig-sync push-env` (it moves secrets)", section)
-        self.assertIn("that list is not a second question", section)
-        self.assertIn("Everything below then runs without another prompt", section)
+        section = init.split("## No questions", 1)[1].split("## Scaffold", 1)[0]
+        self.assertIn("Init asks nothing", section)
+        self.assertIn("lists the defaults taken", section)
+        self.assertIn("the rest carries on", section)
+        repo = section.split("## GitHub repository", 1)[1]
+        self.assertIn("`gh auth status` must pass", repo)
+        self.assertIn("`gh api user --jq .login`", repo)
+        self.assertIn("`gh repo view <owner>/<name> --json visibility,isEmpty`", repo)
+        self.assertIn("`gh repo create <owner>/<name> --private`", repo)
+        self.assertIn("Never create a public repository", repo)
+        self.assertIn("never change an existing repository's visibility", repo)
+        self.assertIn("When it exists with history, stop as unsupported", repo)
         self.assertIn("never from a questionnaire", init)
         self.assertIn("The description is optional", init)
         self.assertIn("`{{PROJECT_DESCRIPTION}}` falls back to the project name", init)
@@ -2577,18 +2582,32 @@ class ApprovalTierContractTests(unittest.TestCase):
         self.assertIn("## program/DECISIONS.md (initial)", templates)
         self.assertNotIn("engineering_mode", markdown_template_block("program/00-execution-agreement.md (initial)"))
         metadata = (SKILLS / "research-project-init/agents/openai.yaml").read_text()
-        self.assertIn("asking at most one question", metadata)
+        self.assertIn("without asking anything", metadata)
 
-    def test_secret_and_shell_writes_always_ask_outside_init_and_prune_is_logged(self) -> None:
+    def test_secrets_move_the_safe_way_without_asking_and_prune_is_logged(self) -> None:
+        conventions = compact_text(SKILLS / "research-project-init/references/conventions.md")
+        secrets = conventions.split("### Secrets", 1)[1].split("### Invariants the scripts enforce", 1)[0]
+        for rule in ("lands it owner-only (0600)", "never prints a value", "does nothing when the peer's file is identical",
+                     "naming only the differing keys", "unless `--overwrite` is passed, which asks",
+                     "restores the backup itself when that check fails", "name keys, never values"):
+            self.assertIn(rule, secrets)
         rig_sync = compact_text(SKILLS / "rig-sync/SKILL.md")
-        self.assertIn("`provision-env` edits shell startup files on the rig, so it **always asks**", rig_sync)
-        self.assertIn("It **moves secrets**, so it always asks", rig_sync)
+        self.assertIn("It is safe unattended because the script backs up `.zshenv` and `.bashrc` on every run", rig_sync)
+        self.assertIn("Run it without asking; never pass `--overwrite` without explicit user approval", rig_sync)
+        self.assertNotIn("so it **always asks**", rig_sync)
         self.assertIn("`prune` (below) runs only after its dry run, and only on waves whose rows are all terminal", rig_sync)
         self.assertIn("with `--confirm` right after its dry run (agent-decided, logged)", rig_sync)
         self.assertIn("`prepare` on a rig already declared in the user registry and in `sync.toml` is agent-decided", rig_sync)
         env_sync = compact_text(SKILLS / "environment-sync/SKILL.md")
         self.assertIn("`provision` and `verify` are **agent-decided**", env_sync)
         self.assertNotIn("preview and wait before `--confirm`", env_sync)
+
+    def test_dispatch_starts_monitoring_in_the_same_turn(self) -> None:
+        dispatch = compact_text(SKILLS / "sweep-dispatch/SKILL.md")
+        supervisor = compact_text(SKILLS / "sweep-supervisor/SKILL.md")
+        self.assertIn("**Start monitoring in the same turn, without asking**", dispatch)
+        self.assertIn("The printout starts by itself", supervisor)
+        self.assertIn("post-register hook", supervisor)
 
     def test_run_id_migration_is_agent_decided_and_the_only_rewrite(self) -> None:
         texts = {

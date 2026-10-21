@@ -6,6 +6,10 @@ looks for `<project>/.waves/_state/<wave_id>/queue.json` with no `finished_at`, 
 `additionalContext` line per live wave. Prints nothing when no wave is live. Never fails: a hook
 error must not get in the way of the user's prompt.
 
+Also runs as a PostToolUse hook on shell commands: right after `supervisor.py register ... --confirm`
+it tells the agent to start the printout in the same turn, so monitoring never waits for a prompt.
+Every other shell command is silent.
+
 The wave layout constants are copied from supervisor.py and rigsync.py rather than imported, so the
 hook starts in milliseconds on every prompt; tests/test_hooks.py keeps the copies in step.
 """
@@ -75,12 +79,42 @@ def throttled(session: str, key: str) -> bool:
     return False
 
 
+REGISTER_RE = re.compile(r"supervisor\.py\b.*\bregister\b.*--wave[ =](\d{8}-\d{6})")
+
+
+def registered_wave(payload: dict) -> str | None:
+    """The wave id a just-run `supervisor.py register --confirm` registered, else None."""
+    if payload.get("tool_name") not in ("Bash", "shell", "local_shell"):
+        return None
+    tool_input = payload.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if isinstance(command, list):
+        command = " ".join(str(part) for part in command)
+    if not isinstance(command, str) or "--confirm" not in command or "--dry-run" in command:
+        return None
+    match = REGISTER_RE.search(command)
+    return match.group(1) if match else None
+
+
 def main() -> int:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
     except ValueError:
         return 0
+    if not isinstance(payload, dict):
+        return 0
     event = payload.get("hook_event_name") or "SessionStart"
+    if event == "PostToolUse":
+        wave = registered_wave(payload)
+        if wave:
+            text = (
+                f"Wave {wave} was just registered. Start its `sweep-supervisor` printout now, in this turn, "
+                f"without asking: run `table --wave {wave} --cycle --full`, post it, then arm the host's "
+                f"scheduled wake-up at the chat update interval (the user's N minutes, else 1) and paste "
+                f"`table --wave {wave}` verbatim at every tick until it says finished."
+            )
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}))
+        return 0
     root = project_root(payload.get("cwd") or os.getcwd())
     waves = live_waves(root) if root else []
     if not waves:

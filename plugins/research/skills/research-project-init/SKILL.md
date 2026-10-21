@@ -1,6 +1,6 @@
 ---
 name: research-project-init
-description: Scaffold a new or empty Research 2.0 repository with the standard experiment taxonomy, an engineering execution agreement with its envelope, exact uv environment, rig configuration, status helpers, journal guard, decision log, and host guidance, asking at most one question (the remote and the rig secrets bring-up). Use when starting, initializing, bootstrapping, or scaffolding a fresh research project; do not use to upgrade, migrate, or retrofit an existing project.
+description: Scaffold a new or empty Research 2.0 repository with the standard experiment taxonomy, an engineering execution agreement with its envelope, exact uv environment, rig configuration, status helpers, journal guard, decision log, and host guidance, asking nothing: it finds or creates the project's private GitHub repository with `gh` and brings up rigs and secrets the safe way on its own. Use when starting, initializing, bootstrapping, or scaffolding a fresh research project; do not use to upgrade, migrate, or retrofit an existing project.
 ---
 
 # Research Project Init
@@ -55,18 +55,29 @@ values, and material the user supplies explicitly. See "Directives are closed" i
 5. Capture the engineering repo/rig/GPU/budget envelope, destinations, and — when `leonardo` is
    in the rig set — its account in the execution agreement. There is no manual/auto split.
 
-## The one question
+## No questions
 
-Ask **once**, after admission and before writing anything, and only for what falls under
-conventions' **Always ask**: the GitHub remote (a new remote; skip it when the request names one),
-and consent to `rig-sync provision-env` (it edits shell startup files; on a shared machine say
-that it affects that account's every future shell) and `rig-sync push-env` (it moves secrets) on
-the rig set. List the rig set and the defaults taken in one line each so the user can correct
-them in the same answer; that list is not a second question. Everything below then runs without
-another prompt: the scaffold, the first commit and its push to that remote and branch, the hub
-environment, and rig bring-up. Each step is logged to `program/DECISIONS.md`; the chat gets the
-final outcome. A step that needs something the answer did not cover — a new destination, a
-non-empty path, a rig without a registry entry — stops and asks.
+Init asks nothing: every step below runs without a prompt, is logged to `program/DECISIONS.md`,
+and the chat gets one final outcome that lists the defaults taken so the user can correct any of
+them later. A step that needs something only the user has — a rig without a registry entry, a
+non-empty path, a `gh` login, a missing token — stops that step, says exactly what is missing, and
+the rest carries on.
+
+## GitHub repository
+
+The remote is the one the request names; otherwise the agent resolves it with the `gh` and `git`
+CLIs:
+
+1. `gh auth status` must pass. When it does not, the login is the user's (suggest `gh auth
+   login`); finish everything local and report the remote steps as blocked.
+2. The repository is `<owner>/<project name>`, with `<owner>` the request's owner or org if one is
+   named, else `gh api user --jq .login`.
+3. `gh repo view <owner>/<name> --json visibility,isEmpty`: when it exists and `isEmpty` is true,
+   use it. When it exists with history, stop as unsupported (admission). When it does not exist,
+   create it empty and **private** — `gh repo create <owner>/<name> --private` with no README,
+   license, or gitignore — and log it. Never create a public repository, never one in an org the
+   request did not name, and never change an existing repository's visibility.
+4. The dispatch branch is `main` unless the request names another.
 
 ## Scaffold
 
@@ -105,16 +116,16 @@ non-empty path, a rig without a registry entry — stops and asks.
 
 ## Git, environment, and rigs
 
-1. Initialize Git, configure only the answered remote/branch, then make the first commit and
+1. Initialize Git, configure only the resolved remote/branch, then make the first commit and
    push it. Never force-push or overwrite remote history.
 2. Configure `environment-sync`, run doctor, and require the exact environment plus GPU smoke
    gate on the hub for the staged lock (`provision --staged`, then `verify --staged` with the hub
    lane). Create the hub development environment named in `[environment].name` with the pinned uv
    (`UV_PROJECT_ENVIRONMENT=<name> uv sync --frozen`); it is the user's, and waves never use it.
    Log the result.
-3. Bring up every intended rig in this order; each step's failure stops the ones after it. The
-   one question's answer covers every step, `provision-env` and `push-env` included; each dry run
-   goes to the decision log, not to a new question.
+3. Bring up every intended rig in this order; each step's failure stops the ones after it for
+   that rig. Every step, `provision-env` and `push-env` included, runs without a prompt
+   (conventions, "Secrets"); each dry run goes to the decision log, not to a question.
    1. Confirm the user registry declares every intended rig, storage roots included (admission
       above). A rig with no entry cannot be declared in `sync.toml` at all, and one with no
       storage root fails the path gate below.
@@ -126,12 +137,14 @@ non-empty path, a rig without a registry entry — stops and asks.
       than skipping, on a rig whose registry entry declares no storage root.
    4. Run `rig-sync provision-env --dry-run` then `--confirm` for each rig that declares caches.
       Without this a rig has no `HF_HOME`/`UV_CACHE_DIR` and falls back to `~/.cache` — the small
-      quota'd volume on a shared machine. It edits shell startup files: outside this bundle it
-      always asks, and here the one question named it.
+      quota'd volume on a shared machine. It edits shell startup files, backs them up, verifies a
+      non-interactive shell, and rolls itself back on failure; on a shared machine, log that it
+      affects that account's every future shell.
    5. Run `rig-sync prepare` for each peer. Preserve non-empty paths and report them blocked.
    6. Run `rig-sync push-env` for each peer. `.env` is ignored by Git, so a fresh clone has none
-      and nothing else will put one there. It moves secrets: outside this bundle it always asks,
-      and here the one question named it.
+      and nothing else will put one there. It moves secrets the safe way (0600, no value printed,
+      never replaces a different peer file); a refusal for a differing file is reported with the
+      key names and the rest carries on.
    7. Run `rig-sync doctor` and the `environment-sync` gates for every intended peer.
 4. Finish the local scaffold when remote setup is unavailable, but report remote execution as
    blocked until its independent gates pass. Report to the chat once, at the end: what is ready,

@@ -29,9 +29,9 @@ project surfaces are absent. Autonomy follows conventions, "Autonomy":
   registry, `offload` (on by default for every non-hub lane rig; Slurm targets such as `leonardo`
   excluded, and `supervisor.py` rejects offload entries that are not lane rigs), `collect`, `prune`
   of waves whose rows are all terminal, and `pull`, `push`, `sync-cache`, and `restore` for the
-  named source, destination, revision, and selector inside the envelope.
-- **Always ask**: `provision-env` and `push-env` outside `research-project-init`'s one question,
-  new destinations, `--overwrite`, and any destructive recovery.
+  named source, destination, revision, and selector inside the envelope, plus `provision-env` and
+  `push-env` on declared rigs (conventions, "Secrets").
+- **Always ask**: new destinations, `--overwrite`, and any destructive recovery.
 
 ## Safety contract
 
@@ -63,14 +63,16 @@ project surfaces are absent. Autonomy follows conventions, "Autonomy":
   than `df` alone,
   probes a **non-interactive** shell for the cache values, and fails a project `.env` that
   re-declares any of them.
-- `provision-env` edits shell startup files on the rig, so it **always asks**: show its
-  `--dry-run` and wait for the user before `--confirm`. The only exception is
-  `research-project-init`, whose one question names it explicitly. On a shared machine,
-  say so explicitly — the change affects that account's every future shell.
+- `provision-env` edits shell startup files on the rig. It is safe unattended because the script
+  backs up `.zshenv` and `.bashrc` on every run (`.rigsync.prev`, plus the first-ever
+  `.rigsync.bak`), verifies a non-interactive shell sees every declared value, and restores the
+  backup itself when it does not. Run its dry run, then `--confirm`, and log it; on a shared
+  machine log that the change affects that account's every future shell.
 - `push-env` places the hub's `.env` on a peer that Git left without one. It **moves secrets**, so
-  it always asks (the same `research-project-init` exception applies): say so, show the
-  `--dry-run`, and never pass `--overwrite` to clobber a peer's existing file without explicit
-  approval.
+  the script makes the safe path the only one: ssh only, a declared machine only, the file lands
+  0600, no value is ever printed, an identical peer file is a no-op, and a different peer file is
+  kept and its differing key names reported. Run it without asking; never pass `--overwrite`
+  without explicit user approval.
 - Never spell a rig's project path or storage floor by hand. Read them back with `repo-path` and
   `storage-env`; a second copy of a declared fact is a second thing that can be wrong.
 - Stop dispatch when `doctor` fails for an assigned rig.

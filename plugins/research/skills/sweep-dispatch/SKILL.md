@@ -243,9 +243,11 @@ environment gates pass:
    `lane.sh`, claims it on `rig-board`, feeds its buffer, and submits `leonardo` jobs under the
    caps with the guarded `sbatch` in `references/cineca-slurm.md`. A claim that exits 3 means
    another project holds the lane: nothing is killed, the lane stays out, and it is reported.
-3. Confirm the first table (`sweep-supervisor` `table --wave <wave_id> --cycle --full`) shows every pool
-   lane started or names why not, then follow `sweep-supervisor` § In a chat for the periodic
-   printout at the chat update interval. A chat that stalls loses only the printout.
+3. **Start monitoring in the same turn, without asking**: post the first table (`sweep-supervisor`
+   `table --wave <wave_id> --cycle --full`), which shows every pool lane started or names why not,
+   then arm the periodic printout at the chat update interval (`sweep-supervisor` § In a chat).
+   `register` prints a `NEXT:` line and the plugin's post-register hook says the same, so this
+   never waits for a prompt. A chat that stalls loses only the printout.
 
 Log how to watch manually (the user reads it from `program/DECISIONS.md` when wanted): for a peer, `ssh <rig>` then
 `tmux attach -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>`; for the current local hub, run the

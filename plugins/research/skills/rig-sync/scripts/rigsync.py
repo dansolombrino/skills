@@ -1276,6 +1276,7 @@ wire() {{
   mode="$2"
   [ -e "$target" ] || : > "$target"
   [ -e "$target.rigsync.bak" ] || cp -p "$target" "$target.rigsync.bak"
+  cp -p "$target" "$target.rigsync.prev"
   strip_managed "$target" > "$target.rigsync.tmp"
   if [ "$mode" = prepend ]; then
     {{ printf '%s\\n\\n' {shlex.quote(_managed_block())}; cat "$target.rigsync.tmp"; }} > "$target.rigsync.new"
@@ -1291,6 +1292,37 @@ wire .zshenv append
 wire .bashrc prepend
 echo "wrote $HOME/{MANAGED_ENV_FILE}"
 """.strip()
+
+
+ROLLBACK_SCRIPT = """
+set -eu
+for f in .zshenv .bashrc; do
+  if [ -e "$HOME/$f.rigsync.prev" ]; then mv "$HOME/$f.rigsync.prev" "$HOME/$f"; echo "restored $HOME/$f"; fi
+done
+""".strip()
+
+
+def verify_or_roll_back(machine: Machine) -> None:
+    """After provisioning, a non-interactive shell must see every declared value, or the edit is undone.
+
+    This is what makes `provision-env` safe to run unattended: the startup files are restored from
+    the backup this very run took (`.rigsync.prev`), so a failed provisioning leaves the account's
+    shells exactly as they were. A local machine without zsh cannot be probed; that is reported.
+    """
+    failures, lines = check_machine_env(machine)
+    if not failures:
+        print(f"{machine.name}: verified -- a non-interactive shell sees every declared cache value")
+        return
+    if any("no non-interactive shell to probe" in line for line in lines):
+        for line in lines:
+            print(f"WARN {line}")
+        return
+    restored = remote(machine, ["sh", "-c", ROLLBACK_SCRIPT], check=False)
+    for line in restored.stdout.decode(errors="replace").splitlines():
+        print(f"{machine.name}: {line}")
+    raise RigSyncError(
+        f"{machine.name}: provision-env did not verify ({'; '.join(lines)}); shell startup files restored"
+    )
 
 
 def provision_env(
@@ -1318,6 +1350,7 @@ def provision_env(
             raise RigSyncError(f"{machine.name}: provision-env failed: {stderr or output}")
         for line in output.splitlines():
             print(f"{machine.name}: {line}")
+        verify_or_roll_back(machine)
 
 
 def machine_env_probe(
@@ -1705,8 +1738,10 @@ def push_env(
     construction: machine-level caches live in the registry and project-scoped
     storage is repo-relative, so the same file is correct everywhere.
 
-    This moves secrets, so it is a protected write that says so, and it refuses
-    to overwrite a peer's existing file without being told to.
+    It moves secrets, so it is built to be safe unattended: the copy goes over ssh only to a
+    machine declared in both the registry and sync.toml, lands owner-only (0600), never prints a
+    value, is a no-op when the peer's file is already identical, and never replaces a peer's
+    different file unless told to (`--overwrite`) -- it then names only the keys that differ.
     """
     require_confirmation(dry_run, confirmed)
     source = config.root / ".env"
@@ -1730,22 +1765,61 @@ def push_env(
         )
     destination_file = machine.repo_path / ".env"
     existing = remote(machine, ["test", "-f", str(destination_file)], check=False)
-    if existing.returncode == 0 and not overwrite:
-        raise RigSyncError(
-            f"{machine.name}: {destination_file} already exists; "
-            "pass --overwrite to replace it"
-        )
+    if existing.returncode == 0:
+        local_digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        digest = remote(machine, ["sha256sum", str(destination_file)], check=False)
+        if digest.returncode == 0 and digest.stdout.decode(errors="replace").split()[:1] == [local_digest]:
+            print(f"[same] {machine.name}: {destination_file} is already identical to the hub's .env")
+            return
+        if not overwrite:
+            names = remote(
+                machine,
+                ["sh", "-c", ENV_KEY_NAMES_SCRIPT, "sh", str(destination_file)],
+                check=False,
+            )
+            peer_keys = set(names.stdout.decode(errors="replace").split()) if names.returncode == 0 else set()
+            hub_keys = set(env_key_names(source.read_text(errors="replace")))
+            detail = []
+            if hub_keys - peer_keys:
+                detail.append(f"only on the hub: {', '.join(sorted(hub_keys - peer_keys))}")
+            if peer_keys - hub_keys:
+                detail.append(f"only on {machine.name}: {', '.join(sorted(peer_keys - hub_keys))}")
+            raise RigSyncError(
+                f"{machine.name}: {destination_file} already exists and differs "
+                f"({'; '.join(detail) or 'same keys, different values'}); "
+                "kept as is -- pass --overwrite to replace it"
+            )
     print(
         f"[{'dry-run' if dry_run else 'push-env'}] {machine.name}: "
         f"{source} -> {destination_file} (this file carries secrets)"
     )
-    flags = rsync_flags(machine)
+    flags = rsync_flags(machine) + ["--chmod=F600"]
     if dry_run:
         flags.append("--dry-run")
     destination = (
         str(machine.repo_path) + "/" if machine.local else rsync_remote(machine, machine.repo_path)
     )
     run(flags + [str(source), destination], show=True)
+
+
+# Prints the key names a .env assigns, never a value: run on the peer so no secret crosses back.
+ENV_KEY_NAMES_SCRIPT = (
+    "sed -n 's/^[[:space:]]*\\(export[[:space:]]\\{1,\\}\\)\\{0,1\\}"
+    "\\([A-Za-z_][A-Za-z0-9_]*\\)=.*/\\2/p' \"$1\""
+)
+
+
+def env_key_names(text: str) -> list[str]:
+    """Every key a .env assigns, empty values included (the peer-side script sees those too)."""
+    names = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("export "):
+            line = line[len("export ") :].lstrip()
+        key, separator, _ = line.partition("=")
+        if separator and ENV_NAME_RE.fullmatch(key.strip()):
+            names.append(key.strip())
+    return names
 
 
 # ───────────────────────── hub-ward copies: shared ─────────────────────────

@@ -24,20 +24,23 @@ gates, and the invariants the scripts enforce — not prompts. Two rules decide 
 
 - **Always ask** — the only questions the agent puts to the user, in one round, before acting:
   destructive operations, history rewrites, deletion of material data, overwriting user changes,
-  new repositories/remotes/accounts/destinations, secrets/authentication changes, scope/budget/rig
-  expansion beyond the envelope, a shared-rig card beyond the owned ones (a `behemoth` card beyond
-  gpu0 above all), a behavioral source-to-target deviation governed by `integrate-reference-code`
-  (a `core` skill), cancelling or superseding runs outside the wave's standing authorization
-  (another wave's runs, a supersede, a running Slurm job), and `rig-sync provision-env` or
-  `push-env` outside the `research-project-init` bundle (they touch shell startup files and move
-  secrets), and a run_id migration backfill value that neither config nor code settles. System
+  new repositories/remotes/accounts/destinations (except the project's own private GitHub
+  repository `research-project-init` creates under the user's account), creating, rotating, or
+  revoking credentials and any authentication login, scope/budget/rig expansion beyond the
+  envelope, a shared-rig card beyond the owned ones (a `behemoth` card beyond gpu0 above all), a
+  behavioral source-to-target deviation governed by `integrate-reference-code` (a `core` skill),
+  cancelling or superseding runs outside the wave's standing authorization (another wave's runs, a
+  supersede, a running Slurm job), `rig-sync push-env --overwrite` (replacing a peer's different
+  `.env`), and a run_id migration backfill value that neither config nor code settles. System
   permission prompts are independent and always apply.
 - **Everything else, the agent decides and does** — experiment structure and naming, technical
   choices, metrics, which plots to make and how they communicate, run_id election and migrations,
   deploys, environment provisioning, offload, collect, prune of all-terminal waves, keep-or-
   quarantine of a superseded checkpoint, glossary entries, journal entries, mechanical
   reference-code deviations, the dispatch pool, commits, and pushes to the envelope's own remote
-  and branch (never a force-push), and amending the execution agreement inside its envelope.
+  and branch (never a force-push), amending the execution agreement inside its envelope, starting
+  a dispatched wave's chat printout, and moving the project's existing secrets to a declared rig
+  the safe way (§ Secrets).
   Every check those steps carry stays in force; only the wait is gone.
 
 **Do the obvious next step.** When the next step follows from the user's request or the protocol —
@@ -55,6 +58,19 @@ reason, and carry on. Ask only when every option falls under **Always ask**.
 **Never a wait on a report.** No preview, plan, dry run, or summary waits for an acknowledgement,
 and none is printed for its own sake (§ Decision log).
 
+### Secrets
+
+The agent handles the project's existing secrets itself, because the scripts make the safe path
+the only path. `rig-sync push-env` copies the hub's `.env` over ssh, only to a machine declared in
+both the registry and `sync.toml`, lands it owner-only (0600), never prints a value, does nothing
+when the peer's file is identical, and keeps a peer's different file — naming only the differing
+keys — unless `--overwrite` is passed, which asks. `rig-sync provision-env` writes only declared
+cache paths (no secrets) into a marked, idempotent block, backs up both startup files on every run,
+verifies a non-interactive shell afterwards, and restores the backup itself when that check fails.
+Never echo, log, commit, or paste a secret value anywhere, the decision log included; name keys,
+never values. Credentials the project does not have yet (a new token, a login) come from the
+user: say which key is missing and carry on with everything that does not need it.
+
 ### Invariants the scripts enforce
 
 These hold whatever the agent decides, because code refuses to break them:
@@ -66,6 +82,8 @@ These hold whatever the agent decides, because code refuses to break them:
 - run_id collisions, duplicates, and config drift at an existing path (`check_run_id_plan`,
   `guard_run_config`);
 - the tested-revision and environment-parity gates (`rig-sync`, `environment-sync`);
+- `push-env` lands 0600, never replaces a different peer `.env` without `--overwrite`, and prints
+  key names only; `provision-env` rolls itself back when the shell does not verify;
 - `prune` refuses active or unfinished supervised waves; `steal` refuses any process it cannot
   prove is this wave's own; a migration writes its rollback manifest before it changes anything.
 

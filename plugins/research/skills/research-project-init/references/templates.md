@@ -179,11 +179,13 @@ approved: no
 
 Autonomy (conventions, "Autonomy"): the agent decides and does everything except the **Always
 ask** list — destructive operations, history rewrites, deleting material data, overwriting user
-changes, new repositories/remotes/accounts/destinations, secrets/authentication, scope/budget/rig
-expansion, a shared-rig card beyond the owned ones, behavioral `integrate-reference-code`
-deviations, cancelling or superseding runs outside the wave's standing authorization, a run_id
-migration backfill value neither config nor code settles, and `provision-env`/`push-env` outside
-project init. Every decision is logged in `program/DECISIONS.md`, not narrated in the chat.
+changes, new repositories/remotes/accounts/destinations (except this project's own private
+GitHub repository), creating, rotating, or revoking credentials and any authentication login,
+scope/budget/rig expansion, a shared-rig card beyond the owned ones, behavioral
+`integrate-reference-code` deviations, cancelling or superseding runs outside the wave's standing
+authorization, `push-env --overwrite`, and a run_id migration backfill value neither config nor
+code settles. Existing secrets move to declared rigs the safe way without asking (conventions,
+"Secrets"). Every decision is logged in `program/DECISIONS.md`, not narrated in the chat.
 `leonardo` runs with no core-hour cap unless the user asks for one.
 
 - Hard constraints:

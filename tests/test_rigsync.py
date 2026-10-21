@@ -900,6 +900,34 @@ class MachineEnvTests(unittest.TestCase):
         self.assertIn(".rigsync.bak", script)
         self.assertIn(rigsync.MANAGED_BEGIN, script)
 
+    def test_provision_backs_up_every_run_for_rollback(self) -> None:
+        self.assertIn('cp -p "$target" "$target.rigsync.prev"', rigsync.provision_env_script(self.machine()))
+
+    def test_provision_rolls_back_when_the_shell_does_not_verify(self) -> None:
+        machine = self.machine()
+        config = rigsync.Config(Path("/src"), {"evaluations": {"path": "e"}}, {"peer": machine})
+        ok = subprocess.CompletedProcess([], 0, b"wired\n", b"")
+        calls = []
+        def fake_remote(m, argv, check=True, **kw):
+            calls.append(argv)
+            return ok
+        drift = (1, ["FAIL peer machine env: HF_HOME=(unset), expected /large/cache/huggingface"])
+        with mock.patch.object(rigsync, "remote", side_effect=fake_remote), \
+                mock.patch.object(rigsync, "check_machine_env", return_value=drift), redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(rigsync.RigSyncError, "restored"):
+                rigsync.provision_env(config, [machine], dry_run=False, confirm=True)
+        self.assertEqual(calls[-1], ["sh", "-c", rigsync.ROLLBACK_SCRIPT])
+        self.assertIn(".rigsync.prev", rigsync.ROLLBACK_SCRIPT)
+
+    def test_provision_keeps_a_verified_edit(self) -> None:
+        machine = self.machine()
+        config = rigsync.Config(Path("/src"), {"evaluations": {"path": "e"}}, {"peer": machine})
+        ok = subprocess.CompletedProcess([], 0, b"wired\n", b"")
+        with mock.patch.object(rigsync, "remote", return_value=ok) as remote_mock, \
+                mock.patch.object(rigsync, "check_machine_env", return_value=(0, [])), redirect_stdout(io.StringIO()):
+            rigsync.provision_env(config, [machine], dry_run=False, confirm=True)
+        self.assertNotIn(["sh", "-c", rigsync.ROLLBACK_SCRIPT], [c.args[1] for c in remote_mock.call_args_list])
+
     def test_provision_creates_every_declared_directory(self) -> None:
         # Exporting TMPDIR to a missing directory breaks tools far from here.
         script = rigsync.provision_env_script(
@@ -1213,6 +1241,54 @@ class MachineEnvTests(unittest.TestCase):
                         confirmed=False,
                         overwrite=False,
                     )
+
+    def test_push_env_is_a_no_op_when_the_peer_file_is_identical(self) -> None:
+        import hashlib
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = self.declared(root, "/large/projects/demo", "/large")
+            write(root / ".env", "HF_TOKEN=secret\n")
+            digest = hashlib.sha256((root / ".env").read_bytes()).hexdigest()
+            def fake_remote(m, argv, check=True, **kw):
+                out = f"{digest}  /large/projects/demo/.env\n".encode() if argv[0] == "sha256sum" else b""
+                return subprocess.CompletedProcess([], 0, out, b"")
+            stream = io.StringIO()
+            with mock.patch.object(rigsync, "remote", side_effect=fake_remote), \
+                    mock.patch.object(rigsync, "run") as run_mock, redirect_stdout(stream):
+                rigsync.push_env(config, config.machines["peer"], dry_run=False, confirmed=True, overwrite=False)
+            run_mock.assert_not_called()
+            self.assertIn("[same]", stream.getvalue())
+
+    def test_push_env_names_differing_keys_never_values(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = self.declared(root, "/large/projects/demo", "/large")
+            write(root / ".env", "HF_TOKEN=hub-secret\nWANDB_API_KEY=w\n")
+            def fake_remote(m, argv, check=True, **kw):
+                if argv[0] == "sha256sum":
+                    return subprocess.CompletedProcess([], 0, b"0" * 64 + b"  f\n", b"")
+                if argv[:2] == ["sh", "-c"]:
+                    return subprocess.CompletedProcess([], 0, b"HF_TOKEN\nOLD_KEY\n", b"")
+                return subprocess.CompletedProcess([], 0, b"", b"")
+            with mock.patch.object(rigsync, "remote", side_effect=fake_remote):
+                with self.assertRaises(rigsync.RigSyncError) as caught:
+                    rigsync.push_env(config, config.machines["peer"], dry_run=False, confirmed=True, overwrite=False)
+            message = str(caught.exception)
+            self.assertIn("only on the hub: WANDB_API_KEY", message)
+            self.assertIn("only on peer: OLD_KEY", message)
+            self.assertIn("kept as is", message)
+            self.assertNotIn("hub-secret", message)
+
+    def test_push_env_lands_owner_only(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = self.declared(root, "/large/projects/demo", "/large")
+            write(root / ".env", "HF_TOKEN=secret\n")
+            absent = subprocess.CompletedProcess([], 1, b"", b"")
+            with mock.patch.object(rigsync, "remote", return_value=absent), \
+                    mock.patch.object(rigsync, "run") as run_mock, redirect_stdout(io.StringIO()):
+                rigsync.push_env(config, config.machines["peer"], dry_run=False, confirmed=True, overwrite=False)
+            self.assertIn("--chmod=F600", run_mock.call_args.args[0])
 
     def test_env_parser_handles_export_quotes_and_blanks(self) -> None:
         parsed = rigsync.parse_env_assignments(

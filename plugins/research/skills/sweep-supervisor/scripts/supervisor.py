@@ -549,6 +549,10 @@ def register(wave: Wave, manifest_path: Path, config, board_config, settings: Se
         index_path(board_config, queue["project"], wave.wave_id),
         {"project_root": str(wave.project_root), "wave_id": wave.wave_id, "registered_at": queue["registered_at"]},
     )
+    print(
+        f"NEXT: start the chat printout now, without asking -- `table --wave {wave.wave_id} --cycle --full`, "
+        "then the scheduled wake-up at the chat update interval (sweep-supervisor, In a chat)"
+    )
     return 0
 
 

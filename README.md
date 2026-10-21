@@ -76,8 +76,9 @@ Cross-rig workflows require the bundled `rig-sync` and `environment-sync` contra
 access on every rig; the plugin stops before remote dispatch when source or runtime parity cannot
 be proven.
 
-Research 2.0 supports fresh projects only, scaffolded with at most one question (the remote and
-the rig secrets bring-up). Every scaffolded project carries an engineering execution agreement
+Research 2.0 supports fresh projects only, scaffolded without questions: init finds or creates
+the project's empty private GitHub repository with `gh`, and moves the project's secrets to the
+rigs the safe way (owner-only, never printed, never replacing a different file). Every scaffolded project carries an engineering execution agreement
 with its envelope. Inside it the agent decides and acts on its own — experiment design, run_id
 election and migration, plots, deploys, environment provisioning, dispatch, journal entries,
 commits — and logs each decision to `program/DECISIONS.md`, which it reads only when needed instead

@@ -127,6 +127,31 @@ class WaveReminderTests(unittest.TestCase):
         self.assertIn(r'WAVE_RE = re.compile(r"^\d{8}-\d{6}$")', rigsync)
 
 
+class WaveRegisterTriggerTests(unittest.TestCase):
+    def bash(self, command: object) -> dict:
+        return {"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": command}}
+
+    def test_confirmed_register_starts_the_printout(self) -> None:
+        command = "python3 /x/sweep-supervisor/scripts/supervisor.py register --wave 20261021-120000 --manifest m.json --confirm"
+        out = context(run(WAVE, self.bash(command))[0])
+        self.assertIsNotNone(out)
+        self.assertIn("table --wave 20261021-120000 --cycle --full", out)
+        self.assertIn("without asking", out)
+
+    def test_dry_runs_and_other_commands_are_silent(self) -> None:
+        for command in [
+            "python3 /x/supervisor.py register --wave 20261021-120000 --manifest m.json --dry-run",
+            "python3 /x/supervisor.py table --wave 20261021-120000",
+            "ls",
+        ]:
+            self.assertEqual(run(WAVE, self.bash(command))[0].stdout, "", command)
+
+    def test_other_tools_and_garbage_are_silent(self) -> None:
+        self.assertEqual(run(WAVE, {"hook_event_name": "PostToolUse", "tool_name": "Write", "tool_input": {}})[0].stdout, "")
+        proc, _ = run(WAVE, raw='{"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": 3}')
+        self.assertEqual((proc.returncode, proc.stdout), (0, ""))
+
+
 class LongTaskReminderTests(unittest.TestCase):
     def bash(self, command: object, background: bool = False) -> dict:
         return {
@@ -190,7 +215,7 @@ class HooksJsonTests(unittest.TestCase):
     def test_each_plugin_hook_runs_its_reminder(self) -> None:
         expected = {
             "core": {"PostToolUse": LONG},
-            "research": {"SessionStart": WAVE, "UserPromptSubmit": WAVE},
+            "research": {"SessionStart": WAVE, "UserPromptSubmit": WAVE, "PostToolUse": WAVE},
         }
         for plugin, events in expected.items():
             plugin_root = ROOT / "plugins" / plugin
