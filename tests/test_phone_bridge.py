@@ -175,6 +175,12 @@ public_key = "{self.base / 'id_leonardo.pub'}"
             self.assertIn("no valid certificate", bridge.handle(self.config, "tok", "/status"))
         self.assertIn("/renew", bridge.handle(self.config, "tok", "hi"))
 
+    def test_ipv4_is_tried_before_ipv6(self) -> None:
+        v6 = (bridge.socket.AF_INET6, 1, 6, "", ("::1", 443, 0, 0))
+        v4 = (bridge.socket.AF_INET, 1, 6, "", ("127.0.0.1", 443))
+        with mock.patch.object(bridge, "_getaddrinfo", return_value=[v6, v4]):
+            self.assertEqual(bridge.socket.getaddrinfo("api.telegram.org", 443), [v4, v6])
+
     def test_the_longest_duration_comes_from_the_ca(self) -> None:
         self.assertEqual(bridge.longest_duration(PROVISIONERS[1]), "48h")
         self.assertIsNone(bridge.longest_duration({"claims": {}}))

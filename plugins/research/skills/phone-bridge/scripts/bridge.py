@@ -21,6 +21,7 @@ import json
 import os
 import re
 import secrets
+import socket
 import stat
 import subprocess
 import sys
@@ -124,6 +125,17 @@ def read_token(config: Config) -> str:
 
 
 # ───────────────────────────── telegram ─────────────────────────────
+
+_getaddrinfo = socket.getaddrinfo
+
+
+def _ipv4_first(*args, **kwargs):
+    """IPv4 addresses before IPv6: a hub whose IPv6 route silently drops packets otherwise spends
+    the whole request timeout in SYN-SENT on every call before falling back."""
+    return sorted(_getaddrinfo(*args, **kwargs), key=lambda info: info[0] != socket.AF_INET)
+
+
+socket.getaddrinfo = _ipv4_first
 
 
 def http_json(url: str, data: dict | None = None, timeout: float = 30) -> dict:
