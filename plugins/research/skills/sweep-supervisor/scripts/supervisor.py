@@ -360,6 +360,27 @@ def index_path(board_config, project: str, wave_id: str) -> Path:
     return index_dir(board_config) / f"{project}__{wave_id}.json"
 
 
+def finished_dir(board_config) -> Path:
+    """Pointers to finished waves, so the rig-board viewer can still show them once nothing supervises them."""
+    return index_dir(board_config) / "finished"
+
+
+FINISHED_KEEP_S = 14 * 86400
+
+
+def record_finished(board_config, wave: Wave, queue: dict) -> None:
+    directory = finished_dir(board_config)
+    board.write_json(directory / f"{queue['project']}__{wave.wave_id}.json", {
+        "project_root": str(wave.project_root), "wave_id": wave.wave_id, "experiment": queue["experiment"],
+        "registered_at": queue.get("registered_at"), "finished_at": queue.get("finished_at") or iso(now()),
+    })
+    cutoff = now() - timedelta(seconds=FINISHED_KEEP_S)
+    for path in directory.glob("*.json"):
+        moment = parse_iso((board.read_json(path) or {}).get("finished_at"))
+        if moment is not None and moment < cutoff:
+            path.unlink(missing_ok=True)
+
+
 def active_waves(board_config) -> list[Wave]:
     waves = []
     directory = index_dir(board_config)
@@ -1366,12 +1387,15 @@ def build_snapshot(queue: dict, runtime: dict, wave: Wave, vram: dict, at: datet
     counts = {state: sum(run["state"] == state for run in queue["runs"]) for state in RUN_STATES}
     rows: list[dict] = []
     lane_free: dict[tuple[str, str], float | None] = {}
+    jobs_left: dict[str, float | None] = {}  # running cluster jobs: the wave is not over before they are
     for rig, pool in sorted(queue["pool"].items()):
         down = (runtime.get("rigs", {}).get(rig) or {}).get("down_since")
         if pool["kind"] == "slurm":
             for run in queue["runs"]:
                 if (run.get("lane") or {}).get("rig") == rig and run["state"] in ("assigned", "running"):
                     rows.append(job_row(queue, run, rig, at))
+                    if run["state"] == "running":
+                        jobs_left[f"{rig} job {run['job_id']}"] = remaining_active(queue, run, rig, at)[0]
             continue
         for gpu in pool["lanes"]:
             mine = [r for r in queue["runs"] if r["lane"] == {"rig": rig, "gpu": gpu}]
@@ -1420,6 +1444,7 @@ def build_snapshot(queue: dict, runtime: dict, wave: Wave, vram: dict, at: datet
                 }
             )
     horizon, basis = simulate(queue, lane_free, vram) if any(r["state"] not in TERMINAL_STATES for r in queue["runs"]) else (0.0, "terminal")
+    horizon, basis = with_cluster_jobs(horizon, basis, jobs_left)
     questions = [q for q in wave.questions() if q.get("status") == "open"]
     return {
         "schema_version": SCHEMA_VERSION,
@@ -1428,6 +1453,7 @@ def build_snapshot(queue: dict, runtime: dict, wave: Wave, vram: dict, at: datet
         "counts": counts, "total": len(queue["runs"]),
         "wave_eta": iso(at + timedelta(seconds=horizon)) if horizon is not None else None,
         "wave_eta_basis": basis,
+        "registered_at": queue.get("registered_at"),
         "finished_at": queue.get("finished_at"),
         "agent": queue["agent"],
         "agent_ticked_at": runtime.get("agent_ticked_at"),
@@ -1447,6 +1473,22 @@ def build_snapshot(queue: dict, runtime: dict, wave: Wave, vram: dict, at: datet
         "questions": questions,
         "decisions": recent_decisions(wave),
     }
+
+
+def with_cluster_jobs(horizon: float | None, basis: str, jobs_left: dict[str, float | None]) -> tuple[float | None, str]:
+    """The lanes' horizon stretched to the last running cluster job. The feeder simulation only sees
+    lanes, so a wave whose remaining work is all on a cluster would otherwise read as due now. A
+    running job with no estimate makes the wave ETA unavailable, the way a lane without one does;
+    a pending job's start stays the scheduler's call and is not counted."""
+    if horizon is None or not jobs_left:
+        return horizon, basis
+    unknown = sorted(name for name, left in jobs_left.items() if left is None)
+    if unknown:
+        return None, "cluster job ETA unavailable: " + ", ".join(unknown)
+    longest = max(left for left in jobs_left.values() if left is not None)
+    if longest > horizon:
+        return longest, "running cluster jobs' progress"
+    return horizon, basis
 
 
 def fraction(observed: dict) -> float | None:
@@ -1523,72 +1565,109 @@ def short(text: str | None, width: int = 44) -> str:
 TROUBLE_STATES = ("stale", "blocked", "rig down", "waiting for board")
 
 
-def cert_warnings(snapshot: dict, at: datetime) -> list[str]:
-    lines = []
+def cert_status(snapshot: dict, at: datetime) -> list[dict]:
+    """Certificates that are expired or within CERT_WARN_S of expiring, with the line the printouts show."""
+    items = []
     for rig, record in sorted((snapshot.get("certs") or {}).items()):
         expires = parse_iso(record.get("expires_at"))
         if expires is None:
             continue
         left = (expires - at).total_seconds()
         if left <= 0:
-            lines.append(f"{rig}: SSH certificate expired {clock(record['expires_at'], at)} — renew it with your 2FA login; the supervisor resumes by itself")
+            line = f"{rig}: SSH certificate expired {clock(record['expires_at'], at)} — renew it with your 2FA login; the supervisor resumes by itself"
         elif left <= CERT_WARN_S:
-            lines.append(f"{rig}: SSH certificate expires {clock(record['expires_at'], at)} (in {humanize(left)}) — renew it with your 2FA login")
-    return lines
+            line = f"{rig}: SSH certificate expires {clock(record['expires_at'], at)} (in {humanize(left)}) — renew it with your 2FA login"
+        else:
+            continue
+        items.append({"kind": "cert", "rig": rig, "expires_at": record["expires_at"], "expired": left <= 0, "seconds_left": left, "line": line})
+    return items
+
+
+def cert_warnings(snapshot: dict, at: datetime) -> list[str]:
+    return [item["line"] for item in cert_status(snapshot, at)]
+
+
+def brief_view(snapshot: dict, at: datetime | None = None) -> dict:
+    """The brief printout as data: the wave ETA, the tally, one entry per rig (when it falls free and
+    which finishes last) and the warnings. `render_brief` prints it and the rig-board viewer shows it,
+    so the chat and the page never disagree."""
+    at = at or now()
+    counts, total = snapshot["counts"], snapshot["total"]
+    if snapshot.get("finished_at"):
+        eta = {"kind": "finished", "at": snapshot["finished_at"], "seconds": None, "basis": None}
+    elif moment := parse_iso(snapshot.get("wave_eta")):
+        eta = {"kind": "eta", "at": snapshot["wave_eta"], "seconds": (moment - at).total_seconds(), "basis": snapshot.get("wave_eta_basis")}
+    else:
+        eta = {"kind": "unavailable", "at": None, "seconds": None, "basis": snapshot.get("wave_eta_basis")}
+    info = snapshot.get("rigs") or {}
+    grouped: dict[str, list[dict]] = {rig: [] for rig in info}
+    for row in snapshot["lanes"]:
+        grouped.setdefault(row["rig"], []).append(row)
+    free = {rig: max((parse_iso(r["lane_free_at"]) for r in rows if r["lane_free_at"]), default=None) for rig, rows in grouped.items()}
+    last = max((moment for moment in free.values() if moment), default=None)
+    rigs = []
+    for rig, rows in grouped.items():
+        slurm = (info.get(rig) or {}).get("kind") == "slurm" or any(r["kind"] == "job" for r in rows)
+        moment = free[rig]
+        # a Slurm rig never "falls free": it takes new jobs until the queue is empty
+        running = sum(r["state"] in ("running", "stale") for r in rows) if slurm else None
+        rigs.append({
+            "rig": rig, "kind": "slurm" if slurm else "lanes", "units": len(rows),
+            "unit": ("job" if slurm else "GPU") + ("s" if len(rows) != 1 else ""),
+            "done": (info.get(rig) or {}).get("done", sum(r["done"] for r in rows)),
+            "running": running, "waiting": len(rows) - running if slurm else None,
+            "free_at": iso(moment) if moment and not slurm else None,
+            "last_to_finish": bool(moment and moment == last and not snapshot.get("finished_at")),
+        })
+    warnings: list[dict] = []
+    for row in snapshot["lanes"]:
+        where = {"rig": row["rig"], "gpu": row["gpu"], "state": row["state"], "run": row["run"]}
+        if row.get("problem"):
+            warnings.append({"kind": "lane", **where, "problem": row["problem"], "line": f"{row['rig']} gpu{row['gpu']}: {row['problem']}"})
+        elif row["state"] in TROUBLE_STATES:
+            line = f"{row['rig']} gpu{row['gpu']} {row['state']}" + (f" (run {row['run']})" if row["run"] else "")
+            warnings.append({"kind": "lane", **where, "problem": None, "line": line})
+    if snapshot["failed"]:
+        names = ", ".join(f"`{item['run']}`" for item in snapshot["failed"][:3])
+        more = f" and {len(snapshot['failed']) - 3} more" if len(snapshot["failed"]) > 3 else ""
+        warnings.append({"kind": "failed", "runs": snapshot["failed"], "line": f"failed: {names}{more}"})
+    warnings += cert_status(snapshot, at)
+    for q in snapshot["questions"]:
+        warnings.append({
+            "kind": "question", "id": q["id"], "text": q["text"], "meanwhile": q.get("meanwhile"), "asked_at": q.get("asked_at"),
+            "line": f"needs you [{q['id']}] {q['text']} — meanwhile: {q.get('meanwhile') or 'status quo'}",
+        })
+    return {
+        "eta": eta, "done": counts["done"], "failed": counts.get("failed", 0), "total": total,
+        "fraction": counts["done"] / total if total else None, "rigs": rigs, "warnings": warnings,
+    }
 
 
 def render_brief(snapshot: dict) -> str:
     """The chat printout: the wave ETA first, one line per rig only when there are several, and a
     warning line only for what needs a look. The per-GPU table stays in `table --full` and table.md."""
     at = now()
-    counts, total = snapshot["counts"], snapshot["total"]
-    if snapshot.get("finished_at"):
-        eta = f"finished {clock(snapshot['finished_at'], at)}"
-    elif moment := parse_iso(snapshot["wave_eta"]):
-        eta = f"ETA {clock(snapshot['wave_eta'], at)} (~{humanize((moment - at).total_seconds())})"
+    view = brief_view(snapshot, at)
+    eta = view["eta"]
+    if eta["kind"] == "finished":
+        head = f"finished {clock(eta['at'], at)}"
+    elif eta["kind"] == "eta":
+        head = f"ETA {clock(eta['at'], at)} (~{humanize(eta['seconds'])})"
     else:
-        eta = f"ETA unavailable: {snapshot['wave_eta_basis']}"
-    tally = f"{counts['done']}/{total} done" + (f" · {counts['failed']} failed" if counts["failed"] else "")
-    lines = [
-        f"Status written {at.strftime('%Y-%m-%d at %H:%M')} — {eta} · {tally}",
-        bar(counts["done"] / total if total else None),
-    ]
-    info = snapshot.get("rigs") or {}
-    rigs: dict[str, list[dict]] = {rig: [] for rig in info}
-    for row in snapshot["lanes"]:
-        rigs.setdefault(row["rig"], []).append(row)
-    if len(rigs) > 1:
-        free = {rig: max((parse_iso(r["lane_free_at"]) for r in rows if r["lane_free_at"]), default=None) for rig, rows in rigs.items()}
-        last = max((moment for moment in free.values() if moment), default=None)
-        width = max(len(rig) for rig in rigs)
-        for rig, rows in rigs.items():
-            slurm = (info.get(rig) or {}).get("kind") == "slurm" or any(r["kind"] == "job" for r in rows)
-            unit = ("job" if slurm else "GPU") + ("s" if len(rows) != 1 else "")
-            done = (info.get(rig) or {}).get("done", sum(r["done"] for r in rows))
-            moment = free[rig]
-            if slurm:
-                # a Slurm rig never "falls free": it takes new jobs until the queue is empty
-                running = sum(r["state"] == "running" or r["state"] == "stale" for r in rows)
-                when = f"{running} running, {len(rows) - running} waiting" if rows else "no jobs in flight"
+        head = f"ETA unavailable: {eta['basis']}"
+    tally = f"{view['done']}/{view['total']} done" + (f" · {view['failed']} failed" if view["failed"] else "")
+    lines = [f"Status written {at.strftime('%Y-%m-%d at %H:%M')} — {head} · {tally}", bar(view["fraction"])]
+    if len(view["rigs"]) > 1:
+        width = max(len(item["rig"]) for item in view["rigs"])
+        for item in view["rigs"]:
+            if item["kind"] == "slurm":
+                when = f"{item['running']} running, {item['waiting']} waiting" if item["units"] else "no jobs in flight"
             else:
-                when = f"free {clock(iso(moment), at)}" if moment else "idle"
-            mark = "  ← last to finish" if moment and moment == last and not snapshot.get("finished_at") else ""
-            lines.append(f"  {rig.ljust(width)}  {len(rows)} {unit} · {done} done · {when}{mark}")
-    warnings = []
-    for row in snapshot["lanes"]:
-        if row.get("problem"):
-            warnings.append(f"{row['rig']} gpu{row['gpu']}: {row['problem']}")
-        elif row["state"] in TROUBLE_STATES:
-            warnings.append(f"{row['rig']} gpu{row['gpu']} {row['state']}" + (f" (run {row['run']})" if row["run"] else ""))
-    if snapshot["failed"]:
-        names = ", ".join(f"`{item['run']}`" for item in snapshot["failed"][:3])
-        more = f" and {len(snapshot['failed']) - 3} more" if len(snapshot["failed"]) > 3 else ""
-        warnings.append(f"failed: {names}{more}")
-    warnings += cert_warnings(snapshot, at)
-    for q in snapshot["questions"]:
-        warnings.append(f"needs you [{q['id']}] {q['text']} — meanwhile: {q.get('meanwhile') or 'status quo'}")
-    if warnings:
-        lines += [""] + [f"⚠ {text}" for text in warnings]
+                when = f"free {clock(item['free_at'], at)}" if item["free_at"] else "idle"
+            mark = "  ← last to finish" if item["last_to_finish"] else ""
+            lines.append(f"  {item['rig'].ljust(width)}  {item['units']} {item['unit']} · {item['done']} done · {when}{mark}")
+    if view["warnings"]:
+        lines += [""] + [f"⚠ {item['line']}" for item in view["warnings"]]
     return "\n".join(lines) + "\n"
 
 
@@ -2264,6 +2343,7 @@ def finish(wave: Wave, board_config, settings: Settings, args: argparse.Namespac
                 continue  # another wave's card, or already free
             with contextlib.suppress(board.BoardError), contextlib.redirect_stdout(io.StringIO()):
                 board.release(board_config, argparse.Namespace(rig=rig, gpu=gpu, reason=f"wave {wave.wave_id} finished"))
+    record_finished(board_config, wave, queue)
     index_path(board_config, queue["project"], wave.wave_id).unlink(missing_ok=True)
     if not live:
         # a finished wave needs nobody: its disk is freed and its results plotted and journaled unattended

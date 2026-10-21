@@ -104,10 +104,70 @@ details ul{margin:4px 0 0;padding-left:18px;font-size:12px}
 footer{color:var(--faint);font-size:11px;padding:0 20px 16px}
 .notes{color:var(--muted);font-size:12px;padding:4px 20px 12px;border-top:1px solid var(--line);margin:8px 20px 0;padding-left:0;padding-right:0}.notes div{margin:4px 0}.notes sup,sup a{color:var(--accent);text-decoration:none;font-size:10px}
 @media(max-width:600px){header{padding:10px 12px 8px}main{padding:12px;gap:10px}.hist{padding:0 12px 12px}.tile{min-width:52px}.kv{grid-template-columns:1fr}.kv span:nth-child(odd){margin-top:3px}}
+/* tabs */
+.tabs{display:inline-flex;border:1px solid var(--line2);border-radius:8px;overflow:hidden;background:var(--bg)}
+.tabs button{border:0;border-radius:0;background:transparent;padding:4px 12px;font-weight:600;color:var(--muted);display:inline-flex;align-items:center;gap:6px}
+.tabs button+button{border-left:1px solid var(--line2)}
+.tabs button.on{background:var(--card);color:var(--ink);box-shadow:inset 0 -2px 0 var(--accent)}
+.tabn{font-size:11px;font-weight:700;padding:0 6px;border-radius:999px;background:var(--line);color:var(--muted);line-height:17px}
+.tabn.bad{background:var(--bad);color:#fff}
+.tile.static{cursor:default}
+/* experiments */
+#exp{padding:14px 20px 8px;display:grid;gap:14px}
+.sect{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:2px 0 0;font-weight:700;display:flex;gap:8px;align-items:baseline}
+details.fin>summary{list-style:none;display:flex;align-items:center;gap:6px;color:var(--muted)}details.fin>summary::-webkit-details-marker{display:none}
+details.fin>summary::before{content:"▸";font-size:12px;transition:transform .15s}details.fin[open]>summary::before{transform:rotate(90deg)}
+details.fin[open]>summary{margin-bottom:10px}
+.proj{display:grid;gap:8px;margin-bottom:6px}
+.projhead{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-size:16px;font-weight:700;overflow-wrap:anywhere}
+.exph{font-size:12.5px;color:var(--muted);overflow-wrap:anywhere;margin-top:2px}.exph .mono{color:var(--ink)}
+.waves{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(min(100%,460px),1fr));align-items:start}
+.card.wave{border-top:3px solid var(--busy);min-width:0}
+.card.wave.finished{border-top-color:var(--free)}.card.wave.silent{border-top-color:var(--warn)}.card.wave.att{border-top-color:var(--bad)}
+.whead{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.whead .wid{font-size:13px;color:var(--muted)}.whead .wid .mono{color:var(--ink);font-size:12.5px}
+.hero{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:6px 16px;margin:8px 0 2px}
+.eta{display:flex;flex-direction:column;min-width:0}
+.etal{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}
+.etac{font-size:30px;font-weight:700;line-height:1.05;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.etac small{font-size:13px;font-weight:600;color:var(--muted);margin-left:6px;letter-spacing:0}
+.etac.na{font-size:18px;color:var(--muted)}
+.etas{font-size:12.5px;color:var(--muted);margin-top:2px}.etas b{color:var(--ink)}
+.tally{text-align:right;font-variant-numeric:tabular-nums}
+.tally .big{font-size:24px;font-weight:700;line-height:1.05}.tally .big small{font-size:14px;color:var(--muted);font-weight:600}
+.tally .cnt{display:flex;flex-wrap:wrap;gap:2px 8px;justify-content:flex-end;font-size:12px;color:var(--muted)}
+.c-run{color:var(--busy)}.c-q{color:var(--pend)}.c-fail{color:var(--bad)}.c-done{color:var(--free)}
+.bar.stacked i.seg-excluded{background:var(--faint)}
+.bar.big{height:9px;border-radius:5px}
+.warns{display:grid;gap:6px;margin-top:10px}
+.warn{display:flex;gap:8px;align-items:flex-start;border-radius:8px;padding:6px 9px;font-size:13px;border:1px solid var(--warn);background:var(--warnbg);min-width:0}
+.warn.bad{border-color:var(--bad);background:var(--badbg)}
+.warn .wi{flex:0 0 auto;line-height:1.35}.warn .wb{min-width:0;overflow-wrap:anywhere;flex:1}
+.warn details{margin:0}.warn summary{color:var(--ink);font-size:13px;list-style:none}.warn summary::-webkit-details-marker{display:none}
+.warn details:not([open]) .wtext{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.warn .mw{color:var(--muted);font-size:12px;margin-top:3px}
+.qid{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;font-weight:700;padding:0 5px;border-radius:4px;background:var(--warn);color:var(--card)}
+.rigs{display:grid;gap:4px;margin-top:10px}
+.rigrow{display:grid;grid-template-columns:minmax(80px,max-content) 1fr auto;gap:2px 10px;align-items:baseline;font-size:13px;padding:5px 8px;border-radius:7px;background:var(--bg);border:1px solid var(--line)}
+.rigrow .rn{font-weight:700;overflow-wrap:anywhere}.rigrow .ru{color:var(--muted);font-size:12px}.rigrow .rw{text-align:right;white-space:nowrap}
+.rigrow.last{border-color:var(--busy)}
+.rigrow .lastp{grid-column:1/-1;font-size:11px;color:var(--busy);font-weight:600}
+.fus{display:grid;gap:6px;margin-top:10px}
+.fu{border:1px solid var(--line);border-radius:8px;padding:7px 9px;font-size:13px;min-width:0}
+.fu .top{display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap}
+.fur{margin-top:4px;overflow-wrap:anywhere}.fut{font-size:12.5px;color:var(--muted);overflow-wrap:anywhere;margin:4px 0}
+.links{display:flex;flex-wrap:wrap;gap:4px 6px;margin-top:5px}.links a{font-size:12px;border:1px solid var(--line2);border-radius:999px;padding:1px 8px;text-decoration:none;overflow-wrap:anywhere}
+.links a:hover{border-color:var(--accent)}
+.vrow{margin-top:4px}
+.empty.big{font-size:20px;color:var(--ink);padding:48px 20px}.empty.big small{display:block;font-size:13px;color:var(--muted);margin-top:6px}
+.wave .lane{margin:6px 0}
+.wave details>summary{margin-top:2px}
+@media(max-width:600px){#exp{padding:12px}.tabs{order:-1;width:100%}.tabs button{flex:1;justify-content:center;padding:6px 8px}.etac{font-size:26px}.rigrow{grid-template-columns:1fr auto}.rigrow .ru{grid-column:1/-1;grid-row:2}body.tab-experiments header{position:static}#exptiles .tile{min-width:0;flex:1 1 28%;padding:3px 8px}#exptiles .tile b{font-size:16px}}
 </style></head><body>
 <header>
   <div class="row">
     <h1><span class="dot" id="dot"></span>rig-board</h1>
+    <nav class="tabs" id="tabs" role="tablist" aria-label="View"><button role="tab" data-tab="fleet" title="GPUs, lanes and the Slurm queue of every rig">Fleet</button><button role="tab" data-tab="experiments" title="Progress of every supervised experiment wave">Experiments<span class="tabn" id="tabn" hidden></span></button></nav>
     <span class="stamp" id="stamp">loading…</span>
     <span class="stamp" id="recon"></span>
     <span class="paused" id="paused" hidden>paused while you hover or select</span>
@@ -117,6 +177,7 @@ footer{color:var(--faint);font-size:11px;padding:0 20px 16px}
     <button id="notif" title="Browser notification when a lane frees up, is claimed, or is interrupted">notify: off</button>
     <button id="theme" title="Theme">theme</button>
   </div>
+  <div id="fleethead">
   <div class="tiles" id="tiles"></div>
   <div class="next" id="next"></div>
   <div class="row controls">
@@ -125,9 +186,18 @@ footer{color:var(--faint);font-size:11px;padding:0 20px 16px}
     <button id="freefirst" title="Rigs with free GPUs first">free first</button>
     <span class="stamp" id="rootpath"></span>
   </div>
+  </div>
+  <div id="exphead" hidden>
+  <div class="tiles" id="exptiles"></div>
+  <div class="row controls">
+    <input type="search" id="eq" placeholder="filter: project, experiment, wave, run…" autocomplete="off">
+    <select id="ewin" title="How far back finished waves are listed"></select>
+  </div>
+  </div>
 </header>
 <div class="banner" id="banner" hidden></div>
 <main id="main"></main>
+<section id="exp" hidden></section>
 <section class="hist" id="hist" hidden></section>
 <section class="notes" id="notes">
   <div id="fn-saldo"><sup>1</sup> Budgets come from the cluster's <code>saldo -b</code>, which CINECA recomputes overnight: consumed hours lag by up to a day, so today's jobs are not yet counted. Flags: <i>expiring</i> within 30 days, <i>low</i> above 90% of the total or of the month, <i>exhausted</i> and <i>month used up</i> when nothing is left.</div>
@@ -200,7 +270,7 @@ function drawHeader(d,nowMs){const s=d.summary||{};$("stamp").innerHTML=`board r
   const sv=d.serve||{};let rec="";if(sv.reconciling)rec="probing rigs now…";else if(sv.last_reconcile_at&&sv.reconcile_every_s){const next=Date.parse(sv.last_reconcile_at)+sv.reconcile_every_s*1000-nowMs;rec=`rigs probed ${fmtAge((nowMs-Date.parse(sv.last_reconcile_at))/1000)} ago · next in ${fmtAge(next/1000)}`}else if(sv.reconcile_every_s===null)rec="viewer does not probe (reconcile disabled)";
   if(sv.last_reconcile_error)rec+=` · <span style="color:var(--bad)">last reconcile failed: ${esc(sv.last_reconcile_error)}</span>`;$("recon").innerHTML=rec;
   $("rootpath").textContent=d.board_root||"";
-  document.title=`🟢${s.free??"?"} 🟠${s.held??"?"}${(s.interrupted||0)+(s.unreachable_rigs||0)+((s.budget_alerts||[]).length)?" 🔴":""} — rig-board`;
+  fleetTitle=`🟢${s.free??"?"} 🟠${s.held??"?"}${(s.interrupted||0)+(s.unreachable_rigs||0)+((s.budget_alerts||[]).length)?" 🔴":""} — rig-board`;setTitle();
   const col=(s.interrupted||s.unreachable_rigs)?"#b91c1c":s.free?"#15803d":"#b45309";$("favicon").href="data:image/svg+xml,"+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="4" fill="${col}"/><text x="8" y="12" font-size="10" text-anchor="middle" fill="#fff" font-family="sans-serif" font-weight="700">${s.free??"?"}</text></svg>`)}
 
 // ── cards ──
@@ -335,7 +405,7 @@ let histData=null,histAt=0;
 async function loadHistory(){try{const r=await fetch("/api/history?hours=24"+tokenQ(),{cache:"no-store"});if(!r.ok)throw new Error(r.status);histData=await r.json();histAt=Date.now()}catch(e){histData={events:[],error:String(e)}}}
 function evText(e){const where=e.rig?`${e.rig}${e.gpu!=null?" gpu"+e.gpu:""}`:"";const s=e.session?`<code>${esc(e.session)}</code>`:"";
   switch(e.event){case "claim":return `claimed ${s}`;case "reclaim":return `re-claimed (recovery) ${s}`;case "adopt":return `adopted live session ${s}`;case "release":return `released: ${esc(e.reason||"")} ${s}`;case "interrupted":return `interrupted: rig rebooted ${e.boot_at?abs(e.boot_at):""} ${s}`;case "refresh":return `refresh · ${esc(e.active_run||"")}`;case "reconcile":return (e.changes||[]).map(esc).join("<br>");default:return esc(JSON.stringify(e))}}
-async function drawHistory(){const sec=$("hist");sec.hidden=!ui.hist;$("histbtn").classList.toggle("on",ui.hist);if(!ui.hist)return;if(!histData||Date.now()-histAt>30000)await loadHistory();const nowMs=Date.now();
+async function drawHistory(){const sec=$("hist");sec.hidden=!ui.hist||ui.tab!=="fleet";$("histbtn").classList.toggle("on",ui.hist);if(sec.hidden)return;if(!histData||Date.now()-histAt>30000)await loadHistory();const nowMs=Date.now();
   const ev=(histData.events||[]);sec.innerHTML=`<h2 style="font-size:15px;margin:4px 0 8px">Last 24 h on the board <small class="stamp">(${ev.length} event${ev.length===1?"":"s"}; ten-minute refresh ticks hidden${histData.error?"; failed to load: "+esc(histData.error):""})</small></h2>`+(ev.length?`<div style="overflow-x:auto"><table><tr><th>when</th><th>event</th><th>where</th><th>detail</th></tr>${ev.map(e=>`<tr><td title="${esc(abs(e.at))}" style="white-space:nowrap">${ago(e.at,nowMs)}</td><td class="ev ${esc(e.event)}">${esc(e.event)}</td><td style="white-space:nowrap">${esc(e.rig||"")}${e.gpu!=null?" GPU "+esc(e.gpu):""}</td><td>${evText(e)}</td></tr>`).join("")}</table></div>`:`<div class="empty">no claims, releases, adoptions or interruptions in the last 24 h</div>`)}
 
 // ── notifications ──
@@ -347,16 +417,156 @@ function diffAndNotify(d){const cur=new Map();for(const r of d.rigs||[])for(cons
     if(msgs.length)try{new Notification("rig-board",{body:msgs.join("\n")})}catch(e){}}
   for(const r of d.rigs||[])cur.set("__rig__"+r.rig,r.reachable===false?"down":"up");prevLanes=cur}
 
+// ── tabs ──
+const TABS=["fleet","experiments"];
+const hashTab=()=>{const h=decodeURIComponent((location.hash||"").replace(/^#/,""));return TABS.includes(h)?h:null};
+ui.tab=hashTab()||(TABS.includes(store.get("tab","fleet"))?store.get("tab","fleet"):"fleet");
+const EWIN_CHOICES=[[24,"24 h"],[48,"48 h"],[168,"7 days"]];ui.ewin=EWIN_CHOICES.some(([v])=>v===store.get("ewin",48))?store.get("ewin",48):48;ui.eq="";
+let lastExp=null,expAt=0,fleetTitle="rig-board";
+if(store.get("finOpen",false))open.add("exp/finished");
+function applyTab(){const f=ui.tab==="fleet";for(const b of $("tabs").querySelectorAll("button")){const on=b.dataset.tab===ui.tab;b.classList.toggle("on",on);b.setAttribute("aria-selected",on?"true":"false")}
+  $("fleethead").hidden=!f;$("exphead").hidden=f;$("main").hidden=!f;$("notes").hidden=!f;$("histbtn").hidden=!f;$("notif").hidden=!f;$("recon").hidden=!f;$("exp").hidden=f;
+  $("hist").hidden=!f||!ui.hist;document.body.classList.toggle("tab-experiments",!f);setTitle()}
+function setTab(t,fromHash){if(!TABS.includes(t))return;const changed=t!==ui.tab;ui.tab=t;store.set("tab",t);
+  if(!fromHash&&location.hash!=="#"+t)history.replaceState(null,"",location.pathname+location.search+"#"+t);
+  if(!changed)return;applyTab();setBanner("",null);if(t==="fleet"){if(last)draw();drawHistory()}else if(lastExp)drawExp();tick(true)}
+$("tabs").onclick=e=>{const b=e.target.closest("button[data-tab]");if(b)setTab(b.dataset.tab)};
+window.addEventListener("hashchange",()=>{const t=hashTab();if(t)setTab(t,true)});
+$("eq").oninput=e=>{ui.eq=e.target.value.trim().toLowerCase();drawExp()};
+$("ewin").innerHTML=EWIN_CHOICES.map(([v,l])=>`<option value="${v}">finished: last ${l}</option>`).join("");$("ewin").value=String(ui.ewin);
+$("ewin").onchange=()=>{ui.ewin=Number($("ewin").value)||48;store.set("ewin",ui.ewin);tick(true)};
+document.addEventListener("toggle",e=>{if(e.target.dataset&&e.target.dataset.key==="exp/finished")store.set("finOpen",e.target.open)},true);
+function attention(){return lastExp&&lastExp.summary?lastExp.summary.attention||0:0}
+function updateTabBadge(){const n=$("tabn");if(!lastExp||!lastExp.summary){n.hidden=true;return}const s=lastExp.summary,a=s.attention||0;
+  n.hidden=!(a||s.live_waves);n.className="tabn"+(a?" bad":"");n.textContent=a?"⚠ "+a:String(s.live_waves);
+  n.title=a?`${a} thing${a===1?"":"s"} need${a===1?"s":""} a look across ${s.live_waves} live wave${s.live_waves===1?"":"s"}`:`${s.live_waves} live wave${s.live_waves===1?"":"s"}`;setTitle()}
+function setTitle(){const a=attention(),pre=a?`⚠${a} `:"";
+  if(ui.tab==="fleet"){document.title=pre+fleetTitle;return}
+  const s=(lastExp&&lastExp.summary)||{};const nx=s.next_eta;
+  document.title=lastExp?`${pre}${s.live_waves||0} live${nx?" · next "+clock(nx.at):""} — experiments`:"experiments — rig-board"}
+
+// ── experiments ──
+const SPLIT=/\/|__|,(?=[A-Za-z_][\w.-]*=)/;
+const toks=run=>String(run||"").split(SPLIT).map(t=>t.trim()).filter(Boolean);
+function commonTokens(runs){const ids=[...new Set(runs.filter(Boolean))];if(ids.length<2)return new Set();let c=new Set(toks(ids[0]));for(const id of ids.slice(1)){const t=new Set(toks(id));c=new Set([...c].filter(x=>t.has(x)))}return c}
+function variant(run,common){if(!run)return "";const vary=toks(run).filter(t=>!common.has(t));if(!vary.length)return params(run);
+  return `<span class="params" title="${esc(run)}">${vary.map(t=>{const i=t.indexOf("=");return i>0?`<span class="chip"><span class="k">${esc(t.slice(0,i))}</span><span class="v">${esc(dec(t.slice(i+1)))}</span></span>`:`<span class="dir">${esc(t)}</span>`}).join("")}</span>`}
+const URL_SPLIT=/(https?:\/\/[^\s<>"'`]+)/;
+function linkify(text){return String(text||"").split(URL_SPLIT).map((part,i)=>{if(i%2===0)return esc(part);const m=part.match(/^(.*?)([.,;:)\]]*)$/);return `<a href="${esc(m[1])}" target="_blank" rel="noopener">${esc(m[1])}</a>${esc(m[2])}`}).join("")}
+const shortUrl=u=>{try{const x=new URL(u);const tail=x.pathname.split("/").filter(Boolean).slice(-2).join("/");return tail||x.host}catch(e){return u}};
+function dayTag(iso){const d=new Date(iso);if(isNaN(d))return "";const t=new Date();const day=x=>Math.floor((new Date(x.getFullYear(),x.getMonth(),x.getDate()))/864e5);const n=day(d)-day(t);
+  return n===0?"":n===1?"tomorrow":n===-1?"yesterday":d.toLocaleDateString([], {weekday:"short",month:"short",day:"numeric"})}
+const hhmm=iso=>{const d=new Date(iso);return isNaN(d)?String(iso||"?"):d.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})};
+const LSTATE=st=>{st=String(st||"");if(st==="running")return "running";if(st==="stale")return "silent";if(st==="blocked"||st==="rig down")return "interrupted";if(st==="idle")return "free";if(st==="starting")return "claimed";
+  if(st.startsWith("waiting")||st.startsWith("pending")||st.startsWith("submitted")||st.startsWith("configuring"))return "pending";return "unknown"};
+const WICON={question:"❓",failed:"❌",cert:"🔐",lane:"⚠️",service:"🔇",followup:"🧩"};
+function warnHtml(w,x,nowMs){const bad=x.kind==="service"||x.kind==="failed"||(x.kind==="cert"&&x.expired)||(x.kind==="lane"&&(x.problem||["rig down","blocked"].includes(x.state)));
+  let body;
+  if(x.kind==="question"){const k=`q/${w.key}/${x.id}`;body=`<details data-key="${esc(k)}" ${open.has(k)?"open":""}><summary><b>Needs you</b> <span class="qid">${esc(x.id)}</span> <span class="wtext">${esc(x.text)}</span></summary><div class="mw">until answered: ${esc(x.meanwhile||"status quo")}${x.asked_at?` · asked ${ago(x.asked_at,nowMs)}`:""} · answer in the chat that supervises this wave</div></details>`}
+  else if(x.kind==="failed"){const n=(x.runs||[]).length;body=`<b>${n} failed run${n===1?"":"s"}</b>${(x.runs||[])[0]&&x.runs[0].note?` <span class="stamp">· first: ${esc(x.runs[0].note)}</span>`:""} <span class="stamp">· listed below</span>`}
+  else if(x.kind==="lane")body=`<b>${esc(x.rig)} ${String(x.gpu).startsWith("job")?esc(x.gpu):"GPU "+esc(x.gpu)}</b> ${esc(x.problem||x.state)}${x.run?` <span class="stamp">· run</span> ${variant(x.run,w._common)}`:""}`;
+  else body=esc(x.line);
+  return `<div class="warn ${bad?"bad":""}"><span class="wi">${WICON[x.kind]||"⚠️"}</span><div class="wb">${body}</div></div>`}
+function laneRowHtml(r,w,nowMs){const st=LSTATE(r.state);const job=r.kind==="job";
+  const where=job?`<b>${esc(r.rig)}</b> <span class="mono">${esc(r.gpu)}</span>`:`<b>${esc(r.rig)}</b> GPU ${esc(r.gpu)}`;
+  const hbStale=r.heartbeat_age_s!=null&&r.heartbeat_age_s>180;const meta=[];
+  if(r.heartbeat_age_s!=null)meta.push(`<span style="${hbStale?"color:var(--warn);font-weight:600":""}">heartbeat ${fmtAge(r.heartbeat_age_s)} ago</span>`);
+  if(r.run_eta)meta.push(`<span>run ETA ${until(r.run_eta,nowMs)}</span>`);
+  if(r.lane_free_at)meta.push(`<span>lane free ${until(r.lane_free_at,nowMs)}</span>`);
+  if(r.next)meta.push(job?`<span>${esc(r.next)}</span>`:`<span>next ${variant(r.next,w._common)}</span>`);
+  if(r.basis)meta.push(`<span class="stamp">basis: ${esc(r.basis)}</span>`);
+  return `<div class="lane ${st}"><div class="top"><span class="gpu">${where}</span><span class="state ${st}">${esc(r.state)}</span></div>
+    ${r.run?`<div class="vrow">${variant(r.run,w._common)}</div>`:""}
+    ${r.fraction!=null?bar(r.fraction,1,"",r.progress_text||""):""}
+    ${r.progress_text?`<div class="meta" style="margin-top:3px"><span>${esc(r.progress_text)}</span></div>`:""}
+    ${r.problem?`<div style="color:var(--bad);font-size:12px;margin-top:3px">${esc(r.problem)}</div>`:""}
+    ${meta.length?`<div class="meta">${meta.join("")}</div>`:""}</div>`}
+function followupHtml(f,nowMs){const st={pending:"pending",running:"running",done:"free",failed:"interrupted"}[f.status]||"unknown";
+  const when=f.status==="running"?`started ${ago(f.started_at,nowMs)}`:f.ended_at?`ended ${ago(f.ended_at,nowMs)}`:`queued ${ago(f.created_at,nowMs)}`;const k="fu/"+f.id;
+  return `<div class="fu"><div class="top"><span><b>${f.kind==="fix"?"🔧 fix":"📊 analyze"}</b> <span class="stamp">follow-up · ${when}</span></span><span class="state ${st}">${esc(f.status)}</span></div>
+    <div class="fur">${f.report?linkify(f.report):`<span class="stamp">${f.status==="pending"||f.status==="running"?"no report yet":esc(f.outcome||"no report")}</span>`}</div>
+    ${(f.links||[]).length?`<div class="links">${f.links.map(u=>`<a href="${esc(u)}" target="_blank" rel="noopener" title="${esc(u)}">↗ ${esc(shortUrl(u))}</a>`).join("")}</div>`:""}
+    <details data-key="${esc(k)}" ${open.has(k)?"open":""}><summary>what it was asked</summary><div class="fut">${linkify(f.text)}</div>${f.log?`<button class="copy" data-copy="${esc(f.log)}" title="${esc(f.log)}">copy log path</button>`:""}</details></div>`}
+function waveCard(w,nowMs){const b=w.brief||{};const eta=b.eta||{};const c=w.counts||{};const total=w.total||0;
+  w._common=commonTokens([...(w.lanes||[]).map(r=>r.run),...(w.failed||[]).map(f=>f.run),...(w.excluded||[]).map(f=>f.run)]);
+  const silent=(w.warnings||[]).some(x=>x.kind==="service");const fin=w.status==="finished";
+  let cls=fin?"finished":"",label=fin?"✅ finished":w.status==="registered"?"⏳ registered":"🟠 running",scls=fin?"free":w.status==="registered"?"claimed":"running";
+  if(silent&&!fin){cls="silent";label="🔇 supervisor silent";scls="silent"}if(w.attention&&!fin)cls+=" att";
+  if(fin&&!(c.done)&&(c.failed||c.excluded)){label="⛔ ended without results";scls="interrupted"}
+  let etaHtml;
+  if(eta.kind==="finished"){const took=w.registered_at?(Date.parse(eta.at)-Date.parse(w.registered_at))/1000:null;
+    etaHtml=`<div class="eta"><span class="etal">finished</span><span class="etac">${esc(hhmm(eta.at))}${dayTag(eta.at)?`<small>${esc(dayTag(eta.at))}</small>`:""}</span><span class="etas">${ago(eta.at,nowMs)}${took!=null&&took>0?` · took <b>${fmtAge(took)}</b>`:""}</span></div>`}
+  else if(eta.kind==="eta"){const d=(Date.parse(eta.at)-nowMs)/1000;
+    etaHtml=`<div class="eta"><span class="etal">wave ETA</span><span class="etac">${esc(hhmm(eta.at))}${dayTag(eta.at)?`<small>${esc(dayTag(eta.at))}</small>`:""}</span><span class="etas">${d>=0?`in <b>${fmtAge(d)}</b>`:`<b style="color:var(--bad)">overdue by ${fmtAge(-d)}</b>`}${eta.basis?` · <abbr title="how the supervisor estimated it">${esc(eta.basis)}</abbr>`:""}</span></div>`}
+  else etaHtml=`<div class="eta"><span class="etal">wave ETA</span><span class="etac na">unavailable</span><span class="etas">${esc(eta.basis||(w.status==="registered"?"waiting for the supervisor's first cycle":"no estimate"))}</span></div>`;
+  const queued=(c.queued||0)+(c.assigned||0);const cnt=[];
+  if(c.running)cnt.push(`<span class="c-run">${c.running} running</span>`);if(queued)cnt.push(`<span class="c-q">${queued} queued</span>`);if(c.failed)cnt.push(`<span class="c-fail">${c.failed} failed</span>`);if(c.excluded)cnt.push(`<span>${c.excluded} excluded</span>`);
+  const tally=w.counts?`<div class="tally"><div class="big">${c.done||0}<small> / ${total} done</small></div><div class="cnt">${cnt.join("")}</div></div>`:"";
+  const sbar=w.counts?`<div class="barrow" title="${esc(`${c.done||0} done · ${c.failed||0} failed · ${c.running||0} running · ${queued} queued · ${c.excluded||0} excluded`)}"><div class="bar stacked big">${[["completed",c.done],["failed",c.failed],["running",c.running],["pending",queued],["excluded",c.excluded]].filter(([,n])=>n>0).map(([k,n])=>`<i class="seg-${k}" style="width:${total>0?100*n/total:0}%"></i>`).join("")}</div><small class="pct">${pct2(c.done||0,total)}</small></div>`:"";
+  const meta=[];if(w.registered_at)meta.push(fin?`launched ${esc(clock(w.registered_at))}`:`launched <b>${ago(w.registered_at,nowMs)}</b>`);
+  if(!fin&&w.written_at)meta.push(`supervisor cycle ${ago(w.written_at,nowMs)}`);
+  if(!fin&&w.agent)meta.push(`agent ${esc(w.agent.model)}/${esc(w.agent.effort)} ticked ${w.agent_ticked_at?ago(w.agent_ticked_at,nowMs):"never"}${w.agent_last_result&&w.agent_last_result!=="exit 0"?` <b style="color:var(--bad)">(${esc(w.agent_last_result)})</b>`:""}`);
+  for(const [rig,col] of Object.entries(w.collect||{}))if(col&&col.ok===false)meta.push(`<span style="color:var(--bad)">collect from ${esc(rig)} failed${col.at?" "+ago(col.at,nowMs):""}</span>`);
+  const warns=(w.warnings||[]);
+  const rigs=(b.rigs||[]).map(r=>{let when;if(fin)when=`<span class="stamp">${r.done} done</span>`;else if(r.kind==="slurm")when=r.units?`<b class="c-run">${r.running} running</b>${r.waiting?` · <b class="c-q">${r.waiting} waiting</b>`:""}`:`<span class="stamp">no jobs in flight</span>`;
+      else when=r.free_at?`free ${until(r.free_at,nowMs)}`:`<span class="stamp">idle</span>`;
+    return `<div class="rigrow ${r.last_to_finish?"last":""}"><span class="rn">${esc(r.rig)}</span><span class="ru">${r.units} ${esc(r.unit)}${fin?"":` · ${r.done} done`}</span><span class="rw">${when}</span>${r.last_to_finish&&(b.rigs||[]).length>1?`<span class="lastp">🏁 last to finish: it sets the wave ETA</span>`:""}</div>`}).join("");
+  const rows=w.lanes||[];const kr=`runs/${w.key}`,kf=`failed/${w.key}`,kx=`excl/${w.key}`,kd=`dec/${w.key}`,kc=`common/${w.key}`;
+  const jobs=rows.filter(r=>r.kind==="job").length,gpus=rows.length-jobs;
+  const rowsLabel=[gpus?`${gpus} GPU lane${gpus===1?"":"s"}`:"",jobs?`${jobs} cluster job${jobs===1?"":"s"}`:""].filter(Boolean).join(" + ");
+  return `<section class="card wave ${cls}" data-key="${esc(w.key)}">
+    <div class="whead"><span class="wid">wave <span class="mono">${esc(w.wave_id)}</span></span><span class="state ${scls}">${label}</span></div>
+    <div class="hero">${etaHtml}${tally}</div>${sbar}
+    ${meta.length?`<div class="meta">${meta.map(x=>`<span>${x}</span>`).join("")}</div>`:""}
+    ${warns.length?`<div class="warns">${warns.map(x=>warnHtml(w,x,nowMs)).join("")}</div>`:""}
+    ${rigs?`<div class="rigs">${rigs}</div>`:""}
+    ${(w.followups||[]).length?`<div class="fus">${w.followups.map(f=>followupHtml(f,nowMs)).join("")}</div>`:""}
+    ${rows.length?`<details data-key="${esc(kr)}" ${open.has(kr)?"open":""}><summary>per run · ${rowsLabel}</summary>${rows.map(r=>laneRowHtml(r,w,nowMs)).join("")}</details>`:""}
+    ${w._common.size?`<details data-key="${esc(kc)}" ${open.has(kc)?"open":""}><summary>configuration shared by every run shown</summary><div style="margin-top:3px">${params([...w._common].join("/"))}</div></details>`:""}
+    ${(w.failed||[]).length?`<details data-key="${esc(kf)}" ${open.has(kf)?"open":""}><summary>❌ ${w.failed.length} failed run${w.failed.length===1?"":"s"}</summary><ul>${w.failed.map(f=>`<li>${variant(f.run,w._common)} <span class="stamp">${esc(f.note||"see its log")}</span></li>`).join("")}</ul></details>`:""}
+    ${(w.excluded||[]).length?`<details data-key="${esc(kx)}" ${open.has(kx)?"open":""}><summary>${w.excluded.length} excluded run${w.excluded.length===1?"":"s"}</summary><ul>${w.excluded.map(f=>`<li>${variant(f.run,w._common)} <span class="stamp">${esc(f.note||"")}</span></li>`).join("")}</ul></details>`:""}
+    ${(w.decisions||[]).length?`<details data-key="${esc(kd)}" ${open.has(kd)?"open":""}><summary>latest supervisor decisions</summary><ul>${w.decisions.map(d=>`<li>${esc(String(d).replace(/^- /,""))}</li>`).join("")}</ul></details>`:""}
+  </section>`}
+function waveMatches(w,q){if(!q)return true;return [w.project,w.experiment,w.wave_id,...(w.lanes||[]).flatMap(r=>[r.run,r.rig,r.gpu]),...(w.failed||[]).map(f=>f.run),...(w.followups||[]).flatMap(f=>[f.kind,f.text,f.report])].join(" ").toLowerCase().includes(q)}
+function filterGroups(groups,q){return (groups||[]).map(p=>({...p,experiments:p.experiments.map(e=>({...e,waves:e.waves.filter(w=>waveMatches(w,q))})).filter(e=>e.waves.length)})).filter(p=>p.experiments.length)}
+const nWaves=groups=>groups.reduce((n,p)=>n+p.experiments.reduce((m,e)=>m+e.waves.length,0),0);
+function projectHtml(p,nowMs,fin){return `<div class="proj"><div class="projhead"><span>${esc(p.project)}</span>${p.attention&&!fin?`<span class="pill bad">⚠ ${p.attention}</span>`:""}<button class="copy" data-copy="${esc(p.project_root)}" title="${esc(p.project_root)}">copy project path</button></div>
+  ${p.experiments.map(e=>`<div class="exph">experiment <span class="mono">${esc(e.experiment)}</span></div><div class="waves">${e.waves.map(w=>waveCard(w,nowMs)).join("")}</div>`).join("")}</div>`}
+function drawExp(){updateTabBadge();if(ui.tab!=="experiments")return;const d=lastExp;if(!d)return;const nowMs=Date.now();const s=d.summary||{};
+  const win=(EWIN_CHOICES.find(([v])=>v===Number(d.window_hours))||[0,d.window_hours+" h"])[1];
+  $("stamp").innerHTML=`read ${esc(clock(d.generated_at))}`;
+  const nx=s.next_eta;const tiles=[["",s.live_waves??0,"🟠 live waves"],["",s.running_runs??0,"▶️ runs running"],["",nx?hhmm(nx.at):"—","🏁 next wave ETA",nx?`${nx.project} · ${nx.experiment} · wave ${nx.wave_id}`:"no live wave has an ETA"],[s.attention?"bad":"",s.attention??0,"⚠️ need a look"],["free",s.finished_waves??0,`✅ finished · ${esc(win)}`]];
+  $("exptiles").innerHTML=tiles.map(([cls,v,l,t])=>`<div class="tile static ${cls}" ${t?`title="${esc(t)}"`:""}><b>${esc(v)}</b><small>${l}</small></div>`).join("");
+  const box=$("exp");if(d.error){box.innerHTML=`<div class="empty">Experiments unavailable: ${esc(d.error)}</div>`;return}
+  const live=filterGroups(d.live,ui.eq),fin=filterGroups(d.finished,ui.eq);let html="";
+  if(!(d.live||[]).length)html+=`<div class="empty big">💤 Nothing is running<small>No experiment wave is supervised on the hub right now${(d.finished||[]).length?".":` and none finished in the last ${esc(win)}.`}</small></div>`;
+  else if(!live.length)html+=`<div class="empty">no live wave matches the filter</div>`;
+  else html+=`<h2 class="sect">Running now <span class="stamp">${nWaves(live)} wave${nWaves(live)===1?"":"s"}</span></h2>`+live.map(p=>projectHtml(p,nowMs,false)).join("");
+  if((d.finished||[]).length){const k="exp/finished";html+=`<details class="fin" data-key="${k}" ${open.has(k)?"open":""}><summary><h2 class="sect" style="margin:0">Finished in the last ${esc(win)} <span class="stamp">${nWaves(fin)} wave${nWaves(fin)===1?"":"s"}</span></h2></summary>${fin.length?fin.map(p=>projectHtml(p,nowMs,true)).join(""):`<div class="empty">no finished wave matches the filter</div>`}</details>`}
+  html+=`<div class="stamp" style="padding:4px 0 8px">Every number here is the sweep-supervisor's own snapshot of the wave (the same one its chat printout reads), rewritten on each supervisor cycle; this page only reads it. Countdowns tick against this browser's clock.</div>`;
+  box.innerHTML=html;$("foot").textContent=`experiments read ${abs(d.generated_at)} · api v${d.api_version||1} · page refreshes every ${ui.every>=60?ui.every/60+" min":ui.every+" s"}`}
+
 // ── polling ──
 function tokenQ(){const q=new URLSearchParams(location.search).get("token");return q?"&token="+encodeURIComponent(q):""}
 function setBanner(kind,html){const b=$("banner");if(!html){b.hidden=true;return}b.hidden=false;b.className="banner "+kind;b.innerHTML=html}
-async function tick(){if(fetching)return;const paused=hover||(window.getSelection&&String(window.getSelection()).length>0);$("paused").hidden=!paused;if(paused&&last)return;fetching=true;
+async function fetchBoard(){
   try{const r=await fetch("/api/board?_="+Date.now()+tokenQ(),{cache:"no-store"});
-    if(r.status===401){setBanner("bad","Access token required. Open the page once as <code>/?token=&lt;token&gt;</code> (from <code>[board] token</code> in the registry); it is then remembered by a cookie.");$("dot").className="dot down";return}
+    if(r.status===401){denied();return}
     if(!r.ok)throw new Error(r.status+" "+r.statusText);const d=await r.json();last=d;lastOk=Date.now();diffAndNotify(d);setBanner("",null);$("dot").className="dot live";draw();if(ui.hist&&Date.now()-histAt>30000)drawHistory()}
-  catch(e){$("dot").className="dot down";setBanner("bad",`Board unavailable: ${esc(e.message)}${last?` · showing the last good read from ${esc(abs(last.generated_at))}`:""}`);if(last)draw()}
+  catch(e){$("dot").className="dot down";setBanner("bad",`Board unavailable: ${esc(e.message)}${last?` · showing the last good read from ${esc(abs(last.generated_at))}`:""}`);if(last)draw()}}
+function denied(){setBanner("bad","Access token required. Open the page once as <code>/?token=&lt;token&gt;</code> (from <code>[board] token</code> in the registry); it is then remembered by a cookie.");$("dot").className="dot down"}
+// background: the fleet tab still reads the experiments every 30 s, for the warning count in the tab label and title
+async function fetchExp(background){
+  try{const r=await fetch(`/api/experiments?hours=${ui.ewin}&_=${Date.now()}${tokenQ()}`,{cache:"no-store"});
+    if(r.status===401){if(!background)denied();return}
+    if(!r.ok)throw new Error(r.status+" "+r.statusText);lastExp=await r.json();expAt=Date.now();
+    if(!background){lastOk=Date.now();setBanner("",null);$("dot").className="dot live";drawExp()}else updateTabBadge()}
+  catch(e){if(background)return;$("dot").className="dot down";setBanner("bad",`Experiments unavailable: ${esc(e.message)}${lastExp?` · showing the last good read from ${esc(abs(lastExp.generated_at))}`:""}`);if(lastExp)drawExp()}}
+async function tick(force){if(fetching)return;const paused=hover||(window.getSelection&&String(window.getSelection()).length>0);$("paused").hidden=!paused;
+  if(paused&&!force&&(ui.tab==="fleet"?last:lastExp))return;fetching=true;
+  try{if(ui.tab==="fleet"){await fetchBoard();if(Date.now()-expAt>30000)await fetchExp(true)}else await fetchExp(false)}
   finally{fetching=false}}
-setInterval(()=>{if(last&&Date.now()-lastOk>Math.max(20000,4*ui.every*1000)&&!$("banner").classList.contains("bad")){$("dot").className="dot stale"}},1000);
+setInterval(()=>{if((ui.tab==="fleet"?last:lastExp)&&Date.now()-lastOk>Math.max(20000,4*ui.every*1000)&&!$("banner").classList.contains("bad")){$("dot").className="dot stale"}},1000);
 let timer=null;function schedule(){if(timer)clearInterval(timer);timer=setInterval(tick,ui.every*1000)}
-tick();schedule();drawHistory();
+applyTab();tick();schedule();drawHistory();
 </script></body></html>

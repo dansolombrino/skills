@@ -1,6 +1,6 @@
 ---
 name: rig-board
-description: Read and maintain the fleet-wide GPU lane board shared by every Research 2.0 project on the hub, so any chat knows which rig GPUs are held, by which project and wave, since when, and with what ETA, plus the read-only Slurm queue of a cluster such as Leonardo. Use when the user asks whether the GPUs or a rig are free or busy, says to wait for GPUs or for another project's runs to finish, asks what is running or queued across projects or on the cluster, or when sweep-dispatch claims, refreshes, or releases a lane; also to run or install the read-only web viewer. Do not use for per-run status, to submit or cancel jobs, or to decide cross-project priority.
+description: Read and maintain the fleet-wide GPU lane board shared by every Research 2.0 project on the hub, so any chat knows which rig GPUs are held, by which project and wave, since when, and with what ETA, plus the read-only Slurm queue of a cluster such as Leonardo. Use when the user asks whether the GPUs or a rig are free or busy, says to wait for GPUs or for another project's runs to finish, asks what is running or queued across projects or on the cluster, or when sweep-dispatch claims, refreshes, or releases a lane; also to run or install the read-only web viewer, whose Experiments tab shows every supervised wave's progress. Do not use for per-run status in a chat, to submit or cancel jobs, or to decide cross-project priority.
 ---
 
 # rig-board
@@ -125,7 +125,24 @@ card or text is selected, and a lost server shows the last good read as stale. `
 `stray_sessions`, `gpu_probe_ok`, `load`, per-GPU `name`, `memory_total_mib`, `temperature_c`,
 `power_w`, `processes`; per-cluster `groups`) and `/api/history?hours=&limit=&refresh=` are the
 JSON behind it. It reconciles on its own timer so the page stays honest when no chat is alive.
-It takes no write actions. Install it as a user service on the hub per the configuration
+It takes no write actions.
+
+The **Experiments** tab (`/#experiments`; the chosen tab is remembered per browser) shows every
+wave the `sweep-supervisor` service drives, grouped project → experiment → wave, live waves first
+and the ones finished in the last 24 h / 48 h / 7 days in a collapsed section below. Per wave: the
+wave ETA as a clock time with its countdown, done / total with a stacked bar (done, failed,
+running, queued, excluded), time since launch, supervisor-cycle and agent-tick ages; one row per
+rig (GPUs or cluster jobs, runs done, when it falls free, which finishes last); prominent warnings
+(stale, blocked or down lanes, failed runs, open questions with their id and text, expiring
+certificates, a supervisor that stopped cycling, a follow-up that ended without a report); the
+wave's `analyze` / `fix` follow-ups with their reports and clickable links; and, on expand, the
+per-run rows of `table --full`, failed and excluded runs, and the latest decisions. The warning
+count rides in the tab label and the page title. Every number is the supervisor's own
+`snapshot.json`, read through its `brief_view` (the brief printout's data), never recomputed here.
+`/api/experiments?hours=` (default 48, `api_version` 1) is the JSON behind it, under the same
+token rules.
+
+Install it as a user service on the hub per the configuration
 reference; the URL is `http://<hub address>:<port>`. With `[board] token` set, the page and
 the API require that token (query once, then a cookie); require it before exposing the port
 beyond the LAN.

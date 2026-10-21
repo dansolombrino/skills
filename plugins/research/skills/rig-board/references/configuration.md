@@ -167,6 +167,18 @@ without it the server still answers `/api/board` and says the page is missing.
 The viewer keeps its own preferences (filter chips, free-first sort, theme, notifications,
 history panel, refresh period) in the browser's local storage; nothing is written on the hub.
 
+### Experiments tab
+
+`/api/experiments` reads, per request and without writing anything: the supervisor's pointers
+under `<root>/supervisor/` (live waves), `<root>/supervisor/finished/` (finished waves),
+`<root>/supervisor/followups/`, and each named project's `.waves/_state/<wave_id>/snapshot.json`
+(projects named by a pointer, a follow-up or a lane are also scanned for waves that finished before
+finished pointers existed). It loads the sibling `sweep-supervisor/scripts/supervisor.py` to turn a
+snapshot into the brief printout's numbers, so both skills must stay installed side by side (they
+ship in the same plugin). Unchanged files are not re-parsed. A live wave whose snapshot is older
+than ten minutes is flagged: the supervisor service cycles every wave each minute. The viewer
+process must be able to read the project trees; the user service does.
+
 ### Two timers
 
 - **Page refresh** (`refresh:` selector in the toolbar, 1 s to 5 min, default 5 s; `?every=<s>`

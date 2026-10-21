@@ -831,6 +831,147 @@ class BoardTests(unittest.TestCase):
         data = json.loads(self.run_cli("status", "--json")[1])
         self.assertEqual(data["supervised_waves"][0]["wave_id"], "20260921-093000")
 
+    # ── Experiments tab ──
+
+    def wave_state(self, project: str, wave_id: str, **snapshot) -> Path:
+        root = Path(self.tmp.name) / project
+        at = board.now()
+        payload = {
+            "schema_version": 1, "written_at": board.iso(at), "project": project, "experiment": "000_exp", "wave_id": wave_id,
+            "counts": {"queued": 2, "assigned": 0, "running": 1, "done": 3, "failed": 0, "excluded": 0}, "total": 6,
+            "wave_eta": board.iso(at + timedelta(hours=2)), "wave_eta_basis": "feeder simulation", "finished_at": None,
+            "registered_at": board.iso(at - timedelta(hours=1)), "agent": {"model": "opus", "effort": "high"},
+            "lanes": [{"kind": "lane", "rig": "rig-4090", "gpu": "0", "state": "running", "run": "model=a", "progress_text": "epoch 1/2",
+                       "fraction": 0.5, "heartbeat_age_s": 20, "run_eta": None, "next": None, "done": 3,
+                       "lane_free_at": board.iso(at + timedelta(hours=1)), "basis": "structured progress", "problem": None}],
+            "rigs": {"rig-4090": {"kind": "lanes", "done": 3}}, "certs": {}, "failed": [], "excluded": [], "questions": [], "decisions": [],
+        }
+        payload.update(snapshot)
+        board.write_json(root / ".waves" / "_state" / wave_id / "snapshot.json", payload)
+        return root
+
+    def register_wave(self, root: Path, wave_id: str) -> None:
+        board.write_json(self.config.root / "supervisor" / f"{root.name}__{wave_id}.json", {"project_root": str(root), "wave_id": wave_id})
+
+    def waves(self, data: dict, section: str) -> list[dict]:
+        return [w for p in data[section] for e in p["experiments"] for w in e["waves"]]
+
+    def test_experiments_empty_state_says_nothing_is_running(self) -> None:
+        data = board.experiments(self.config)
+        self.assertIsNone(data["error"])
+        self.assertEqual((data["live"], data["finished"]), ([], []))
+        self.assertEqual(data["summary"]["live_waves"], 0)
+        self.assertEqual(data["summary"]["attention"], 0)
+
+    def test_experiments_group_project_experiment_wave_with_the_supervisors_brief(self) -> None:
+        a = self.wave_state("alpha", "20260921-093000")
+        self.register_wave(a, "20260921-093000")
+        self.wave_state("alpha", "20260921-100000", experiment="001_other")
+        self.register_wave(a, "20260921-100000")
+        b = self.wave_state("beta", "20260921-110000")
+        self.register_wave(b, "20260921-110000")
+        data = board.experiments(self.config)
+        self.assertEqual([p["project"] for p in data["live"]], ["alpha", "beta"])
+        self.assertEqual([e["experiment"] for e in data["live"][0]["experiments"]], ["000_exp", "001_other"])
+        wave = data["live"][0]["experiments"][0]["waves"][0]
+        self.assertEqual((wave["status"], wave["wave_id"], wave["counts"]["done"], wave["total"]), ("live", "20260921-093000", 3, 6))
+        brief = wave["brief"]
+        self.assertEqual(brief["eta"]["kind"], "eta")
+        self.assertEqual(brief["eta"]["at"], wave["wave_eta"], "the ETA is the supervisor's, copied")
+        self.assertEqual(brief["rigs"][0]["rig"], "rig-4090")
+        self.assertEqual(brief["rigs"][0]["free_at"], wave["lanes"][0]["lane_free_at"])
+        self.assertEqual(wave["lanes"][0]["progress_text"], "epoch 1/2", "the per-run rows of table --full")
+        self.assertEqual(data["summary"]["live_waves"], 3)
+        self.assertEqual(data["summary"]["running_runs"], 3)
+        self.assertEqual(data["summary"]["attention"], 0)
+
+    def test_experiments_surface_every_warning_the_printout_has_plus_a_silent_service(self) -> None:
+        at = board.now()
+        root = self.wave_state(
+            "alpha", "20260921-093000",
+            written_at=board.iso(at - timedelta(minutes=30)),
+            lanes=[{"kind": "lane", "rig": "rig-4090", "gpu": "0", "state": "stale", "run": "model=a", "progress_text": None, "fraction": None,
+                    "heartbeat_age_s": 900, "run_eta": None, "next": None, "done": 0, "lane_free_at": None, "basis": "stale heartbeat", "problem": None},
+                   {"kind": "lane", "rig": "behemoth", "gpu": "0", "state": "blocked", "run": None, "progress_text": None, "fraction": None,
+                    "heartbeat_age_s": None, "run_eta": None, "next": None, "done": 0, "lane_free_at": None, "basis": None, "problem": "exit 87 environment drift"}],
+            failed=[{"run": "model=b", "note": "exit 1 on rig-4090 gpu0"}],
+            questions=[{"id": "q1", "text": "use behemoth gpu 5?", "meanwhile": "gpu 5 unused", "status": "open", "asked_at": board.iso(at)}],
+            certs={"leonardo": {"expires_at": board.iso(at + timedelta(minutes=20))}},
+        )
+        self.register_wave(root, "20260921-093000")
+        [wave] = self.waves(board.experiments(self.config), "live")
+        kinds = [w["kind"] for w in wave["warnings"]]
+        self.assertEqual(kinds[0], "service", "a silent supervisor leads: every number below is old")
+        self.assertEqual(sorted(kinds), sorted(["service", "lane", "lane", "failed", "cert", "question"]))
+        question = next(w for w in wave["warnings"] if w["kind"] == "question")
+        self.assertEqual((question["id"], question["text"]), ("q1", "use behemoth gpu 5?"))
+        self.assertIn("exit 87 environment drift", next(w["line"] for w in wave["warnings"] if w.get("problem")))
+        self.assertEqual(wave["attention"], 6)
+
+    def test_finished_waves_stay_listed_for_the_window_with_their_followups(self) -> None:
+        at = board.now()
+        root = self.wave_state("alpha", "20260920-093000", finished_at=board.iso(at - timedelta(hours=3)),
+                               failed=[{"run": "model=b", "note": None}], certs={"leonardo": {"expires_at": board.iso(at - timedelta(minutes=1))}})
+        board.write_json(self.config.root / "supervisor" / "finished" / "alpha__20260920-093000.json",
+                         {"project_root": str(root), "wave_id": "20260920-093000", "finished_at": board.iso(at - timedelta(hours=3))})
+        old = self.wave_state("alpha", "20260901-093000", finished_at=board.iso(at - timedelta(days=5)))
+        board.write_json(self.config.root / "supervisor" / "finished" / "alpha__20260901-093000.json",
+                         {"project_root": str(old), "wave_id": "20260901-093000", "finished_at": board.iso(at - timedelta(days=5))})
+        board.write_json(self.config.root / "supervisor" / "followups" / "x__analyze.json", {
+            "id": "x__analyze", "kind": "analyze", "status": "done", "project_root": str(root), "wave_id": "20260920-093000",
+            "text": "3 done", "report": "loss falls with lr; plots http://hub:8000/alpha/plots/a.html, and http://hub:8000/alpha/plots/b.html.",
+            "created_at": board.iso(at - timedelta(hours=2)), "ended_at": board.iso(at - timedelta(hours=1)),
+        })
+        data = board.experiments(self.config)
+        self.assertEqual(data["live"], [])
+        [wave] = self.waves(data, "finished")
+        self.assertEqual((wave["status"], wave["brief"]["eta"]["kind"]), ("finished", "finished"))
+        [followup] = wave["followups"]
+        self.assertEqual(followup["links"], ["http://hub:8000/alpha/plots/a.html", "http://hub:8000/alpha/plots/b.html"])
+        self.assertNotIn("cert", [w["kind"] for w in wave["warnings"]], "a finished wave's certificate is history")
+        self.assertEqual(wave["attention"], 0, "failed runs of a finished wave are shown, not counted")
+        self.assertEqual(len(self.waves(board.experiments(self.config, hours=24 * 7), "finished")), 2)
+
+    def test_a_followup_without_a_report_needs_a_look_and_brings_back_an_older_wave(self) -> None:
+        at = board.now()
+        root = self.wave_state("alpha", "20260920-093000", finished_at=board.iso(at - timedelta(days=4)))
+        board.write_json(self.config.root / "supervisor" / "followups" / "y__fix.json", {
+            "id": "y__fix", "kind": "fix", "status": "failed", "outcome": "exit 1", "project_root": str(root), "wave_id": "20260920-093000",
+            "text": "a bug", "report": None, "created_at": board.iso(at - timedelta(hours=1)), "ended_at": board.iso(at), "log": "/tmp/f.log",
+        })
+        data = board.experiments(self.config)
+        [wave] = self.waves(data, "finished")
+        self.assertEqual([w["kind"] for w in wave["warnings"]], ["followup"])
+        self.assertEqual(data["summary"]["attention"], 1)
+
+    def test_experiments_endpoint_is_read_only_and_behind_the_token(self) -> None:
+        root = self.wave_state("alpha", "20260921-093000")
+        self.register_wave(root, "20260921-093000")
+        token = "y" * 24
+        config = board.BoardConfig(root=self.config.root, rigs=self.config.rigs, token=token)
+        Fake = self.fake_request(config)
+        denied = Fake("/api/experiments")
+        denied.do_GET()
+        self.assertEqual(denied.code, 401)
+        self.assertNotIn(b"alpha", denied.wfile.getvalue())
+        before = sorted((p, p.stat().st_mtime_ns) for p in Path(self.tmp.name).rglob("*") if p.is_file())
+        ok = Fake("/api/experiments?hours=24", {"X-Board-Token": token})
+        ok.do_GET()
+        self.assertEqual(ok.code, 200)
+        payload = json.loads(ok.wfile.getvalue())
+        self.assertEqual(payload["window_hours"], 24.0)
+        self.assertEqual(payload["live"][0]["project"], "alpha")
+        after = sorted((p, p.stat().st_mtime_ns) for p in Path(self.tmp.name).rglob("*") if p.is_file())
+        self.assertEqual(before, after, "the tab never writes")
+        bad = Fake("/api/experiments?hours=x", {"X-Board-Token": token})
+        bad.do_GET()
+        self.assertEqual(bad.code, 400)
+
+    def test_viewer_has_the_experiments_tab(self) -> None:
+        page = board.VIEWER_PATH.read_text()
+        for needle in ('data-tab="experiments"', "/api/experiments", "hashchange", "localStorage"):
+            self.assertIn(needle, page)
+
 
 if __name__ == "__main__":
     unittest.main()

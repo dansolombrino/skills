@@ -1294,6 +1294,237 @@ def supervised_waves(config: BoardConfig) -> list[dict]:
     return waves
 
 
+# ───────────────────────────── experiments (supervised waves) ─────────────────────────────
+
+SUPERVISOR_SCRIPT = Path(__file__).resolve().parents[2] / "sweep-supervisor" / "scripts" / "supervisor.py"
+EXPERIMENTS_API_VERSION = 1
+EXPERIMENTS_DEFAULT_HOURS = 48
+SERVICE_SILENT_S = 10 * 60  # the supervisor cycles every wave each minute; this long without one means it is down
+URL_RE = re.compile(r"https?://[^\s<>\"'`]+")
+_supervisor_lock = threading.Lock()
+_supervisor_module: list = []
+_json_cache: dict[Path, tuple[int, int, dict | None]] = {}
+
+
+def supervisor_module():
+    """The sweep-supervisor script, loaded once by sibling path. Its own functions turn a wave's
+    snapshot into the brief printout's numbers, so the page and the chat cannot drift apart."""
+    with _supervisor_lock:
+        if not _supervisor_module:
+            import importlib.util
+
+            spec = importlib.util.spec_from_file_location("rig_board_supervisor", SUPERVISOR_SCRIPT)
+            if spec is None or spec.loader is None:
+                raise BoardError(f"cannot load {SUPERVISOR_SCRIPT}")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            try:
+                spec.loader.exec_module(module)
+            except Exception as exc:
+                sys.modules.pop(spec.name, None)
+                raise BoardError(f"cannot load {SUPERVISOR_SCRIPT}: {exc}") from exc
+            _supervisor_module.append(module)
+        return _supervisor_module[0]
+
+
+def read_json_cached(path: Path) -> dict | None:
+    """read_json, skipping the parse when the file has not changed since the last request."""
+    try:
+        stat = path.stat()
+    except OSError:
+        _json_cache.pop(path, None)
+        return None
+    cached = _json_cache.get(path)
+    if cached and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+        return cached[2]
+    payload = read_json(path)
+    _json_cache[path] = (stat.st_mtime_ns, stat.st_size, payload)
+    return payload
+
+
+def followup_view(record: dict) -> dict:
+    text = " ".join(str(record.get(key) or "") for key in ("report", "text"))
+    links = list(dict.fromkeys(url.rstrip(".,;:)]") for url in URL_RE.findall(text)))
+    keys = ("id", "kind", "status", "text", "report", "outcome", "created_at", "started_at", "ended_at", "log", "fix_depth")
+    return {**{key: record.get(key) for key in keys}, "links": links}
+
+
+def wave_entry(sup, pointer: dict, supervised: bool, followups: list[dict], at: datetime) -> dict:
+    """One wave for the Experiments tab: the snapshot the supervisor wrote, its brief view, and the
+    board-level warnings (service silent, follow-up without a report)."""
+    root = Path(str(pointer.get("project_root")))
+    wave_id = str(pointer.get("wave_id"))
+    view = read_json_cached(root / ".waves" / "_state" / wave_id / "snapshot.json") or {}
+    entry: dict = {
+        "key": f"{root.name}/{wave_id}",
+        "project": view.get("project") or root.name,
+        "project_root": str(root),
+        "experiment": view.get("experiment") or pointer.get("experiment"),
+        "wave_id": wave_id,
+        "supervised": supervised,
+        "registered_at": view.get("registered_at") or pointer.get("registered_at"),
+        "written_at": view.get("written_at"),
+        "finished_at": view.get("finished_at") or pointer.get("finished_at"),
+        "followups": followups,
+    }
+    warnings: list[dict] = []
+    if view:
+        try:
+            brief = sup.brief_view(view, at)
+        except Exception as exc:  # an older or damaged snapshot must not take the tab down
+            brief = None
+            warnings.append({"kind": "service", "line": f"snapshot unreadable by the supervisor's brief view: {exc}"})
+        entry.update(
+            counts=view.get("counts"), total=view.get("total"), wave_eta=view.get("wave_eta"), wave_eta_basis=view.get("wave_eta_basis"),
+            brief=brief, lanes=view.get("lanes") or [], failed=view.get("failed") or [], excluded=view.get("excluded") or [],
+            questions=view.get("questions") or [], decisions=view.get("decisions") or [], agent=view.get("agent"),
+            agent_ticked_at=view.get("agent_ticked_at"), agent_last_result=view.get("agent_last_result"),
+            collect=view.get("collect") or {}, offload=view.get("offload") or {},
+        )
+        warnings += (brief or {}).get("warnings", [])
+    else:
+        entry.update(counts=None, total=None, wave_eta=None, wave_eta_basis=None, brief=None, lanes=[], failed=[], excluded=[],
+                     questions=[], decisions=[], agent=None, agent_ticked_at=None, agent_last_result=None, collect={}, offload={})
+    finished = bool(entry["finished_at"])
+    entry["status"] = "finished" if finished else "live" if view else "registered"
+    written = parse_iso(entry["written_at"])
+    entry["snapshot_age_s"] = int((at - written).total_seconds()) if written else None
+    if not finished and supervised:
+        since = written or parse_iso(entry["registered_at"])
+        silent = (at - since).total_seconds() if since else None
+        if silent is not None and silent > SERVICE_SILENT_S:
+            what = "no supervisor cycle" if written else "no first supervisor cycle"
+            warnings.insert(0, {"kind": "service", "silent_s": int(silent),
+                                "line": f"{what} for {humanize(silent)}: the sweep-supervisor service may be down; numbers are as of its last cycle"})
+    if finished:
+        # a certificate or a lane state is about supervising a live wave; once it is over it is history
+        warnings = [w for w in warnings if w.get("kind") not in ("cert", "lane")]
+    for item in followups:
+        if item["status"] == "failed" or (item["status"] == "done" and not item.get("report")):
+            warnings.append({"kind": "followup", "id": item["id"],
+                             "line": f"follow-up {item['kind']} {item.get('outcome') or item['status']} without a report" + (f"; log {item['log']}" if item.get("log") else "")})
+    entry["warnings"] = warnings
+    # what still needs a person: everything on a live wave; on a finished one, only open questions and follow-ups
+    entry["attention"] = len(warnings) if not finished else sum(w.get("kind") in ("question", "followup", "service") for w in warnings)
+    return entry
+
+
+def group_waves(waves: list[dict]) -> list[dict]:
+    projects: dict[str, dict] = {}
+    for wave in sorted(waves, key=lambda w: (w["project"], w.get("experiment") or "", w["wave_id"])):
+        project = projects.setdefault(wave["project"], {"project": wave["project"], "project_root": wave["project_root"], "experiments": {}})
+        experiment = project["experiments"].setdefault(wave.get("experiment") or "?", {"experiment": wave.get("experiment") or "?", "waves": []})
+        experiment["waves"].append(wave)
+    out = []
+    for project in projects.values():
+        experiments = list(project.pop("experiments").values())
+        for experiment in experiments:
+            experiment["waves"].sort(key=lambda w: w["wave_id"], reverse=True)
+            experiment["attention"] = sum(w["attention"] for w in experiment["waves"])
+        project["experiments"] = experiments
+        project["attention"] = sum(e["attention"] for e in experiments)
+        out.append(project)
+    return out
+
+
+def experiments(config: BoardConfig, hours: float = EXPERIMENTS_DEFAULT_HOURS) -> dict:
+    """Every wave the sweep-supervisor drives, plus the ones that finished within `hours`. Read-only.
+
+    Live waves come from the supervisor's pointers under `<root>/supervisor/`; finished ones from its
+    `finished/` pointers, from follow-up records, and from the state directories of every project
+    those name (waves finished before the supervisor kept finished pointers)."""
+    at = now()
+    cutoff = at - timedelta(hours=hours)
+    payload: dict = {
+        "api_version": EXPERIMENTS_API_VERSION, "generated_at": iso(at), "board_root": str(config.root), "window_hours": hours,
+        "live": [], "finished": [], "error": None,
+    }
+    try:
+        sup = supervisor_module()
+    except BoardError as exc:
+        payload["error"] = str(exc)
+        payload["summary"] = {"live_waves": 0, "finished_waves": 0, "attention": 0, "running_runs": 0, "next_eta": None}
+        return payload
+    directory = config.root / "supervisor"
+    pointers: dict[tuple[str, str], tuple[dict, bool]] = {}
+    for path in sorted(directory.glob("*.json")) if directory.is_dir() else []:
+        pointer = read_json_cached(path)
+        if pointer and pointer.get("project_root") and pointer.get("wave_id"):
+            pointers[(str(pointer["project_root"]), str(pointer["wave_id"]))] = (pointer, True)
+    finished_dir = directory / "finished"
+    for path in sorted(finished_dir.glob("*.json")) if finished_dir.is_dir() else []:
+        pointer = read_json_cached(path)
+        if pointer and pointer.get("project_root") and pointer.get("wave_id"):
+            pointers.setdefault((str(pointer["project_root"]), str(pointer["wave_id"])), (pointer, False))
+    followups: dict[tuple[str, str], list[dict]] = {}
+    recent_followup: set[tuple[str, str]] = set()
+    followup_dir = directory / "followups"
+    for path in sorted(followup_dir.glob("*.json")) if followup_dir.is_dir() else []:
+        record = read_json_cached(path)
+        if not record or not record.get("project_root") or not record.get("wave_id"):
+            continue
+        key = (str(record["project_root"]), str(record["wave_id"]))
+        followups.setdefault(key, []).append(followup_view(record))
+        touched = max((m for m in (parse_iso(record.get(k)) for k in ("created_at", "started_at", "ended_at")) if m), default=None)
+        if record.get("status") in ("pending", "running") or (touched and touched >= cutoff):
+            recent_followup.add(key)
+            pointers.setdefault(key, ({"project_root": key[0], "wave_id": key[1]}, False))
+    # waves that finished before finished pointers existed: scan the state directories of the projects we know
+    roots = {key[0] for key in pointers} | {str(lane.get("hub_project_root")) for lane in list_lanes(config) if lane.get("hub_project_root")}
+    for root in sorted(roots):
+        state = Path(root) / ".waves" / "_state"
+        try:
+            candidates = [p for p in state.glob("*/snapshot.json") if WAVE_RE.fullmatch(p.parent.name)]
+        except OSError:
+            continue
+        for path in candidates:
+            key = (root, path.parent.name)
+            if key in pointers:
+                continue
+            try:
+                if datetime.fromtimestamp(path.stat().st_mtime).astimezone() < cutoff:
+                    continue
+            except OSError:
+                continue
+            view = read_json_cached(path) or {}
+            if parse_iso(view.get("finished_at")):
+                pointers[key] = ({"project_root": root, "wave_id": path.parent.name}, False)
+    live: list[dict] = []
+    finished: list[dict] = []
+    for key, (pointer, supervised) in pointers.items():
+        items = sorted(followups.get(key, []), key=lambda f: f.get("created_at") or "")
+        try:
+            entry = wave_entry(sup, pointer, supervised, items, at)
+        except Exception as exc:
+            entry = {"key": f"{Path(key[0]).name}/{key[1]}", "project": Path(key[0]).name, "project_root": key[0], "experiment": pointer.get("experiment"),
+                     "wave_id": key[1], "supervised": supervised, "status": "live" if supervised else "finished", "brief": None, "lanes": [],
+                     "failed": [], "excluded": [], "questions": [], "decisions": [], "followups": items,
+                     "warnings": [{"kind": "service", "line": f"cannot read this wave's state: {exc}"}], "attention": 1}
+        if entry["status"] == "finished":
+            ended = parse_iso(entry.get("finished_at"))
+            if (ended is None or ended < cutoff) and key not in recent_followup and not entry["supervised"]:
+                continue
+            finished.append(entry)
+        else:
+            live.append(entry)
+    next_eta = None
+    for entry in live:
+        eta = ((entry.get("brief") or {}).get("eta") or {})
+        moment = parse_iso(eta.get("at")) if eta.get("kind") == "eta" else None
+        if moment and (next_eta is None or moment < parse_iso(next_eta["at"])):
+            next_eta = {"at": eta["at"], "project": entry["project"], "experiment": entry.get("experiment"), "wave_id": entry["wave_id"]}
+    payload["live"] = group_waves(live)
+    payload["finished"] = group_waves(finished)
+    payload["summary"] = {
+        "live_waves": len(live),
+        "finished_waves": len(finished),
+        "attention": sum(entry["attention"] for entry in [*live, *finished]),
+        "running_runs": sum(int((entry.get("counts") or {}).get("running") or 0) for entry in live),
+        "next_eta": next_eta,
+    }
+    return payload
+
+
 def snapshot(config: BoardConfig) -> dict:
     lanes = list_lanes(config)
     rigs = []
@@ -1756,6 +1987,15 @@ def make_handler(config: BoardConfig, state: dict | None = None):
                     "reconciling": bool(serve_state.get("reconciling")),
                 }
                 body = json.dumps(data).encode()
+                self._send(200, "application/json; charset=utf-8", body, set_cookie)
+            elif path == "/api/experiments":
+                query = parse_qs(url.query)
+                try:
+                    hours = float(query.get("hours", [EXPERIMENTS_DEFAULT_HOURS])[0])
+                except ValueError:
+                    self._send(400, "text/plain; charset=utf-8", b"hours must be a number\n")
+                    return
+                body = json.dumps(experiments(config, hours=min(max(hours, 0.0), 24 * 14))).encode()
                 self._send(200, "application/json; charset=utf-8", body, set_cookie)
             elif path == "/api/history":
                 query = parse_qs(url.query)

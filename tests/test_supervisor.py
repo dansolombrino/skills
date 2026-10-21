@@ -404,6 +404,41 @@ class SupervisorTests(unittest.TestCase):
         self.assertIn("  spare    0 jobs · 0 done · no jobs in flight", lines)
         self.assertTrue(any(line.startswith("  hub      1 GPU · 3 done · free ") and line.endswith("← last to finish") for line in lines))
 
+    def test_brief_view_is_the_printout_as_data(self) -> None:
+        at = supervisor.now()
+        free = supervisor.iso(at + supervisor.timedelta(hours=1))
+        snapshot = {
+            "counts": {"done": 2, "failed": 1}, "total": 4, "wave_eta": supervisor.iso(at + supervisor.timedelta(hours=2)), "wave_eta_basis": "feeder simulation",
+            "lanes": [{"kind": "lane", "rig": "hub", "gpu": "0", "state": "running", "run": "m1", "done": 2, "lane_free_at": free, "problem": None},
+                      {"kind": "lane", "rig": "peer", "gpu": "0", "state": "blocked", "run": None, "done": 0, "lane_free_at": None, "problem": "exit 87"}],
+            "failed": [{"run": "m3", "note": "exit 1"}], "questions": [{"id": "q1", "text": "more cards?", "meanwhile": "as is"}],
+            "rigs": {"hub": {"kind": "lanes", "done": 2}, "peer": {"kind": "lanes", "done": 0}},
+            "certs": {"cluster": {"expires_at": supervisor.iso(at + supervisor.timedelta(minutes=5))}},
+        }
+        view = supervisor.brief_view(snapshot, at)
+        self.assertEqual((view["eta"]["kind"], view["eta"]["basis"]), ("eta", "feeder simulation"))
+        self.assertEqual([(r["rig"], r["free_at"], r["last_to_finish"]) for r in view["rigs"]], [("hub", free, True), ("peer", None, False)])
+        self.assertEqual([w["kind"] for w in view["warnings"]], ["lane", "failed", "cert", "question"])
+        brief = supervisor.render_brief(snapshot)
+        for item in view["warnings"]:
+            self.assertIn(f"⚠ {item['line']}", brief, "the page and the chat print the same warnings")
+
+    def test_running_cluster_jobs_bound_the_wave_eta(self) -> None:
+        self.assertEqual(supervisor.with_cluster_jobs(0.0, "feeder simulation", {"c job 1": 3600.0}), (3600.0, "running cluster jobs' progress"))
+        self.assertEqual(supervisor.with_cluster_jobs(7200.0, "feeder simulation", {"c job 1": 3600.0}), (7200.0, "feeder simulation"))
+        self.assertEqual(supervisor.with_cluster_jobs(0.0, "feeder simulation", {"c job 1": None})[0], None)
+        self.assertEqual(supervisor.with_cluster_jobs(None, "lane ETA unavailable: x", {"c job 1": 10.0}), (None, "lane ETA unavailable: x"))
+
+    def test_a_finished_wave_leaves_a_pointer_for_the_board_viewer(self) -> None:
+        self.register()
+        self.assertEqual(self.cli("finish", "--wave", WAVE, "--abandon", "--confirm")[0], 0)
+        board_config = board.load_config(self.registry)
+        self.assertFalse(supervisor.index_path(board_config, "proj", WAVE).exists())
+        pointer = board.read_json(supervisor.finished_dir(board_config) / f"proj__{WAVE}.json")
+        self.assertEqual((pointer["project_root"], pointer["wave_id"], pointer["experiment"]), (str(self.hub.resolve()), WAVE, "000_exp"))
+        self.assertTrue(pointer["finished_at"])
+        self.assertEqual([w.wave_id for w in supervisor.active_waves(board_config)], [], "a finished pointer is never supervised")
+
     def test_wake_runs_the_declared_profile_once_and_records_it(self) -> None:
         self.register()
         wave = supervisor.Wave(self.hub, WAVE)
@@ -727,6 +762,7 @@ class SupervisorTests(unittest.TestCase):
         self.cli("cycle", "--wave", WAVE)
         snapshot = board.read_json(supervisor.Wave(self.hub, WAVE).snapshot_path)
         self.assertIsNotNone(snapshot["wave_eta"], snapshot["wave_eta_basis"])
+        self.assertTrue(snapshot["registered_at"], "the viewer shows how long ago the wave launched")
         events = [r["event"] for r in supervisor.Wave(self.hub, WAVE).ledger()]
         self.assertNotIn("claim-refused", [e for e in events if e in supervisor.URGENT_EVENTS], "waiting needs no agent")
 

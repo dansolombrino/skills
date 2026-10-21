@@ -126,6 +126,9 @@ A wave needs no chat from dispatch to its plotted results. What used to bring th
   running, so a release never leaves it on old code.
 - **Held GPUs.** A pool lane held by another wave or project waits (`waiting for board`) and starts
   when released; it never makes the wave ETA unavailable while another lane can run.
+- **Cluster jobs.** The wave ETA also waits for the last running cluster job, from that job's own
+  progress; a running job with no estimate makes it unavailable, and a pending job's start is the
+  scheduler's call, so it is not counted.
 
 ## Follow-ups
 

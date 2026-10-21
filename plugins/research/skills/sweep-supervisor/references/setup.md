@@ -115,8 +115,11 @@ user before the first wave; `sweep-dispatch` refuses to launch otherwise.
 | `…/agent-logs/` | one log per tick |
 | `<rig repo_path>/.waves/_state/<wave_id>/lanes/gpu<ids>/{queue,running,finished}` | a lane's buffer; `drain` ends the lane, `../offload` makes exit 88 wait |
 | `<board root>/supervisor/<project>__<wave_id>.json` | pointer that makes the service supervise the wave |
+| `<board root>/supervisor/finished/<project>__<wave_id>.json` | a finished wave, kept 14 days for the rig-board viewer; never supervised |
 | `<board root>/supervisor/followups/<id>.json` | one follow-up: kind, brief, state, log path, report |
 
 `.waves/` is already ignored by every supported project, and `_state` can never be a wave id, so
-no project needs a change. `finish --confirm` removes the pointer when a wave is terminal
-(`--abandon` only when the user gave it up); the state directory stays as the wave's record.
+no project needs a change. `finish --confirm` moves the pointer to `finished/` when a wave is terminal
+(`--abandon` only when the user gave it up); the state directory stays as the wave's record. The
+rig-board viewer's Experiments tab reads `snapshot.json` through this script's `brief_view`, the
+same data the brief printout renders, so the page and the chat never disagree.
