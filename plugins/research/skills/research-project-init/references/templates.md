@@ -1,15 +1,13 @@
 # Scaffold templates
 
-Substitute `{{PROJECT_NAME}}`, `{{PROJECT_DESCRIPTION}}` (optional; falls back to the project
-name), and `{{ENVIRONMENT_NAME}}`. Put a `.gitkeep` in each otherwise-empty taxonomy directory
-before the first commit; the `.gitignore` exceptions below keep them in ignored trees.
+Substitute `{{PROJECT_NAME}}` and `{{ENVIRONMENT_NAME}}`. Put a `.gitkeep` in each otherwise-empty
+taxonomy directory before the first commit; the `.gitignore` exceptions below keep them in ignored
+trees.
 
 ## README.md
 
 ```markdown
 # {{PROJECT_NAME}}
-
-{{PROJECT_DESCRIPTION}}
 
 ## Structure
 
@@ -66,10 +64,6 @@ commit and the wave's environment fingerprint before execution. `logs/` mirrors 
 
 <!-- Thin by design: generic research conventions come from the `research` skills, enabled by
      the `research` tag in `.project.toml`. Only project-specific facts live here. -->
-
-## What this project is
-
-{{PROJECT_DESCRIPTION}}
 
 ## Where things are
 

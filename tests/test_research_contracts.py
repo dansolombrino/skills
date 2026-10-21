@@ -70,7 +70,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "14.0.0")
+        self.assertEqual(manifest["version"], "14.1.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -805,6 +805,17 @@ class ResearchContractTests(unittest.TestCase):
             for name in ("check-paths", "provision-env", "prepare", "push-env", "doctor")
         ]
         self.assertEqual(positions, sorted(positions))
+
+    def test_project_init_asks_nothing_it_resolves(self) -> None:
+        """Rigs, an empty-repo re-init and the private GitHub repo are taken, not asked."""
+        skill_dir = ROOT / "plugins/research/skills/research-project-init"
+        skill = " ".join((skill_dir / "SKILL.md").read_text().split())
+        templates = (skill_dir / "references/templates.md").read_text()
+        self.assertIn("Never ask what this skill resolves", skill)
+        self.assertIn("every `board.rigs` machine in the user registry, never asked", skill)
+        self.assertIn("delete `.git` and `git init -b main`", skill)
+        self.assertIn("There is no project description", skill)
+        self.assertNotIn("PROJECT_DESCRIPTION", templates)
 
     def test_machine_env_var_list_matches_the_code_that_enforces_it(self) -> None:
         """The prose list and the enforced list drifted apart once already."""

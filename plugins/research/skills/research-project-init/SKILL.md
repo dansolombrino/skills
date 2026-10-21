@@ -12,23 +12,27 @@ not other projects on disk.
 
 ## Admission
 
-1. The path is new, an empty directory, or an empty Git repository. A path holding an existing
-   project, research content, or commits is unsupported here. The project tag written by
+Never ask what this skill resolves (defaults, rigs, re-init, GitHub repo): act, then report
+it. Stop only for a missing registry entry, a failed `gh auth status`, or existing content.
+
+1. The path is new, an empty directory, or an empty Git repository; one whose commits hold no
+   files counts as empty: delete `.git` and `git init -b main`. A path holding an existing
+   project, research content, or commits with files is unsupported. The project tag written by
    `project-init` does not count as content: `.project.toml`, `.claude/settings.json`, and
    `.codex/config.toml` are allowed when they hold only what `project-init` writes; leave them
-   untouched and include them in the first commit. Require `.project.toml` to list `research`;
-   otherwise hand off to `project-init` to tag the project first.
+   untouched and include them in the first commit. Require `.project.toml` to list `research`; otherwise hand off to
+   `project-init` to tag the project first.
 2. Defaults, each overridden by anything the user states: project name = directory name; branch
    `main`; Python = the newest stable patch `uv python list` offers for the newest minor torch
    supports; uv = the installed `uv --version`; hub development environment `.venv`; torch as the
-   only dependency; evaluations and plots not committed; the description falls back to the
-   project name.
-3. Rigs: the ones the user names, else every `board.rigs` machine in the user registry;
-   `leonardo` only when named. Each needs a complete entry in `~/.config/rigsync/machines.toml`
-   (`rig-sync` → `references/configuration.md`): `ssh`, `hostname`, storage roots (`storage_roots`
-   or `storage_root`), `quota_fs`/`min_free_gb` on a quota'd rig, and `[machines.<rig>.caches]`
-   where the rig owns shared caches. A missing entry or field is a once-per-machine setup step to
-   do with the user, never something to infer.
+   only dependency; evaluations and plots not committed. There is no project description.
+3. Rigs: the ones the user names, else every `board.rigs` machine in the user registry, never
+   asked; `leonardo` only when named. A rig's `repo_path` mirrors the hub's under its storage
+   root, like the user's other projects. Each needs a complete entry in
+   `~/.config/rigsync/machines.toml` (`rig-sync` → `references/configuration.md`): `ssh`,
+   `hostname`, storage roots (`storage_roots` or `storage_root`), `quota_fs`/`min_free_gb` on a
+   quota'd rig, and `[machines.<rig>.caches]` where the rig owns shared caches. A missing entry
+   or field is a once-per-machine setup step to do with the user, never something to infer.
 
 ## GitHub repository
 
