@@ -1,9 +1,9 @@
 # CINECA Leonardo — Slurm dispatch target
 
 Read this file only when a wave assigns runs to `leonardo`. Everything that is not Slurm-specific
-(gates, wave ids, script layout, three-signal monitoring, tracking rows, chat updates every N
-minutes — every minute by default, as `sweep-supervisor` says) is
-unchanged and lives in `../SKILL.md`. This file states only what differs on a batch scheduler.
+(gates, wave ids, script layout, three-signal monitoring, tracking rows, status reporting) is
+unchanged and lives in `../SKILL.md` and `sweep-supervisor`. This file states only what differs
+on a batch scheduler.
 
 Every CINECA fact below carries its source. Where the docs are silent the text says
 "not documented"; do not fill such gaps from memory. Re-fetch the cited page when a value looks
@@ -173,7 +173,7 @@ the bare shebang; inside a job the script leaves `CUDA_VISIBLE_DEVICES` to Slurm
 ```bash
 #!/usr/bin/env bash
 #SBATCH --job-name=<wave_id>__<run_id_name>
-#SBATCH --account=<the account declared in the execution agreement's envelope>
+#SBATCH --account=<the project account, as in leonardo's repo_path /leonardo_work/<account>/...>
 #SBATCH --partition=boost_usr_prod
 #SBATCH --qos=normal
 #SBATCH --nodes=1
@@ -207,8 +207,8 @@ export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
 - `--time` in the header is only the fallback. The supervisor passes the real value on the
   `sbatch` command line, which overrides the header: the `experiments-tracking` ETA hierarchy with
   a 50% margin — **measured in this wave as soon as any run has finished**, the prior before that
-  — rounded up to 15 minutes. With no basis at all it uses the `default_walltime_s` logged at
-  gate 3; never submit with a guessed
+  — rounded up to 15 minutes. With no basis at all it uses the manifest's `default_walltime_s`;
+  never submit with a guessed
   24 h "to be safe", because walltime shapes priority and the per-GPU budget estimate. A per-step
   cost that differs by dataset (a tiny dataset that validates every few steps) is exactly what a
   flat guess gets wrong. A run whose
@@ -245,9 +245,8 @@ ssh -o BatchMode=yes -o ConnectTimeout=20 leonardo "cd <repo_path on leonardo> &
   `research-project-init`. The EXPERIMENTS.md row for the run carries `rig=leonardo`, `gpu=1`, and
   the job id in `notes`.
 - Before the first submission of a wave, run `saldo -b` and refuse any account whose consumed
-  hours are at or above its total or whose end date has passed; log the remaining hours and the
-  wave's estimate at gate 3, and never ask about them. An account the envelope does not
-  declare asks first.
+  hours are at or above its total or whose end date has passed; note the remaining hours beside
+  the wave's estimate. Core-hours are not a gate unless the user set a cap.
 - The supervisor keeps up to the pool's job cap submitted and tops it up as jobs end. Only when
   the user set a core-hour cap does it stop at that cap and raise a `budget-cap` event, which the
   agent reports. A job still `PENDING` costs nothing, so
@@ -305,8 +304,7 @@ value sized from measurement: after a `TIMEOUT` the supervisor resubmits with th
 the old walltime and `measured seconds per step × total steps × 1.5`, capped at 24 h. A run that
 restarts from scratch and cannot fit 24 h goes to the user.
 
-Autonomous, not silent: resubmitting an interrupted job needs no permission, but the ledger, the
-table, and the agent's decisions say which jobs were resubmitted, why, with what walltime, and
+The ledger and the status table say which jobs were resubmitted, why, with what walltime, and
 whether each resumes or restarts.
 
 ## Fetch results and sync wandb
@@ -327,8 +325,7 @@ whether each resumes or restarts.
 ## Smoke job (once per hub setup, and after any change to this header)
 
 Validates access, account, partition, resource line, and the GPU from inside an allocation. It
-spends about 0.3 core-hours. Submit it without asking on the account the envelope declares; an
-undeclared account asks first:
+spends about 0.3 core-hours, on the project account:
 
 ```bash
 ssh -o BatchMode=yes -o ConnectTimeout=20 leonardo 'cat > $WORK/smoke_leonardo.sh <<"EOS"

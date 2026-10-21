@@ -1,59 +1,27 @@
 ---
 name: experiments-tracking
-description: Keep a Research 2.0 EXPERIMENTS.md true and derive active-run, lane, and wave ETAs from provenance-valid schema-v2 status plus artifacts, and prune finished wave worktrees. Use when runs are generated, launched, checked, reported, or discussed, when the user asks about experiment status or ETA, or at session start to reconcile factual run state; do not interpret or migrate legacy tracking layouts.
+description: Keep a Research 2.0 EXPERIMENTS.md true, derive active-run, lane, and wave ETAs from provenance-valid status plus artifacts, and prune finished wave worktrees. Use when runs are generated, launched, checked, reported, or discussed, when the user asks about experiment status or ETA, or at session start to reconcile factual run state; do not interpret or migrate legacy tracking layouts.
 ---
 
 # experiments-tracking
 
-EXPERIMENTS.md is the project's **state** (the story lives in JOURNAL.md). Canon: `../research-project-init/references/conventions.md`.
+EXPERIMENTS.md is the project's **state** (the story lives in JOURNAL.md). It is derived from the
+three on-disk signals in `../research-project-init/references/conventions.md` § Status ground
+truth; when they disagree with the file, the file is wrong.
 
-Require the Research 2.0 scaffold and schema-v2 status contract (schema v3 is the same plus `rig`). If either is absent, stop as
-unsupported; do not offer migration or interpret legacy state. Factual reconciliation is automatic
-and does not require a narrative or scientific decision.
-
-## Hard rules
-
-- **Single-writer: EXPERIMENTS.md is only ever edited on rig-4090.** On any other rig, report statuses verbally but never edit the file. While a wave is supervised, only that wave's `sweep-supervisor` agent writes its rows — a chat watching the wave never does; it pastes the supervisor's table.
-- Ground truth is NOT the md — it is the three on-disk signals (hierarchy in `conventions.md`): the per-run status first proves the current wave's Git revision/tag and environment fingerprint; after that, the **expected final artifact** is golden for completion — or, on a rig with offload, the `<artifact>.offloaded.json` receipt `rig-sync` left in its place, which names the checksum-verified hub copy — followed by `.status.json` state/timing/progress and the latest run log. A missing `.status.json`/dir means the run never started (or its outputs were deleted ⇒ it is no longer done).
-- **One (run, wave) = one table row = one line.** A run re-launched in a later wave gets a **new row**, never an in-place update — the table itself carries the execution history. One line per row keeps parallel-session git merges clean. Rows are never rewritten, with one exception: a run_id migration (`run-identity`, logged with a rollback manifest). Its `apply` only replaces each old hash with its new one in the `run_id` cells; the rest is the migration's follow-up, done by the agent through this skill from the `followups.json` that `apply` writes beside its rollback manifest: set the section preamble's `run_id version:` and params line, add the new params' columns, and fill each row's new param values and its new `label` cell.
-- A row's run identity is semantic: the identity params' values (the current
-  `config/<experiment_path>/RUN_ID_VERSIONS.json` entry under `hashed-v2`, the ordered `RUN_ID_PARAMS` under a legacy
-  `segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1` pin). Read the
-  experiment's recorded selection and consume the exact checkpoint, evaluation, status, and
-  final-artifact paths materialized in the generated wave record. Never derive identity from path
-  segment count, reconstruct an artifact path from a label or flat id, or treat the layouts as
-  different runs. Under `hashed-v2`, the row's `run_id` cell is the hash `run_id_name` returns
-  (`rid-<32 hex>`), identical to the run's `scripts/`, `logs/`, `checkpoints/`, and `evaluations/`
-  folders and its WandB hash tag, and its `label` cell is `run_id_label` (the WandB display name;
-  the one form is `wandb.init(name=run_id_label(...), tags=[run_id_name(...)], config=wandb_config(cfg))`).
-  Under a legacy segments pin the `run_id` cell is the rendered `run_id_name`; under the other
-  legacy pins, scripts, logs, and wandb remain keyed by the unchanged flat rendering. Resolve every
-  hash (a `hashed-v2` run hash, a `segments-v2` group hash, or a `hashed-v1` `rid-`) through the
-  run's `.run_id.json`, the experiment's `evaluations/<experiment_path>/RUN_ID_MAP.json`, or
-  `run-identity` lookup (which follows `RUN_ID_HISTORY.json` for a pre-migration hash); never
-  recompute or guess it. The map is rebuilt once per wave, so for a run of a wave still in flight
-  read its `.run_id.json`.
-- **Every status report to the user opens with its message-written time** — obtain a local
-  timestamp immediately before sending, in the legible form `YYYY-MM-DD at HH:MM`
-  (`date '+%Y-%m-%d at %H:%M'`), and lead exactly with
-  `Status written <timestamp> —`, for example `Status written 2026-09-21 at 09:10 —`. Never show
-  the user a raw ISO string there. Never substitute the status heartbeat/observation time; report
-  heartbeat age separately.
+- Edit it only on the hub (`rig-4090`). While a wave is supervised, its `sweep-supervisor` agent
+  writes that wave's rows.
+- One row per (run, wave), one line each: a run relaunched in a later wave gets a new row. Rows
+  are not rewritten; the exception is a run_id migration (`run-identity`), whose `apply` replaces
+  hashes and whose `followups.json` drives the follow-up here: the preamble's `run_id version:`
+  and params line, the new param columns, and each row's new values and `label`.
+- A row's identity is its params' values; the `run_id` cell is `run_id_name` (`rid-<32 hex>`) and
+  `label` is `run_id_label`. Resolve a hash through the run's `.run_id.json`, `RUN_ID_MAP.json`, or
+  `run-identity`, never by hand. Use the exact paths recorded in the wave's README and scripts.
+- A status answer opens with `Status written <YYYY-MM-DD at HH:MM> —` (local time taken right
+  before sending, e.g. `Status written 2026-09-21 at 09:10 —`).
 
 ## Format
-
-One section per `NNN_experiment`; its preamble restates the authoritative source decisions: the
-literal `RUN_ID_PATH_LAYOUT` and the identity params. The table has **one column per identity
-param** (dict form — never a single flat-string column replacing them), then placement, status,
-and timing. Under `hashed-v2` the preamble names the current identity version and its params
-(mirroring the tracked `config/<experiment_path>/RUN_ID_VERSIONS.json`) and
-`run_id map: evaluations/<experiment_path>/RUN_ID_MAP.json`, and the table adds a `run_id` column
-(the hash) and a `label` column (`run_id_label`) right after the param columns, so params, hash,
-and readable label sit side by side. Under a legacy pin the preamble restates the ordered
-`RUN_ID_PARAMS`; `segments-v2`/`segments-v1` add the recorded `RUN_ID_SEGMENTS` and the map line,
-and the table adds a `run_id` column (the rendered name) and one column per hash group; legacy
-`hashed-v1` adds the map line and a `hash` column after the param columns. The layout line is
-durable experiment metadata, not a run-row identity field:
 
 ```markdown
 ## 000_grokking
@@ -63,136 +31,68 @@ run_id map: evaluations/000_grokking/RUN_ID_MAP.json
 smoke command: <environment.name>/bin/python code/000_grokking/train.py smoke=true steps=1 seed=smoke
 smoke pass: exit 0 and evaluations/000_grokking/smoke/result.json says one step completed
 
-| model | lr   | wd   | seed | run_id                               | label                          | wave            | rig         | gpu | status | started     | progress   | eta         | ended       | elapsed | notes |
-|-------|------|------|------|--------------------------------------|--------------------------------|-----------------|-------------|-----|--------|-------------|------------|-------------|-------------|---------|-------|
+| model | lr   | wd   | seed | run_id                               | label                              | wave            | rig         | gpu | status | started     | progress   | eta         | ended       | elapsed | notes |
+|-------|------|------|------|--------------------------------------|------------------------------------|-----------------|-------------|-----|--------|-------------|------------|-------------|-------------|---------|-------|
 | mlp   | 1e-3 | 0.01 | 0    | rid-4c5ffc9409ae4575b2e0d1c3a7f69e18 | model=mlp,lr=1e-3,wd=0.01,seed=0   | 20260731-162043 | rig-4090    | 0   | failed | 07-31 16:20 | epoch 3/10 |             | 07-31 16:58 | 38m     | OOM   |
 | mlp   | 1e-3 | 0.01 | 0    | rid-4c5ffc9409ae4575b2e0d1c3a7f69e18 | model=mlp,lr=1e-3,wd=0.01,seed=0   | 20260805-081200 | behemoth    | 0   | inpr   | 08-05 08:12 | epoch 7/10 | 08-05 09:40 |             |         |       |
 | tr-xl | 1e-4 | 0.01 | 0    | rid-6961a90e5ffca50c93d7e2b14a08c5f6 | model=tr-xl,lr=1e-4,wd=0.01,seed=0 | 20260803-141000 | rig-3090-ti | 0   | done   | 08-03 14:10 | 10/10      |             | 08-03 18:02 | 3h52m   |       |
 ```
 
-- `wave` — the dispatch this execution belonged to (`YYYYMMDD-HHMMSS`, canon), whose annotated
-  Git tag is `wave--<wave>`. `rig` and `gpu` — the lane that **claimed** the run, opaque identity.
-  They are blank on a `todo` row, because a run belongs to no lane until one takes it from the
-  wave's queue; fill them from the supervisor ledger's `run-assigned` event (and `.status.json`
-  once the run starts). A run the supervisor moved keeps one row: the row names the lane that
-  finally ran it, and `notes` says it was moved. A run executed
-as a Slurm job on `leonardo` has `rig=leonardo`, `gpu=1` (the count requested, since the card index
-is Slurm's), and its job id(s) in `notes`.
-- Statuses: `todo` → `inpr` → `done` | `failed`, plus terminal `superseded` for a placement the
-  user replaced with a later wave (`sweep-dispatch` § Supersede); its `notes` name that wave. `started`/`ended` use `MM-DD HH:MM` (year only if
-  ambiguous), and `elapsed` is compact (`45m`, `1h45m`, `2d3h`) from `elapsed_s`. **Elapsed values
-  are the project's reference runtimes** — use them to estimate wall-clock and split temporal
-  budgets when planning future waves.
-- `progress` — render schema-v2 `progress_unit progress_completed/progress_total`.
-- `eta` — the **only computed column**. Recompute it on **every** reconciliation pass, and leave
-  it blank for `todo`/`done`/`failed`/`superseded` rows and whenever there is no sound basis. Never write ETA
-  into `.status.json` or present it as measured fact — say `estimated` and state the basis when
-  reporting it.
+The preamble also carries the design-time records (`min_vram_mib`, `data needs`, final artifact,
+per-run footprint). One column per identity param, then `run_id` and `label`.
 
-## ETA calculation and wave roll-up
+- `wave` — the dispatch (`YYYYMMDD-HHMMSS`, tag `wave--<wave>`). `rig` and `gpu` — the lane that
+  claimed the run, blank while `todo`, filled from the supervisor ledger's `run-assigned` event. A
+  moved run keeps its row and says so in `notes`. A `leonardo` job is `rig=leonardo`, `gpu=1`,
+  job id(s) in `notes`.
+- Statuses: `todo` → `inpr` → `done` | `failed`, plus terminal `superseded` (notes name the
+  replacing wave).
+- `started`/`ended` as `MM-DD HH:MM`; `elapsed` compact (`45m`, `1h45m`, `2d3h`) from `elapsed_s`.
+  Elapsed values are the project's reference runtimes.
+- `progress` — `progress_unit progress_completed/progress_total`.
+- `eta` — the only computed column: recomputed on every pass for `inpr` rows, blank otherwise or
+  when there is no basis. Report it as an estimate with its basis.
 
-Use this deterministic hierarchy:
+## ETA
 
-1. For an active schema-v2 run with `0 < progress_completed < progress_total`, calculate
-   `remaining_s = elapsed_s * (progress_total - progress_completed) / progress_completed`.
-   Its estimated completion is the observation time plus `remaining_s`; label the basis
-   `structured progress`.
-2. At zero/missing structured progress, prefer what **this wave** has measured: the median
-   `elapsed_s / cost` of its own `done` runs on that rig, basis `measured this wave`. It replaces
-   the fixed weights as soon as one run has finished there, which is what lets a wrong prior stop
-   mattering. Before that, estimate from `done` rows in **rig-independent cost
-   units**: `cost = elapsed_s × weight(rig)`, using the fixed per-GPU speed weights in
-   `../research-project-init/references/conventions.md` § Rig fleet, and predict on the target rig
-   as `elapsed_pred = median(cost) / weight(target rig)`. Prefer prior `done` rows with the same
-   run_id **on the same rig** — those need no normalization, basis `exact-run history`; then the
-   same run_id on other rigs, basis `exact-run history (weight-normalized)`; then all
-   provenance-valid `done` rows in the same experiment, basis `experiment median
-   (weight-normalized)`. For an active run subtract its current elapsed and floor at zero. Never
-   pool elapsed values across rigs unnormalized: a behemoth runtime applied to a queued
-   `rig-3090-ti` run understates it fourfold. The weights are fixed nominal throughput priors, not
-   measurements, so a normalized basis is always weaker than a same-rig one — report which it is.
-3. A schema-v2 heartbeat older than three minutes, invalid numeric bounds, integrity mismatch,
-   or unreachable rig makes the active ETA unavailable until resolved. State the reason.
+1. Active run with `0 < progress_completed < progress_total`:
+   `remaining_s = elapsed_s * (progress_total - progress_completed) / progress_completed`
+   (basis `structured progress`).
+2. Otherwise, in order: the median runtime of this wave's own `done` runs on that rig (`measured
+   this wave`); the same run_id on the same rig (`exact-run history`); the same run_id on other
+   rigs, then the experiment median, both in rig-independent cost `cost = elapsed_s ×
+   weight(rig)` predicted as `median(cost) / weight(target rig)` (`… (weight-normalized)`). Never
+   pool runtimes across rigs unnormalized.
+3. A heartbeat older than three minutes, invalid bounds, an integrity mismatch, or an unreachable
+   rig makes the ETA unavailable; say why.
 
-For a lane, add its active run's remaining estimate to the estimated full runtimes of the runs
-already in its buffer, predicting every term for **that lane's own rig** with the
-hierarchy above; that is when the lane falls free. Runs still in the wave's queue belong to no
-lane: the wave ETA simulates the feeder over them (each to the eligible lane predicted free
-first). `sweep-supervisor` computes exactly this for its table; use its numbers rather than a
-second calculation.
-If any required term lacks a basis, report that lane ETA as unavailable. The wave ETA is the
-latest available lane completion only when every nonterminal lane is estimable; otherwise report
-the wave ETA as unavailable and name the blocking lane(s). Do not put queued-run estimates into
-their `eta` table cells: lane/wave roll-ups belong in chat reports, while the table's `eta` stays
-an active-run field.
+For a lane, add its active run's remaining estimate to the runtimes of the runs already in its
+buffer. The wave ETA is the latest available lane completion only when every nonterminal lane is
+estimable; otherwise it is unavailable, naming the blocking lanes. `sweep-supervisor` computes
+exactly this for its table; use its numbers for supervised waves.
 
-Under `hashed-v2`, the identity evolves after the first checkpoint, evaluation, or plot output or
-wave README/script only through a run_id migration (`run-identity`, logged with a rollback manifest), which
-is also the only thing that may rewrite historical rows: its `apply` replaces old hashes with new
-ones, and its follow-up — done by the agent through this skill from `followups.json` — updates the
-section preamble (`run_id version:` and the params line), adds the new param columns, and fills
-the new param values and label cells. Under a legacy pin, `RUN_ID_PARAMS` may change
-only while no such surface exists; after the first one, any identity-schema or `RUN_ID_SEGMENTS`
-change under `segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1` requires a new
-numbered sub-experiment; never backfill, rename, move, or rewrite the established tree. The
-recorded `RUN_ID_PATH_LAYOUT` is immutable after the same boundary, and exact wave paths remain
-authoritative. A layout mismatch or mixed checkpoint/evaluation tree blocks reconciliation; never
-move, rename, or rewrite old artifacts or wave records outside a run_id migration. A new legacy
-sub-experiment gets a fresh EXPERIMENTS section with no edits to historical rows.
+Questions about the fleet ("are the GPUs free", another project's runs) go to `rig-board`
+(`status --reconcile`); the board never changes a row here.
 
-## Fleet questions go to the board
+## Reconciliation
 
-EXPERIMENTS.md sees one project. "Are the GPUs free", "what is running on the 3090", "wait for
-the rigs", or any question about another project's runs is answered from `rig-board`
-(`status --reconcile`), which lists every held lane across projects with holder, wave, active
-run, progress, ETA and basis, plus foreign cards and unreachable rigs. Report it with the same
-`Status written <timestamp> —` opener and the probe age. Waiting uses the host's recurring
-wait primitive with a board check per tick, never shell `sleep`. The board never changes a row
-here: a lane on the board is not evidence that a run is done, failed, or even started.
+On the hub, whenever the project is touched and always when asked about status:
 
-## Who writes what (same turn as the action)
+1. Match each status to its row by (run identity, `wave_id`), reading the status path from that
+   wave's record; `superseded` rows are skipped.
+2. Require the status's `source_tag`/`source_revision` to match `wave--<wave_id>` and its
+   `environment_fingerprint` to match the wave's README. A mismatch is an integrity error: flag it
+   and leave the row.
+3. Then: status `done`/`failed` with the recorded artifacts agreeing ⇒ flip and fill
+   `ended`/`elapsed`. Status `done` with the final artifact (or its `.offloaded.json` receipt)
+   missing ⇒ flag it, do not mark done. Frozen `running` from a machine fault (boot time after the
+   heartbeat, or the lane's tmux session gone) ⇒ interrupted, not failed: keep `inpr` if a
+   relaunch is re-executing it, else back to `todo` with a note. Evaluation directory gone ⇒ back
+   to `todo`. Report code failures and interruptions as different things.
+4. A wave launched before wave isolation (no `.waves/<wave_id>`) is reconciled but flagged as not
+   recoverable.
 
-- Wave generation ⇒ append `todo` rows (one per generated run), pre-filled with `wave`; `rig` and `gpu` stay blank.
-- A lane claims the run ⇒ fill `rig` and `gpu`, flip the row to `inpr`, fill `started` (from `.status.json` once the run actually starts).
-- Observing progress ⇒ refresh `progress` and recompute `eta`; the supervisor agent does this at
-  every tick as well as on urgent transitions.
-- Observing completion ⇒ flip to `done`/`failed` per the signals, fill `ended` + `elapsed`, clear `eta`.
-- A user-authorized supersede ⇒ flip the replaced rows to `superseded`, clear `eta`, and name the new
-  wave in `notes`.
-
-## Reconciliation (mandatory)
-
-Whenever a session on rig-4090 touches the project — and always when asked about statuses — sweep
-the signals and fix any stale rows. Match a status to its row by **(semantic run identity,
-`wave_id`)**, reading the exact status path from that wave's generated record; a run with several
-rows only ever has one live one (its latest wave); `sweep-dispatch` refuses to create a second
-live row, and `superseded` rows are terminal and skipped here, even when the status file at their
-path now belongs to the superseding wave. Missing `wave_id` or schema-v2 provenance makes
-the project unsupported. Resolve `wave--<wave_id>` and require the status's `source_tag` and
-`source_revision` to match it, then require `environment_fingerprint` to match the value in that
-wave's README/scripts. A missing or mismatched source/environment value is an integrity error: flag
-it prominently and do not reconcile that row automatically or accept its artifact for comparisons.
-Then: `inpr` whose status says `done`/`failed` **and** whose exact recorded artifacts agree ⇒ flip
-and fill `ended`/`elapsed`; `done` in status but the exact recorded final artifact is missing ⇒
-artifacts win, flag it to the user instead of marking done; `inpr` whose status is stuck at
-`running` with a frozen heartbeat **because of a machine fault** — the rig's boot time (`uptime -s`)
-postdates the heartbeat, or the lane's tmux session is gone — ⇒ the run is **interrupted**, not
-failed-by-code: keep `inpr` if a relaunched lane is (or is about to be) re-executing it, otherwise
-flip back to `todo` with a note; when reporting, always distinguish "failed (code error)" from
-"interrupted (machine fault — safe to relaunch, wave scripts are self-guarded)"; rows whose exact
-recorded evaluation directory vanished ⇒ back to `todo` (outputs were deleted, timing cleared). Any
-path disagreement or mixed tree blocks instead of substituting different paths. Recompute `eta` for
-every `inpr` row while you are here. Reconciliation is deterministic: md always converges to the
-recorded signals without inferring slash depth.
-
-A wave launched before the wave-isolation contract (conventions; it has no `.waves/<wave_id>`
-worktree) is reconciled the same way, but flag it as "legacy wave, not recoverable": recovery
-refuses it.
-
-Then **prune** — never skip it. Run
-`rig-sync activity --machines <the project's machines>` and compare with the rows: every wave
-whose rows are all terminal (`done`/`failed`/`superseded`) but whose worktree still exists, plus
-any keyed environment no worktree uses, is a candidate. If there is any, run
-`rig-sync prune --machines <...> --waves <candidates> --dry-run`, then the same command with
-`--confirm`, and log what was removed. A wave with failed runs is a fine candidate too: recovery
-recreates the worktree from its tag.
+Then prune: compare `rig-sync activity --machines <project machines>` with the rows; every wave
+whose rows are all terminal but whose worktree remains, plus unused keyed environments, goes
+through `rig-sync prune --machines <...> --waves <ids> --dry-run`, then `--confirm`. A wave with
+failed runs may be pruned: recovery recreates its worktree from the tag.

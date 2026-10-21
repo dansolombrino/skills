@@ -1,6 +1,6 @@
 ---
 name: run-identity
-description: Own the hashed-v2 run_id identity of a Research 2.0 experiment - elect its identity params, look up a run hash or prefix (old hashes resolve through RUN_ID_HISTORY.json) or find the runs matching param values, and migrate an experiment to the next run_id version when a sweep adds or drops an identity axis, renaming every old hash on the hub and every rig with a rollback manifest. Use when the user pastes or asks about a rid- hash, asks which run has given params, when a new experiment needs its run_id params elected, or when check_run_id_plan or guard_run_config refuses a wave and says to propose the next run_id version. Do not use for legacy-pinned layouts (segments-v2/v1, nested, collapsed-v1, hashed-v1), which never migrate.
+description: Own the hashed-v2 run_id identity of a Research 2.0 experiment - elect its identity params, look up a run hash or prefix (old hashes resolve through RUN_ID_HISTORY.json) or find the runs matching param values, and migrate an experiment to the next run_id version when a sweep adds or drops an identity axis, renaming every old hash on the hub and every rig with a rollback manifest. Use when the user pastes or asks about a rid- hash, asks which run has given params, when a new experiment needs its run_id params elected, or when check_run_id_plan or guard_run_config refuses a wave and says to propose the next run_id version. Experiments pinned to an older layout never migrate; references/legacy-layouts.md covers them.
 ---
 
 # run-identity
@@ -12,8 +12,9 @@ current params are the last entry of `config/<exp>/RUN_ID_VERSIONS.json`, and ev
 recorded in `config/<exp>/RUN_ID_HISTORY.json`, so an old hash in git history, a tag, a plot or a
 chat always resolves. Experiment code reads them through `source_path("config/<exp>")`, so each
 wave worktree pins the version it was deployed with and no rig keeps its own copy.
-`evaluations/<exp>/RUN_ID_MAP.json` is derived, on every machine, and embeds copies of both files. Canon: `../research-project-init/references/conventions.md`. Plan and manifest shapes:
-[references/migration.md](references/migration.md).
+`evaluations/<exp>/RUN_ID_MAP.json` is derived, on every machine, and embeds copies of both files.
+Plan and manifest shapes: [references/migration.md](references/migration.md). An experiment pinned
+to an older layout: [references/legacy-layouts.md](references/legacy-layouts.md).
 
 **Resolving this skill's own files.** `scripts/runid.py` means *this skill's installed directory*,
 not the research project. It loads `rig-sync` and `rig-board` by sibling path and pipes its
@@ -44,8 +45,8 @@ hashed-v2 experiment, an unreadable file).
 
 ## Electing the params (new experiments)
 
-Decided by the agent, with no prompt: **every param the grid varies, plus every behavior-affecting
-param whose value differs from the config default.** Elect **top-level config keys only**; to
+**Every param the grid varies, plus every behavior-affecting param whose value differs from the
+config default.** Elect **top-level config keys only**; to
 identify a nested value, elect its top-level subtree key (`optim`, never `optim.lr`) — `migrate
 plan` and the template's `load_run_id_spec` refuse a dotted param. Write version 1 to
 `config/<exp>/RUN_ID_VERSIONS.json` with the reasoning in its `reason`, commit it with the
@@ -68,10 +69,9 @@ Trigger: a sweep must vary a param that is not in the identity, or `check_run_id
    (`git show wave--<wave_id>:<file>`) and record the value it ran with, sourced as
    `file:line@sha`; a param that did not exist yet is `null` with source `"absent"`. Ask the user
    only when the code cannot settle it. Rerun the plan with `--backfill-file`.
-3. **Log the plan summary** (counts per machine, the old → new map, every backfill with its
-   source, plots to re-render, WandB renames) to `program/DECISIONS.md` and carry on: a migration
-   is agent-decided (conventions, "Autonomy"), because `apply` writes a rollback manifest first and
-   `migrate rollback` undoes it.
+3. **Review the plan summary** it prints: counts per machine, the old → new map, every backfill
+   with its source, plots to re-render, WandB renames. `apply` writes a rollback manifest first
+   and `migrate rollback` undoes it.
 4. **Apply** with `--confirm`. It re-verifies the preconditions and that nothing changed since the
    plan, writes the rollback manifest and per-machine backups first, renames run dirs and rewrites
    every file naming an old hash on the hub and each rig, appends the version and history entries

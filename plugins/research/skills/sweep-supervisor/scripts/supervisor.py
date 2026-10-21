@@ -60,7 +60,7 @@ SCHEMA_VERSION = 1
 STATE_DIR = "_state"  # under .waves/, already ignored by every supported project; never a wave id
 BUFFER_DEPTH = 2  # the run in flight plus one waiting: shallow, so late data can still re-route
 DEFAULT_CYCLE_EVERY_S = 60
-DEFAULT_TICK_EVERY_S = 120
+DEFAULT_TICK_EVERY_S = 1800  # a safety net: every event that needs judgment wakes the agent at once
 DEFAULT_AGENT_TIMEOUT_S = 900
 DEFAULT_FOLLOWUP_TIMEOUT_S = 3 * 3600
 MAX_FIX_DEPTH = 2  # automatic fix-and-redispatch rounds in one chain before a person looks
@@ -69,6 +69,9 @@ FOLLOWUP_KINDS = ("analyze", "fix")
 MIN_CYCLE_EVERY_S = 10
 DOWN_AFTER_FAILURES = 3
 HEARTBEAT_STALE_S = 180
+SERVICE_SILENT_S = 10 * 60  # the service cycles every wave each minute; this long without a snapshot means it is down
+WATCH_POLL_S = 20
+WATCH_TIMEOUT_S = 6 * 3600
 BOARD_REFRESH_EVERY_S = 600
 RESERVED_EXITS = {86: "source drift", 87: "environment drift", 88: "insufficient storage"}
 LANE_STOPPING = {86, 87}
@@ -98,6 +101,8 @@ URGENT_EVENTS = frozenset(
         "offload-failed",
         "collect-failed",
         "submit-failed",
+        "heartbeat-stale",
+        "lane-idle-tail",
     }
 )
 # What reaches the user's phone (`notify_command`) without any chat open. `ask` always does too.
@@ -597,8 +602,8 @@ def register(wave: Wave, manifest_path: Path, config, board_config, settings: Se
         {"project_root": str(wave.project_root), "wave_id": wave.wave_id, "registered_at": queue["registered_at"]},
     )
     print(
-        f"NEXT: start the chat printout now, without asking -- `table --wave {wave.wave_id} --cycle --full`, "
-        "then the scheduled wake-up at the chat update interval (sweep-supervisor, In a chat)"
+        f"NEXT: in a chat, run `watch --wave {wave.wave_id}` as a background command and post what it prints each "
+        f"time it returns (sweep-supervisor, In a chat); status any time with `table --wave {wave.wave_id}`"
     )
     return 0
 
@@ -1287,6 +1292,36 @@ class Cycle:
                 record["expiring_sent"] = True
                 self.event("cert-expiring", rig=rig, expires_at=record["expires_at"], cert=str(path))
 
+    # -- episodes that need judgment --------------------------------------
+
+    def mark_episodes(self, queue: dict, snapshot: dict, runtime: dict, vram: dict) -> None:
+        """Wake the agent the cycle a lane needs judgment, not at the next scheduled tick: a run whose
+        heartbeat went stale (a hang or a dead process), and a lane left idle with nothing it can
+        take while another lane still holds in-flight or buffered runs (tail stealing). One event per
+        episode, kept in runtime.json: a state that persists is not news, one that clears and returns is."""
+        episodes = runtime.setdefault("episodes", {})
+        rows = snapshot["lanes"]
+        stale = {f"{row['rig']}:{row['gpu']}:{row['run']}": row for row in rows if row["state"] == "stale"}
+        for key, row in stale.items():
+            if key not in episodes.get("heartbeat_stale", []):
+                age = row.get("heartbeat_age_s")
+                self.event("heartbeat-stale", rig=row["rig"], gpu=row["gpu"], run=row["run"], heartbeat_age_s=int(age) if age is not None else None)
+        episodes["heartbeat_stale"] = sorted(stale)
+        busy = [row for row in rows if row["kind"] == "lane" and row["state"] in ("running", "stale", "starting")]
+        idle: dict[str, dict] = {}
+        if busy and not queue.get("finished_at"):
+            for row in rows:
+                if row["kind"] != "lane" or row["state"] != "idle":
+                    continue
+                takes = any(r["state"] == "queued" and eligible(queue, r, row["rig"], vram.get((row["rig"], row["gpu"]))) for r in queue["runs"])
+                if not takes:
+                    idle[f"{row['rig']}:{row['gpu']}"] = row
+        for key, row in idle.items():
+            if key not in episodes.get("lane_idle_tail", []):
+                others = [f"{r['rig']} gpu{r['gpu']}" for r in busy]
+                self.event("lane-idle-tail", rig=row["rig"], gpu=row["gpu"], busy=others)
+        episodes["lane_idle_tail"] = sorted(idle)
+
     # -- the pass ---------------------------------------------------------
 
     def run(self) -> dict:
@@ -1368,6 +1403,7 @@ class Cycle:
                     collect_failed=missed,
                 )
             snapshot = build_snapshot(queue, runtime, wave, vram, self.at)
+            self.mark_episodes(queue, snapshot, runtime, vram)
             last_refresh = parse_iso(runtime.get("board_refreshed_at"))
             if last_refresh is None or (self.at - last_refresh).total_seconds() >= BOARD_REFRESH_EVERY_S:
                 self.board_refresh(queue, snapshot["lanes"])
@@ -1727,6 +1763,99 @@ def render_table(snapshot: dict, fmt: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+# ───────────────────────────── watch ─────────────────────────────
+#
+# A chat's way to follow a wave without a timer: one blocking command, run in the background,
+# that returns only when there is something to say. It reads local files only (the snapshot the
+# service writes each cycle, the queue, the follow-up records), never a rig.
+
+
+def wave_warnings(wave: Wave, snapshot: dict | None, at: datetime, board_config=None) -> list[dict]:
+    """Every warning a person should see for this wave right now, each with a stable `key`: the
+    printout's `⚠` lines (from `brief_view`, one per failed run), a follow-up that failed or ended
+    without a report, and a service that stopped writing snapshots. A key names the condition, not
+    its wording, so a countdown in a line never makes an old warning look new."""
+    items: list[dict] = []
+    if snapshot:
+        for item in brief_view(snapshot, at)["warnings"]:
+            kind = item["kind"]
+            if kind == "failed":
+                items += [
+                    {"key": f"failed:{run['run']}", "line": f"failed: `{run['run']}`" + (f" ({run['note']})" if run.get("note") else "")}
+                    for run in item["runs"]
+                ]
+            elif kind == "lane":
+                items.append({"key": f"lane:{item['rig']}:{item['gpu']}:{item['state']}:{item['run']}", "line": item["line"]})
+            elif kind == "cert":
+                items.append({"key": f"cert:{item['rig']}:{'expired' if item['expired'] else 'expiring'}:{item['expires_at']}", "line": item["line"]})
+            elif kind == "question":
+                items.append({"key": f"question:{item['id']}", "line": item["line"]})
+            else:
+                items.append({"key": f"{kind}:{item['line']}", "line": item["line"]})
+        written = parse_iso(snapshot.get("written_at"))
+        if written and not snapshot.get("finished_at") and (at - written).total_seconds() > SERVICE_SILENT_S:
+            items.append({"key": "service:silent", "line": f"no supervisor cycle for {humanize((at - written).total_seconds())}: is the sweep-supervisor service running?"})
+    else:
+        registered = parse_iso((board.read_json(wave.queue_path) or {}).get("registered_at"))
+        if registered and (at - registered).total_seconds() > SERVICE_SILENT_S:
+            items.append({"key": "service:silent", "line": f"no first supervisor cycle {humanize((at - registered).total_seconds())} after registration: is the sweep-supervisor service running?"})
+    if board_config is not None:
+        for _path, record in followup_records(board_config):
+            if record.get("wave_id") != wave.wave_id or record.get("project_root") != str(wave.project_root):
+                continue
+            if record.get("status") == "failed" or (record.get("status") == "done" and not record.get("report")):
+                items.append({
+                    "key": f"followup:{record['id']}",
+                    "line": f"follow-up {record['kind']} {record.get('outcome') or record['status']} without a report" + (f"; log {record['log']}" if record.get("log") else ""),
+                })
+    return items
+
+
+def wave_over(wave: Wave, snapshot: dict | None) -> bool:
+    queue = board.read_json(wave.queue_path) or {}
+    return bool((snapshot or {}).get("finished_at") or queue.get("finished_at"))
+
+
+def watch(wave: Wave, board_config, poll: float = WATCH_POLL_S, timeout: float = WATCH_TIMEOUT_S) -> int:
+    """Block until this wave has a warning not announced yet, or turns terminal, or `timeout` passes;
+    then print why, followed by the brief printout. What was announced lives in the wave's
+    `watch.json`, so running it again does not repeat a warning; a warning that clears is forgotten
+    and fires again if it comes back. A file caught mid-write is simply read again next poll."""
+    if not wave.queue_path.exists():
+        raise SupervisorError(f"wave {wave.wave_id} is not registered here: {wave.queue_path}")
+    state_path = wave.dir / "watch.json"
+    deadline = time.monotonic() + timeout
+    while True:
+        at = now()
+        snapshot = board.read_json(wave.snapshot_path)
+        reasons: list[str] = []
+        try:
+            over = wave_over(wave, snapshot)
+            current = {item["key"]: item for item in wave_warnings(wave, snapshot, at, board_config)}
+            with (wave.dir / ".watch.lock").open("a+") as handle:
+                fcntl.flock(handle, fcntl.LOCK_EX)
+                announced = set((board.read_json(state_path) or {}).get("announced", []))
+                new = [item for key, item in current.items() if key not in announced]
+                keep = (announced & set(current)) | {item["key"] for item in new}
+                if keep != announced:
+                    board.write_json(state_path, {"announced": sorted(keep), "at": iso(at)})
+        except (KeyError, TypeError, ValueError, AttributeError, OSError, board.BoardError):
+            over, new = False, []  # a snapshot from an older script, or a file mid-write: look again next poll
+        if over:
+            reasons = ["watch: wave finished"]
+        elif new:
+            reasons = [f"watch: new ⚠ {item['line']}" for item in new]
+        elif time.monotonic() >= deadline:
+            reasons = ["watch: timeout, nothing new; run watch again"]
+        if reasons:
+            print("\n".join(reasons))
+            if snapshot:
+                with contextlib.suppress(KeyError, TypeError, ValueError, AttributeError):
+                    print("\n" + render_brief(snapshot), end="")
+            return 0
+        time.sleep(max(0.05, min(poll, deadline - time.monotonic())))
+
+
 # ───────────────────────────── agent wake-up ─────────────────────────────
 
 
@@ -1734,6 +1863,7 @@ def agent_prompt(wave: Wave, reason: str) -> str:
     return (
         f"Use the sweep-supervisor skill and run one supervisor tick for wave {wave.wave_id} of the research project "
         f"in the current directory. State directory: {wave.dir}. Wake reason: {reason}. "
+        "You act only within the pool and standing authorization written in the wave README. "
         "You are unattended: never ask a blocking question, use the supervisor's ask command instead, "
         "record every decision with its decide command, and finish the tick."
     )
@@ -1905,8 +2035,10 @@ def followup_prompt(record: dict) -> str:
         "--text \"<one line on the outcome, then every plot or wave it produced, each plot as its public URL>\"`. "
     )
     unattended = (
-        "You are unattended and nobody can answer: never ask a blocking question; for a decision on the Always ask list use "
-        f"the supervisor's `ask --wave {wave_id}` and carry on with everything else. Log every decision to program/DECISIONS.md. "
+        f"You act only within the pool and standing authorization written in the README of wave {wave_id}. You are unattended and "
+        "nobody can answer: never ask a blocking question; for anything the sweep-supervisor skill reserves for the user "
+        f"(its Authority section) use the supervisor's `ask --wave {wave_id}` and carry on with everything else. Record "
+        f"every decision with the supervisor's `decide --wave {wave_id}`. "
     )
     if record["kind"] == "analyze":
         return (
@@ -1925,8 +2057,8 @@ def followup_prompt(record: dict) -> str:
         "Fix it on the hub's main checkout so the code does what the experiment already intends; never change what the "
         "experiment measures, a behavior-affecting default, or the scientific contract. Re-run the experiment's smoke, "
         "commit with the journal entry, and dispatch a follow-up wave of exactly the runs this error broke (failed, dropped, "
-        f"or not yet started that would hit it) inside the same envelope, with `fix_depth` = {record['fix_depth'] + 1} in "
-        "its supervisor manifest. When the only fix would change the science or anything on the Always ask list, dispatch "
+        f"or not yet started that would hit it) inside the same pool and standing authorization, with `fix_depth` = {record['fix_depth'] + 1} in "
+        "its supervisor manifest. When the only fix would change the science or anything reserved for the user, dispatch "
         f"nothing: `ask --wave {wave_id}` with the diagnosis and the proposed patch. " + unattended + report
     )
 
@@ -2089,7 +2221,7 @@ def split_csv(value: str | None) -> list[str]:
 def require_pool_rigs(queue: dict, rigs: list[str]) -> list[str]:
     unknown = [rig for rig in rigs if rig not in queue["pool"]]
     if unknown:
-        raise SupervisorError(f"not in this wave's pool: {', '.join(unknown)}; the pool is the approved envelope")
+        raise SupervisorError(f"not in this wave's pool: {', '.join(unknown)}; the pool is what the dispatch gate approved")
     return rigs
 
 
@@ -2385,6 +2517,9 @@ def build_parser() -> argparse.ArgumentParser:
     table_p.add_argument("--format", choices=("md", "text"), default="md")
     table_p.add_argument("--full", action="store_true", help="the per-GPU table instead of the brief chat printout")
     table_p.add_argument("--cycle", action="store_true", help="run one cycle first instead of reading the last snapshot")
+    watch_p = wave_parser("watch", help="block until a new warning, the wave's end, or the timeout; then print why and the printout")
+    watch_p.add_argument("--poll", type=float, default=WATCH_POLL_S, help=f"seconds between reads of the wave's files (default {WATCH_POLL_S})")
+    watch_p.add_argument("--timeout", type=float, default=WATCH_TIMEOUT_S, help=f"seconds before giving up with nothing new (default {WATCH_TIMEOUT_S})")
     wave_parser("snapshot")
     ledger_p = wave_parser("ledger")
     ledger_p.add_argument("--since", help="ISO time; default is the last agent tick")
@@ -2486,6 +2621,10 @@ def main(argv: list[str] | None = None) -> int:
                 raise SupervisorError(f"wave {wave.wave_id} has no snapshot yet; is the supervisor service running?")
             print(render_table(snapshot, args.format) if args.full else render_brief(snapshot), end="")
             return 0
+        if args.command == "watch":
+            if args.poll < 1 or args.timeout < 0:
+                raise SupervisorError("--poll must be at least 1 second and --timeout not negative")
+            return watch(wave, board_config, args.poll, args.timeout)
         if args.command == "snapshot":
             print(json.dumps(board.read_json(wave.snapshot_path) or {}, indent=2, sort_keys=True))
             return 0

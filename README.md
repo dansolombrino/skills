@@ -76,19 +76,13 @@ Cross-rig workflows require the bundled `rig-sync` and `environment-sync` contra
 access on every rig; the plugin stops before remote dispatch when source or runtime parity cannot
 be proven.
 
-Research 2.0 supports fresh projects only, scaffolded without questions: init finds or creates
-the project's empty private GitHub repository with `gh`, and moves the project's secrets to the
-rigs the safe way (owner-only, never printed, never replacing a different file). Every scaffolded project carries an engineering execution agreement
-with its envelope. Inside it the agent decides and acts on its own — experiment design, run_id
-election and migration, plots, deploys, environment provisioning, dispatch, journal entries,
-commits — and logs each decision to `program/DECISIONS.md`, which it reads only when needed instead
-of narrating in the chat. Only destructive, secret-moving, and envelope-expanding actions ask.
-Hard limits such as `behemoth` being gpu0-only without a per-wave grant are enforced by the
-scripts, not by prompts. The engineering skills
-read the agreement before any material action and stop when it is absent. New experiments identify
-runs by a versioned `rid-<32 hex>` hash (`hashed-v2`) that `run-identity` looks up and migrates.
-`EXPERIMENTS.md` holds run state and `JOURNAL.md` holds the narrative. Unsupported legacy layouts
-stop without migration.
+Research 2.0 supports fresh projects only. Init creates the project's empty private GitHub
+repository with `gh` and moves the project's secrets to the rigs the safe way (owner-only, never
+printed, never replacing a different file). The skills carry facts, commands, and taste rules;
+hard limits such as `behemoth` being gpu0-only without a per-wave grant are enforced by the
+scripts. New experiments identify runs by a versioned `rid-<32 hex>` hash (`hashed-v2`) that
+`run-identity` looks up and migrates; older layouts are documented in its `legacy-layouts`
+reference. `EXPERIMENTS.md` holds run state and `JOURNAL.md` holds the narrative.
 
 A dispatched wave needs no chat. The hub's `sweep-supervisor` service feeds and recovers it, waits
 for GPUs another wave holds instead of leaving them out, pushes notices to a phone through
@@ -99,6 +93,10 @@ and its runs dispatched again by a follow-up too (at most two automatic rounds).
 installed plugin, the service moves itself onto each new release. `phone-bridge` is the Telegram
 bot those notices go to; it also renews the Leonardo SSH certificate from the phone (you do the 2FA
 login, then paste back the address the browser could not open; certificates last 48 h).
+
+Progress is at a glance in the `rig-board` viewer's Experiments tab. A chat shows the status table
+on request, and a background `watch` brings each new warning and the wave's end into the chat
+without timed printouts.
 
 Scaffolded projects get `AGENTS.md` as the canonical project doc plus a thin `CLAUDE.md` that
 points at it, so one set of notes serves both hosts.

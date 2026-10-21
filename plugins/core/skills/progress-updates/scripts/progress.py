@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """progress-updates: sample long-running tasks and render one fixed status/ETA table.
 
-A *board* groups the tasks one chat is watching and fixes the cadence:
+A *board* groups the tasks one chat is watching:
 
-    start  --every N                       -> prints the board id
+    start  [--every N]                     -> prints the board id (N: the user's update minutes)
     add    --board B --name N --kind K ... -> registers a task
     table  --board B                       -> samples every task, prints the table
+    watch  --board B [--poll S] [--timeout S]
+                                           -> blocks, sampling every S seconds, and returns as
+                                              soon as something changes (a task done, failed,
+                                              ended, newly stalled, error in log, or all tasks
+                                              finished) or the timeout passes; prints
+                                              "watch: <reason>" and then the table. Exit 0.
     remove --board B --name N | stop --board B | list
 
 Task kinds (each may live on another machine with --host, read over ssh):
@@ -24,6 +30,7 @@ State lives in ${XDG_STATE_HOME:-~/.local/state}/progress-updates/<board>.json.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -32,6 +39,7 @@ import shlex
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -39,6 +47,9 @@ TAIL_BYTES = 65536
 MAX_SAMPLES = 60
 FAIL_RE = r"Traceback \(most recent call last\)|rsync error|CUDA out of memory|\bKilled\b"
 TERMINAL = ("done", "failed", "ended")
+DEFAULT_WINDOW = 600.0
+WATCH_POLL = 30.0
+WATCH_TIMEOUT = 6 * 3600.0
 
 RSYNC_RE = re.compile(r"([\d,]+)\s+(\d{1,3})%\s+\S+/s\s+(\d+):(\d\d):(\d\d)")
 TQDM_RE = re.compile(r"(\d+)/(\d+)\s*\[(?:[\d:]+)<((?:\d+:)?\d+:\d\d|\?)")
@@ -65,12 +76,52 @@ def load(board: str) -> dict:
     return json.loads(path.read_text())
 
 
+def try_load(board: str) -> dict | None:
+    """Like load, but None for a missing board and {} for one caught mid-rewrite."""
+    try:
+        return json.loads(board_path(board).read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return {}
+
+
 def save(board: str, data: dict) -> None:
     path = board_path(board)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=1))
     tmp.replace(path)
+
+
+@contextmanager
+def locked(board: str):
+    """Serialize read-modify-write of one board between concurrent commands (add vs watch)."""
+    path = board_path(board).with_suffix(".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+
+
+def commit(board: str, data: dict) -> bool:
+    """Write sampled tasks back without losing a concurrent add, remove, or stop.
+
+    Sampling runs outside the lock (it can take a while over ssh), so the board on disk may have
+    changed meanwhile: keep its task list, and update only the tasks that are still the same
+    registration. False when the board was stopped."""
+    with locked(board):
+        fresh = try_load(board)
+        if fresh is None:
+            return False
+        if not fresh:
+            fresh = data
+        for name, task in data["tasks"].items():
+            current = fresh["tasks"].get(name)
+            if current is not None and current.get("id") == task.get("id"):
+                fresh["tasks"][name] = task
+        save(board, fresh)
+        return True
 
 
 def sh(host: str | None, command: str) -> tuple[int, str]:
@@ -80,6 +131,8 @@ def sh(host: str | None, command: str) -> tuple[int, str]:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=60, errors="replace")
     except subprocess.TimeoutExpired:
         return 124, ""
+    except OSError:
+        return 127, ""
     return proc.returncode, proc.stdout
 
 
@@ -180,6 +233,14 @@ def sample(task: dict) -> dict:
     return reading
 
 
+def safe_sample(task: dict) -> dict:
+    """sample(), but a probe that blows up reads as an unreadable task instead of a crash."""
+    try:
+        return sample(task)
+    except Exception:  # noqa: BLE001 - one bad task must never stop the board
+        return {"error": "probe unreadable"}
+
+
 def fraction(reading: dict) -> float | None:
     if "pct" in reading:
         return reading["pct"] / 100
@@ -255,7 +316,7 @@ def cmd_start(args: argparse.Namespace) -> None:
 
 
 def cmd_add(args: argparse.Namespace) -> None:
-    data = load(args.board)
+    load(args.board)
     if args.kind in ("rsync", "log") and not args.log:
         sys.exit(f"--kind {args.kind} needs --log")
     if args.kind == "size":
@@ -270,27 +331,35 @@ def cmd_add(args: argparse.Namespace) -> None:
         total = parse_size(args.total) if args.total else du_bytes(args.total_of_host, args.total_of)
         if not total:
             sys.exit("could not determine the total size")
-    data["tasks"][args.name] = {
-        "kind": args.kind, "host": args.host, "log": args.log, "path": args.path, "total": total,
+    task = {
+        "id": secrets.token_hex(4), "kind": args.kind, "host": args.host, "log": args.log, "path": args.path, "total": total,
         "pattern": args.pattern, "fail_pattern": args.fail_pattern, "exit_file": args.exit_file,
         "pid": args.pid, "samples": [], "last_change": None, "final": None,
     }
-    save(args.board, data)
+    with locked(args.board):
+        data = load(args.board)
+        data["tasks"][args.name] = task
+        save(args.board, data)
     print(f"watching {args.name!r} on board {args.board}")
 
 
-def cmd_table(args: argparse.Namespace) -> None:
-    data = load(args.board)
-    now = time.time()
-    period = data["every"] * 60
-    window = max(2 * period, 600.0)
-    stall = args.stall * 60 if args.stall else max(2 * period, 600.0)
+def timing(data: dict, stall_minutes: float | None) -> tuple[float | None, float, float]:
+    """(cadence seconds or None, ETA window seconds, stall threshold seconds) for a board."""
+    period = data["every"] * 60 if data.get("every") else None
+    window = max(2 * period, DEFAULT_WINDOW) if period else DEFAULT_WINDOW
+    stall = stall_minutes * 60 if stall_minutes else window
+    return period, window, stall
+
+
+def refresh(data: dict, now: float, stall_minutes: float | None = None) -> list[list[str]]:
+    """Sample every live task, update its history in place, and return the table rows."""
+    _, window, stall = timing(data, stall_minutes)
     rows = []
     for name, task in data["tasks"].items():
         if task.get("final"):
             rows.append([name] + task["final"])
             continue
-        reading = sample(task)
+        reading = safe_sample(task)
         frac = fraction(reading)
         if frac is not None:
             if not task["samples"] or frac != task["samples"][-1][1]:
@@ -304,42 +373,145 @@ def cmd_table(args: argparse.Namespace) -> None:
             row[1] = f"finished {clock(now, now)}"
             task["final"] = row
         rows.append([name] + row)
-    save(args.board, data)
+    return rows
 
-    tick = int((now - data["anchor"] + 30) // period)
-    finished = bool(rows) and all(r[3].split()[0] in TERMINAL for r in rows)
+
+def all_finished(rows: list[list[str]]) -> bool:
+    return bool(rows) and all(r[3].split()[0] in TERMINAL for r in rows)
+
+
+def render(data: dict, rows: list[list[str]], now: float) -> str:
+    period, _, _ = timing(data, None)
     stamp = datetime.fromtimestamp(now).strftime("%H:%M")
-    if finished:
-        header = f"⏱ {stamp} · tick {tick} · all tasks finished — stop the updates"
+    if all_finished(rows):
+        header = f"⏱ {stamp} · all tasks finished"
+    elif period:
+        tick = int((now - data["anchor"] + 30) // period)
+        header = f"⏱ {stamp} · tick {tick} · next {clock(data['anchor'] + (tick + 1) * period, now)}"
     else:
-        nxt = data["anchor"] + (tick + 1) * period
-        header = f"⏱ {stamp} · tick {tick} · next {clock(nxt, now)}"
-    print(header)
-    print()
-    print("| task | progress | ETA (basis) | state |")
-    print("|---|---|---|---|")
+        header = f"⏱ {stamp}"
+    lines = [header, "", "| task | progress | ETA (basis) | state |", "|---|---|---|---|"]
     for row in rows:
-        print("| " + " | ".join(cell.replace("|", "/") for cell in row) + " |")
+        lines.append("| " + " | ".join(cell.replace("|", "/") for cell in row) + " |")
     if not rows:
-        print("| (no tasks) | — | — | — |")
+        lines.append("| (no tasks) | — | — | — |")
+    return "\n".join(lines)
+
+
+def cmd_table(args: argparse.Namespace) -> None:
+    data = load(args.board)
+    now = time.time()
+    rows = refresh(data, now, args.stall)
+    commit(args.board, data)
+    print(render(data, rows, now))
+
+
+def alert_class(state: str) -> str | None:
+    if state.startswith("stalled"):
+        return "stalled"
+    if state == "error in log":
+        return "error in log"
+    if state.endswith("unreadable"):
+        return "unreadable"
+    return None
+
+
+def events(data: dict, before: dict, rows: list[list[str]], now: float, stall: float) -> list[str]:
+    """What changed since the last report, updating each task's notified marker in place.
+
+    A task reaching done/failed/ended is reported once (its row freezes). Stalled and error in
+    log are reported when a task newly enters them; an unreadable log or path only once it has
+    stayed unreadable for the stall threshold, so a single ssh hiccup stays quiet."""
+    found = []
+    for name, _, _, state in rows:
+        task = data["tasks"][name]
+        if task.get("final"):
+            if not before.get(name):
+                found.append(f"{name} {state}")
+            continue
+        cls = alert_class(state)
+        if cls == "unreadable":
+            since = task.setdefault("unreadable_since", now)
+            if now - since < stall:
+                continue
+        else:
+            task.pop("unreadable_since", None)
+        if cls is None:
+            task.pop("notified", None)
+        elif task.get("notified") != cls:
+            task["notified"] = cls
+            found.append(f"{name} {state}")
+    return found
+
+
+def cmd_watch(args: argparse.Namespace) -> None:
+    load(args.board)  # a missing board is a usage error, reported before blocking
+    poll = max(args.poll, 0.01)
+    deadline = time.monotonic() + args.timeout
+    data: dict | None = {}
+    rows: list[list[str]] = []
+    now = time.time()
+    while True:
+        data = try_load(args.board)
+        now = time.time()
+        if data is None:
+            print("watch: board removed")
+            return
+        if data:
+            if not data.get("tasks"):
+                print("watch: no tasks on board")
+                print()
+                print(render(data, [], now))
+                return
+            before = {name: bool(task.get("final")) for name, task in data["tasks"].items()}
+            _, _, stall = timing(data, args.stall)
+            rows = refresh(data, now, args.stall)
+            found = events(data, before, rows, now, stall)
+            if all_finished(rows):
+                found.append("all tasks finished")
+            try:
+                if not commit(args.board, data):
+                    print("watch: board removed")
+                    return
+            except OSError:
+                pass
+            if found:
+                print("watch: " + "; ".join(found))
+                print()
+                print(render(data, rows, now))
+                return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            t = args.timeout
+            span = f"{t / 3600:g}h" if t >= 3600 else f"{t / 60:g}m" if t >= 60 else f"{t:g}s"
+            print(f"watch: timeout after {span} with nothing new; run watch again")
+            if data:
+                print()
+                print(render(data, rows, now))
+            return
+        time.sleep(min(poll, remaining))
 
 
 def cmd_remove(args: argparse.Namespace) -> None:
-    data = load(args.board)
-    if data["tasks"].pop(args.name, None) is None:
-        sys.exit(f"no task {args.name!r} on board {args.board}")
-    save(args.board, data)
+    with locked(args.board):
+        data = load(args.board)
+        if data["tasks"].pop(args.name, None) is None:
+            sys.exit(f"no task {args.name!r} on board {args.board}")
+        save(args.board, data)
 
 
 def cmd_stop(args: argparse.Namespace) -> None:
-    board_path(args.board).unlink(missing_ok=True)
+    with locked(args.board):
+        board_path(args.board).unlink(missing_ok=True)
+    board_path(args.board).with_suffix(".lock").unlink(missing_ok=True)
     print(f"board {args.board} removed")
 
 
 def cmd_list(args: argparse.Namespace) -> None:
     for path in sorted(state_dir().glob("*.json")):
         data = json.loads(path.read_text())
-        print(f"{path.stem}  every {data['every']}m  tasks: {', '.join(data['tasks']) or '-'}")
+        every = f"every {data['every']:g}m" if data.get("every") else "on change"
+        print(f"{path.stem}  {every}  tasks: {', '.join(data['tasks']) or '-'}")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -347,7 +519,8 @@ def main(argv: list[str] | None = None) -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("start", help="create a board")
-    p.add_argument("--every", type=float, default=1.0, help="cadence in minutes (default 1)")
+    p.add_argument("--every", type=float, help="the user's requested update interval in minutes "
+                   "(only when they asked for timed updates; sets the header's next time)")
     p.add_argument("--board", help="board id (default: timestamp + random suffix)")
     p.set_defaults(func=cmd_start)
 
@@ -371,6 +544,16 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--board", required=True)
     p.add_argument("--stall", type=float, help="minutes without progress before 'stalled'")
     p.set_defaults(func=cmd_table)
+
+    p = sub.add_parser("watch", help="block until a task finishes, stalls, or errors, then print "
+                       "the reason and the table")
+    p.add_argument("--board", required=True)
+    p.add_argument("--poll", type=float, default=WATCH_POLL,
+                   help=f"seconds between samples (default {WATCH_POLL:g})")
+    p.add_argument("--timeout", type=float, default=WATCH_TIMEOUT,
+                   help=f"seconds before giving up with reason 'timeout' (default {WATCH_TIMEOUT:g})")
+    p.add_argument("--stall", type=float, help="minutes without progress before 'stalled'")
+    p.set_defaults(func=cmd_watch)
 
     p = sub.add_parser("remove", help="stop watching one task")
     p.add_argument("--board", required=True)

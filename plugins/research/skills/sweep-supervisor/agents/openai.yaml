@@ -1,4 +1,4 @@
 interface:
   display_name: "Sweep Supervisor"
-  short_description: "Hub-side wave supervision, follow-ups, notices, ETA printout"
-  default_prompt: "Use $sweep-supervisor to show the ETA printout (or per-GPU table) of a running wave, relay an answer to the unattended supervisor, rebalance or steal runs across GPUs, add a lane, queue a fix or analysis follow-up, recover after a rig fault, or run one unattended supervisor tick for a wave launched by $sweep-dispatch."
+  short_description: "Hub-side wave supervision, follow-ups, notices, status and ETA"
+  default_prompt: "Use $sweep-supervisor to show a running wave's status, ETA and warnings (or its per-GPU table), follow it from this chat with watch, relay an answer to the unattended supervisor, rebalance or steal runs across GPUs, add a lane, queue a fix or analysis follow-up, recover after a rig fault, or run one unattended supervisor tick for a wave launched by $sweep-dispatch."

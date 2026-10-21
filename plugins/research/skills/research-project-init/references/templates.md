@@ -1,9 +1,8 @@
 # Scaffold templates
 
-Substitute `{{PROJECT_NAME}}` / `{{PROJECT_DESCRIPTION}}`; the description is optional and falls
-back to the project name.
-Create `.gitkeep` in each otherwise-empty taxonomy directory before the initial
-commit; the `.gitignore` exceptions below preserve placeholders in ignored trees.
+Substitute `{{PROJECT_NAME}}`, `{{PROJECT_DESCRIPTION}}` (optional; falls back to the project
+name), and `{{ENVIRONMENT_NAME}}`. Put a `.gitkeep` in each otherwise-empty taxonomy directory
+before the first commit; the `.gitignore` exceptions below keep them in ignored trees.
 
 ## README.md
 
@@ -18,7 +17,7 @@ commit; the `.gitignore` exceptions below preserve placeholders in ignored trees
 |---|---|
 | `checkpoints/` | checkpoints produced by trainings/finetunings |
 | `code/` | experiment code (hydra-configured) |
-| `config/` | hydra yaml configs for `code/` |
+| `config/` | hydra yaml configs for `code/`, plus each experiment's run_id and glossary files |
 | `evaluations/` | data produced by running experiments (+ `.status.json` markers) |
 | `logs/` | run logs — tee'd stdout+stderr per run, wandb files (gitignored, rig-local) |
 | `plots/` | plots produced by `visualizations/` |
@@ -27,51 +26,37 @@ commit; the `.gitignore` exceptions below preserve placeholders in ignored trees
 | `visualizations/` | plotting code (argparse), reads `evaluations/`, writes `plots/` |
 | `shitpads/` | temp scratch space (gitignored, rig-local) |
 | `references/` | papers/codebases for reference (gitignored, rig-synced) |
-| `program/` | the engineering execution agreement |
 
-Experiments are named `NNN_experiment_name` and mirrored across the folders above — except
-`tests/`, which mirrors the source root first: tests for `<root>/<path>/<stem>.py` live at
-`tests/<root>/<path>/<stem>/test_*.py`, and are optional per script.
-Each run is identified by its **run_id**: `rid-<32 hex>`, a hash of the experiment's identity
-params. The experiment's `.py` pins the literal output-path layout
-(`RUN_ID_PATH_LAYOUT = "hashed-v2"`) and reads its identity params from the tracked
-`config/<experiment>/RUN_ID_VERSIONS.json`;
-`RUN_ID_HISTORY.json` beside it maps old hashes to new ones after a run_id migration, and the
-derived `evaluations/<experiment>/RUN_ID_MAP.json` indexes every run. Every
-run-scoped folder is `<root>/<experiment>/rid-<32 hex>/`, and `run_id_label` gives the readable
-`k=v,…` shown beside the hash. Experiments pinned before `hashed-v2` keep their legacy
-`"segments-v2"|"segments-v1"|"nested"|"collapsed-v1"|"hashed-v1"` pin with `RUN_ID_PARAMS` (and
-`RUN_ID_SEGMENTS` for the segments layouts) in the `.py`. The tracked
-`config/<experiment>/PARAM_GLOSSARY.json` gives each param's full name and explanation, which
-plots show instead of raw keys.
+Experiments are named `NNN_experiment_name` and mirrored across the folders above; tests for
+`<root>/<path>/<stem>.py` live at `tests/<root>/<path>/<stem>/test_*.py`.
+Each run is identified by its **run_id** `rid-<32 hex>`, a hash of the experiment's identity
+params: the experiment's `.py` pins `RUN_ID_PATH_LAYOUT = "hashed-v2"`, the params are the current
+entry of `config/<experiment>/RUN_ID_VERSIONS.json`, `RUN_ID_HISTORY.json` beside it maps old
+hashes to new ones after a run_id migration, and `evaluations/<experiment>/RUN_ID_MAP.json`
+indexes every run. `run_id_label` gives the readable `k=v,…` shown beside the hash, and
+`config/<experiment>/PARAM_GLOSSARY.json` gives each param's full name for plots.
 
 ## Tracking
 
-- **`program/00-execution-agreement.md`** — engineering envelope (including the Leonardo
-  account) and destinations.
-- **`program/DECISIONS.md`** — the agent's decision log: one line per autonomous decision or
-  action, with its reason. Read it to know why something was done.
 - **`EXPERIMENTS.md`** — state: which runs exist (todo/inpr/done/failed), in which wave, on
   which rig and GPU.
-- **`JOURNAL.md`** — story: prose log of what was done, why, and what was learned.
+- **`JOURNAL.md`** — story: what was done, why, and what was learned.
 
 ## Setup
 
-1. `cp .env.example .env` and fill in the secrets/paths.
+1. `cp .env.example .env` and fill in the secrets.
 2. Use `environment-sync` to provision the exact `uv.lock` + `.python-version` environment and
    run the project GPU smoke.
-3. Configure the approved GitHub remote/dispatch branch and `sync.toml`, then use `rig-sync` and
-   `environment-sync` to prepare and verify approved rig roots.
+3. Configure the GitHub remote, dispatch branch, and `sync.toml`, then use `rig-sync` and
+   `environment-sync` to prepare and verify the rigs.
 
 ## Running
 
 Runs are launched in **waves** (one dispatch decision, id `YYYYMMDD-HHMMSS`) via
-`scripts/NNN_experiment_name/<run_id folder>/wave_<wave_id>/` (`rid-<32 hex>`) — a `README.md` saying what the
-wave is, plus one self-contained, placement-free `wave.sh` per run; any GPU lane of the wave's
-pool may claim it. Each wave is smoke-tested,
-committed, and tagged `wave--<wave_id>`; every rig verifies that exact commit before execution.
-Every run also verifies and records the wave's approved environment fingerprint. `logs/` mirrors
-the scripts tree.
+`scripts/NNN_experiment_name/<run_id folder>/wave_<wave_id>/` — a `README.md` saying what the
+wave is, plus one placement-free `wave.sh` per run that any GPU lane of the wave's pool may claim.
+Each wave is smoke-tested, committed, and tagged `wave--<wave_id>`; every rig verifies that exact
+commit and the wave's environment fingerprint before execution. `logs/` mirrors `scripts/`.
 ```
 
 ## AGENTS.md
@@ -79,39 +64,23 @@ the scripts tree.
 ```markdown
 # {{PROJECT_NAME}} — project notes
 
-<!-- Thin by design: generic research conventions come from the installed `research`
-     skill bundle, enabled here by the `research` tag in `.project.toml`, and from the
-     always-on `core` bundle. Only project-specific facts live here. -->
+<!-- Thin by design: generic research conventions come from the `research` skills, enabled by
+     the `research` tag in `.project.toml`. Only project-specific facts live here. -->
 
 ## What this project is
 
 {{PROJECT_DESCRIPTION}}
 
-## Conventions come from this project and the skills
+## Where things are
 
-Follow this project's own files and the `research` skill directives. Never list, read, or copy
-from another project on disk to decide layout, file contents, dependencies, or defaults, and
-never treat a similar-looking project as a template or precedent. Where a convention is not
-stated, take the conservative reversible choice and log it rather than imitate. External source code enters only through the `core` skill
-`integrate-reference-code`, from a reference the user identifies explicitly or places in
-`references/`.
+- `EXPERIMENTS.md` — run state: what exists, what ran where.
+- `JOURNAL.md` — the story: why things were done and what was learned.
+- `README.md` — structure and setup.
+- `config/NNN_*/RUN_ID_VERSIONS.json` — each experiment's run identity (`hashed-v2`);
+  `run-identity` looks up a run hash and migrates an identity.
 
-## Awareness map
-
-- `EXPERIMENTS.md` — run tracking (state). Read it to know what exists/ran.
-- `JOURNAL.md` — prose history (story). Read it to know why things were done.
-- `program/00-execution-agreement.md` — authoritative engineering envelope.
-- `program/DECISIONS.md` — the agent's decision log; read it only to answer why or what.
-- `README.md` — structure + setup.
-- Deepen further by reading `config/NNN_*/` and the experiment's `.py`: `RUN_ID_PATH_LAYOUT` is
-  the authoritative literal output-path pin (`hashed-v2`; legacy `segments-v2`, `segments-v1`,
-  `nested`, `collapsed-v1`, or `hashed-v1`). Under `hashed-v2` the run identity is the current
-  entry of the tracked `config/NNN_*/RUN_ID_VERSIONS.json` and `RUN_ID_HISTORY.json` beside it
-  resolves old hashes;
-  under a legacy pin `RUN_ID_PARAMS` is the authoritative ordered run identity and
-  `RUN_ID_SEGMENTS` the approved split into explicit params and named hash groups.
-- `run-identity` looks up a run hash (or prefix, or `k=v` query) and is the only way to evolve an
-  identity once runs exist (a run_id migration: agent-decided and logged, with a rollback manifest).
+This project's own files and the `research` skills are the reference; don't copy layout or
+defaults from other projects on disk.
 
 ## Project-specific quirks
 
@@ -120,8 +89,8 @@ stated, take the conservative reversible choice and log it rather than imitate. 
 
 ## CLAUDE.md
 
-`AGENTS.md` is the canonical project doc. `CLAUDE.md` only redirects to it, so Claude Code loads
-the same notes without a second copy that can drift. Scaffold both; never duplicate the content.
+`AGENTS.md` is the canonical project doc; `CLAUDE.md` only redirects to it, so both hosts read
+the same notes.
 
 ```markdown
 # {{PROJECT_NAME}}
@@ -134,19 +103,13 @@ Project notes live in `AGENTS.md`. Read @AGENTS.md before doing anything.
 ```markdown
 # Experiments
 
-<!-- state only; the story lives in JOURNAL.md. One section per NNN_experiment; each section
-     header mirrors the exact literal pin `RUN_ID_PATH_LAYOUT: hashed-v2` with the current
-     `run_id version` and its params from `config/<experiment_path>/RUN_ID_VERSIONS.json` and
-     `run_id map: evaluations/<experiment_path>/RUN_ID_MAP.json`; a legacy experiment instead
-     mirrors its .py's ordered RUN_ID_PARAMS and `RUN_ID_PATH_LAYOUT: segments-v2` or
-     `segments-v1` (plus `RUN_ID_SEGMENTS` and the map), `RUN_ID_PATH_LAYOUT: nested`,
-     `RUN_ID_PATH_LAYOUT: collapsed-v1`, or `RUN_ID_PATH_LAYOUT: hashed-v1` (the last also names
-     the map).
-     Run tables, one row per (run, wave); hashed-v2 adds `run_id` (the hash) and `label`:
+<!-- state only; the story lives in JOURNAL.md. One section per NNN_experiment; its header
+     mirrors `RUN_ID_PATH_LAYOUT: hashed-v2`, the current `run_id version` and params from
+     `config/<experiment_path>/RUN_ID_VERSIONS.json`, and
+     `run_id map: evaluations/<experiment_path>/RUN_ID_MAP.json`.
+     One row per (run, wave):
      | <run_id params...> | run_id | label | wave | rig | gpu | status | started | progress | eta | ended | elapsed | notes |
-     segments-v2 adds `run_id` and one column per hash group instead of `label`.
-     Rows are never edited, except that a run_id migration rewrites old hashes.
-     (schema: experiments-tracking skill) -->
+     Format: experiments-tracking skill. -->
 ```
 
 ## JOURNAL.md (initial)
@@ -156,86 +119,6 @@ Project notes live in `AGENTS.md`. Read @AGENTS.md before doing anything.
 
 <!-- append-only prose, chronological; entries under `## YYYY-MM-DD, HH:MM — title`;
      only a run_id migration may replace old run hashes in past entries -->
-```
-
-## program/00-execution-agreement.md (initial)
-
-```markdown
-# Execution Agreement
-
-agreement_version: a1
-approved: no
-
-## Engineering envelope
-
-- Active request:
-- Repository / branch / approved remotes:
-- Rigs / GPUs:
-- Compute / time / monetary ceilings:
-- Leonardo account: <account, or "not used"> (no core-hour cap unless the user asks for one)
-- Approved tracking and publication destinations:
-
-## Decision ownership
-
-Autonomy (conventions, "Autonomy"): the agent decides and does everything except the **Always
-ask** list — destructive operations, history rewrites, deleting material data, overwriting user
-changes, new repositories/remotes/accounts/destinations (except this project's own private
-GitHub repository), creating, rotating, or revoking credentials and any authentication login,
-scope/budget/rig expansion, a shared-rig card beyond the owned ones, behavioral
-`integrate-reference-code` deviations, cancelling or superseding runs outside the wave's standing
-authorization, `push-env --overwrite`, and a run_id migration backfill value neither config nor
-code settles. Existing secrets move to declared rigs the safe way without asking (conventions,
-"Secrets"). Every decision is logged in `program/DECISIONS.md`, not narrated in the chat.
-`leonardo` runs with no core-hour cap unless the user asks for one.
-
-- Hard constraints:
-- Soft preferences:
-- Delegable fields:
-- Agent-owned choices:
-  - Run-output path layout: new experiments use `hashed-v2` with no dialogue — the agent elects
-    the identity params (every swept param plus every behavior-affecting param that differs from
-    its default; top-level config keys only), records them in the tracked
-    `config/<experiment_path>/RUN_ID_VERSIONS.json`, and logs
-    the reasoning in `program/DECISIONS.md`. `plots/` is not run-scoped and is out of scope for
-    this choice. Evolving a `hashed-v2` identity after its first output is a run_id migration
-    through `run-identity` (agent-decided, logged; `migrate rollback` undoes it). A legacy `segments-v2`, `segments-v1`, `nested`,
-    `collapsed-v1`, or `hashed-v1` pin is never offered; an experiment already pinned to one
-    preserves its checked-in renderer and literal pin forever, with its segment spec, and never
-    gets an in-place layout change, regrouping, or move to another layout — another layout for it
-    requires a new numbered sub-experiment.
-  - Plot communication: the agent decides each exact title, its arrangement across title lines,
-    the visible metric explanation, its in-figure placement, the interaction affordances, and the
-    complete project-relative `plots/` export path including its leaf filename, per plot and never
-    reused from another plot's arrangement. Every plot is one self-contained interactive HTML file
-    at `plots/<experiment_path>/<script_stem>/<leaf>.html`; run_id selection lives inside the
-    file, so no plot path carries run_id segments and plot communication never touches
-    RUN_ID_PATH_LAYOUT. The title states every selected identity param by its full name, and the
-    selector shows each selectable param by its full name with an (i) hover explanation; both come
-    from the tracked `config/<experiment_path>/PARAM_GLOSSARY.json`. If runtime values require
-    a path template, it names its leaf-filename template and every placeholder. Before rendering,
-    resolve every concrete export path, including its leaf filename, and reject any destination
-    that collides with a different script's output; a new or changed resolved path is resolved and
-    collision-checked again, even when it conforms to the template. Rewriting a leaf whole on rerun
-    is expected. After rendering, the decided text is verified inside the figure. The
-    specification, every fully resolved concrete export path, and the reasoning are logged in
-    `program/DECISIONS.md`; the user may override any of it.
-  - Additional project-specific choices:
-
-## Approval
-
-- Owner:
-- Approved scope:
-- Latest material revision:
-```
-
-## program/DECISIONS.md (initial)
-
-```markdown
-# Decision log
-
-<!-- append-only; one line per autonomous decision or action (conventions, "Decision log"):
-     - <YYYY-MM-DD HH:MM> · <skill> · <what> · <why> · <where>
-     read only when needed; never pasted into the chat -->
 ```
 
 ## .env.example (committed key mirror)
@@ -261,26 +144,13 @@ Shared model and dataset caches (`HF_HOME`, `HF_HUB_CACHE`, `HF_DATASETS_CACHE`,
 
 ## .env (ignored machine profile)
 
-Render this file directly; do not obtain it by copying `.env.example`. Keep secret values
-empty unless the user explicitly supplies them through an authorized secret source;
-never copy or commit a token from another project's `.env`.
+Render this file directly. Keep secret values empty unless the user supplies them; never copy or
+commit a token from another project's `.env`.
 
-**Never put shared cache paths in `.env`.** A project `.env` is loaded *after* the shell
-environment and silently overrides it, so a single `HF_HOME=` line defeats a correctly configured
-rig — and it does so invisibly, with the download landing on whatever volume that line names. The
-rig's caches are machine-level configuration and belong in the machine's environment, set where
-**every** shell sees it (a login-independent file such as `~/.zshenv`, not an interactive-only
-`~/.bashrc`/`~/.zshrc`, because dispatch runs under `nohup`, `ssh <cmd>`, and generated scripts).
-
-Two further reasons never to hardcode them here: the absolute path is **rig-specific**, so a value
-that is right on one machine points at a nonexistent mount on the next; and the natural repair when
-it does not exist is to retarget it at `$HOME`, which on a quota'd rig is the small volume. That
-sequence is exactly how a wave dies mid-checkpoint with `Disk quota exceeded`.
-
-Keep only what is genuinely per-project, and keep project-scoped storage **relative to the project
-root**. `rig-sync doctor` already requires each rig's `repo_path` to resolve under one of that
-rig's declared storage roots, so a relative path lands on the project's large volume everywhere, without this
-file naming a mount point that is true on exactly one machine.
+Shared cache paths stay out of `.env`: it loads after the shell environment and silently overrides
+the rig's machine-level caches (declared in the registry, installed by `rig-sync provision-env`).
+Project-scoped storage stays **relative to the project root**, which `rig-sync doctor` already
+requires to sit on a declared storage root, so one file is right on every rig.
 
 ```bash
 WANDB_API_KEY=
@@ -294,14 +164,8 @@ CACHE_DIR=storage/cache
 TORCH_NUM_WORKERS=16
 ```
 
-Written this way the file contains nothing rig-specific, which is the point: `rig-sync push-env`
-copies this one file to every peer rather than rendering a different one per machine, and adding a
-rig later needs no edit here at all.
-
-Do not reach for an absolute path. If a project genuinely needs one that neither the machine
-environment nor the project root provides, derive it from the project's storage root on that machine
-(`rig-sync` → `references/configuration.md`), accept that the file is now rig-specific and must be
-maintained per rig, and record why in the journal. `doctor` warns on every absolute value here.
+Nothing here is rig-specific, so `rig-sync push-env` copies the one file to every peer.
+`doctor` warns on any absolute value.
 
 ## .gitignore
 
@@ -337,32 +201,16 @@ outputs/
 !.vscode/settings.json
 ```
 
-Adjust with the user: they may want evaluations/ (small jsons) or plots/ committed.
-`.status.json` markers live inside evaluations/ and follow whatever is decided for it. The
-run-identity files `RUN_ID_VERSIONS.json` and `RUN_ID_HISTORY.json` never live there: they are
-tracked source in `config/<experiment_path>/`, so every wave worktree carries them to every rig;
-only the derived `RUN_ID_MAP.json` sits in evaluations/.
-
-Every comment above sits on its own line, and must. `.gitignore` has no inline comments: a
-trailing `#` note becomes part of the pattern, so `outputs/  # hydra run dir` silently stops
-ignoring `outputs/` and matches a path literally named that instead. Never annotate a pattern
-inline, here or in a scaffolded project.
+The user may want `evaluations/` or `plots/` committed instead. The run-identity files are
+tracked source in `config/<experiment_path>/`; only the derived `RUN_ID_MAP.json` sits in
+`evaluations/`. Comments go on their own lines: `.gitignore` has no inline comments, and a
+trailing `# note` becomes part of the pattern.
 
 ## .vscode/settings.json
 
-Committed, not machine-local. The taxonomy guarantees that a working project's artifact trees
-dwarf its source: `plots/`, `checkpoints/`, `evaluations/`, `logs/`, `shitpads/`, `references/`,
-and `{{ENVIRONMENT_NAME}}/` routinely hold five to six figures of files against a few hundred
-tracked ones. `.gitignore` does not hide any of that from an editor. Only the exclude maps below
-do, so without this file every checkout of every Research 2.0 project installs recursive file
-watchers over the whole artifact tree, full-text-searches it, and language-server-indexes the
-virtual environment. Scaffold it at init; retrofitting it later is a step nothing prompts for.
-
-Keep artifact trees **visible** in the file explorer — they are browsed by hand, `plots/` most of
-all — and exclude them from the watcher, from search, and from Python analysis. State the
-consequence in the file: unwatched directories do not auto-refresh, so newly written artifacts
-appear only after an explicit explorer refresh. That is the deliberate trade, and a scaffold that
-hides it produces a user who thinks a run wrote nothing.
+Committed project policy. The artifact trees hold far more files than the tracked source, and
+`.gitignore` does not hide them from an editor; these exclude maps keep them visible in the
+explorer but out of the watcher, search, and Python analysis.
 
 ```jsonc
 {
@@ -459,46 +307,27 @@ hides it produces a user who thinks a run wrote nothing.
 }
 ```
 
-Substitute `{{ENVIRONMENT_NAME}}` everywhere above, including inside
-`python.defaultInterpreterPath`. Add a project's own heavy directories to all three maps when the
-user declares any beyond the taxonomy; never drop a taxonomy directory from them.
+Add a project's own heavy directories to all three maps.
 
 ## sync.toml
 
-Create this from the `rig-sync` skill's configuration reference. The user registry
-(`~/.config/rigsync/machines.toml`) is a prerequisite: a rig with no entry there cannot be declared
-here at all.
-
-Declare `[git]` with the approved remote/branch, the standard artifact groups, and one absolute
-`repo_path` per intended rig — each under one of that rig's declared storage roots; do not put SSH aliases,
-ports, users, or keys here. Nothing derives `repo_path`, so declare every rig the project will ever
-dispatch to now: adding one later is a hand edit that no gate asks for. Run `rig-sync check-paths`
-before any remote step — it is the only check that catches a path off the rig's large volume before
-something has been cloned into it. Add `[environment]` from
-`environment-sync` with `manager = "uv"`, the single-directory
-`name = "{{ENVIRONMENT_NAME}}"` (`.venv` unless the user named another), and the approved
-tokenized GPU smoke command. Run
-both skills' doctor checks before remote dispatch.
+Create it from the `rig-sync` configuration reference: `[git]` with the remote and branch, the
+standard artifact groups, and one absolute `repo_path` per rig the project will dispatch to, each
+under one of that rig's declared storage roots (SSH aliases, users, and keys stay in the user
+registry). Add `[environment]` from `environment-sync`: `manager = "uv"`,
+`name = "{{ENVIRONMENT_NAME}}"` (`.venv` unless the user names another), and the tokenized GPU
+smoke command.
 
 ## Python environment
 
-Create `pyproject.toml` with the project metadata, exact
-`[tool.uv].required-version = "==X.Y.Z"`, and `python-preference = "managed"`. The runtime
-dependencies are exactly `dependencies = ["torch"]`: torch is the fixed framework of every Research
-2.0 project, the GPU smoke below needs it in the lock, and `uv lock` pins its exact version. Do not
-ask the user which framework or packages to install, and add nothing else at scaffold time; the
-project adds further packages later with `uv add`. Include pytest as a
-dev dependency (`[dependency-groups] dev = ["pytest>=8"]`) so the optional `tests/` tree is
-runnable from the start. Add it now, not later: it participates in the installed-environment
-fingerprint that `environment-sync` uses as its cross-rig parity gate, so introducing it
-mid-project forces a re-provision on every rig. Commit an exact
-`X.Y.Z` `.python-version`. `uv.lock` is produced by `uv lock` during the environment gate, never
-hand-written; commit it once that gate has run. Copy
-`assets/environment.py` from the environment-sync skill's own installed directory to
-`code/common/environment.py`; do not rewrite its
-fingerprint algorithm per project. Keep `{{ENVIRONMENT_NAME}}/`, `.rigsync_cache/`, `.waves/`, and
-`.envs/` ignored. Do not declare a build system: the project is never installed into its
-environment, so one lock-keyed wave environment can serve every worktree with the same lock.
+`pyproject.toml`: project metadata, exact `[tool.uv].required-version = "==X.Y.Z"`,
+`python-preference = "managed"`, `dependencies = ["torch"]` (the fixed framework; later packages
+come with `uv add`), and `[dependency-groups] dev = ["pytest>=8"]` from the start, since adding it
+later changes the environment fingerprint on every rig. No build system: the project is never
+installed into its environment. Commit an exact `X.Y.Z` `.python-version`. `uv.lock` is produced
+by `uv lock` during the environment gate, never
+hand-written. Copy `assets/environment.py` from the `environment-sync` skill's installed directory
+to `code/common/environment.py` unchanged.
 
 ## .githooks/pre-commit (journal guard)
 
@@ -520,11 +349,9 @@ Install with: `chmod +x .githooks/pre-commit && git config core.hooksPath .githo
 
 ## scripts/ wave script (log-capture core)
 
-Canonical pattern every launch script follows — the log path is the **mirror of the script's
-own path under `logs/`**; the working directory is the project root, and code runs from the
-wave's worktree `.waves/<wave_id>/` with the wave's keyed environment. Full self-contained template with the self-guard, the
-`LANE_RIG`/`LANE_GPUS` placement inputs, the `WAVE_ID` export and the `.status.json` failed-fallback:
-sweep-dispatch skill, `references/templates.md`.
+The log path mirrors the script's own path under `logs/`; the working directory is the project
+root and code runs from the wave worktree. The full template is in the `sweep-dispatch` skill,
+`references/templates.md`.
 
 ```bash
 #!/usr/bin/env bash
@@ -540,8 +367,6 @@ HYDRA_ARGS=(<tokens produced by hydra_override_arg; one per override>)
   | tee "$LOGDIR/wave_${LANE_RIG}_gpu${LANE_GPUS:-job}-$(date +%Y%m%d-%H%M%S).log"
 ```
 
-`pipefail` makes either the Python process or `tee` failure visible. The full wave template also
-captures both pipeline statuses so Python remains authoritative when both fail.
 
 ## code/common/paths.py
 
@@ -612,9 +437,8 @@ def storage_path(var: str, default: str) -> Path:
     return project_path(os.environ.get(var) or default)
 ```
 
-`.env` is loaded from `project_root() / ".env"`, so a wave reads the machine's real `.env` rather
-than looking for one inside its worktree. `RESEARCH_PROJECT_ROOT` support is the marker of the
-**wave-isolation contract** that `sweep-dispatch` checks before any dispatch.
+Load `.env` from `project_root() / ".env"`. `RESEARCH_PROJECT_ROOT` support is what
+`sweep-dispatch` checks for the wave-isolation contract.
 
 ## code/common/run_id.py
 
@@ -1657,9 +1481,7 @@ def guard_run_config(
 
 ## code/common/environment_smoke.py
 
-This is the default `gpu_smoke` target in `sync.toml`. It must perform a real device operation
-through the locked torch, so a rig that imports but cannot compute fails the gate. Write it
-verbatim.
+The default `gpu_smoke` target in `sync.toml`: a real device operation through the locked torch.
 
 ```python
 """Bounded GPU smoke: prove the locked runtime can actually compute on a device."""
@@ -1832,6 +1654,5 @@ class StatusWriter:
 ```
 
 Call `heartbeat(completed=<done>, total=<total>, unit=<label>)` after every completed training or
-evaluation unit. The helper also refreshes liveness and live elapsed time every 60 seconds in a
-daemon thread, so a unit that lasts longer than the launch chat's reporting cadence is still
-distinguishable from a dead process. Display-only progress is unsupported.
+evaluation unit. A daemon thread refreshes liveness and elapsed time every 60 seconds, so a long
+unit still looks alive.

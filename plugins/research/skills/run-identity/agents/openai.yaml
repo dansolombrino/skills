@@ -1,4 +1,4 @@
 interface:
   display_name: "Run Identity"
   short_description: "Look up run_id hashes and migrate run_id versions"
-  default_prompt: "Use $run-identity to look up a run_id hash, prefix or old hash, find the runs matching given params, elect the run_id params of a new experiment, or plan, apply with a logged summary, and roll back a run_id migration when a sweep adds an identity axis."
+  default_prompt: "Use $run-identity to look up a run_id hash, prefix or old hash, find the runs matching given params, elect the run_id params of a new experiment, or plan, apply, and roll back a run_id migration when a sweep adds an identity axis."

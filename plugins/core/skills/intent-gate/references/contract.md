@@ -79,6 +79,5 @@ unlocked (planning only, or planning and implementation); if that is unclear, as
 
 ## Precedence
 
-These gates are always-protected. No autonomy rule of another skill bypasses this gate: a
-research project's execution agreement and its autonomy canon do not apply here. Any other skill
+These gates are always-protected. No autonomy rule of another skill bypasses this gate. Any other skill
 that would act, plan, or edit defers to an active mirror or hold.

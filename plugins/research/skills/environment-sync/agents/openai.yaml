@@ -1,4 +1,4 @@
 interface:
   display_name: "Environment Sync"
   short_description: "Provision and verify lock-keyed wave environments"
-  default_prompt: "Use $environment-sync to ask for the hub development environment name when needed, then provision and verify a wave's lock-keyed environment across the envelope's Research 2.0 rigs and report the result."
+  default_prompt: "Use $environment-sync to provision and verify a wave's lock-keyed environment across the project's Research 2.0 rigs and report the result."

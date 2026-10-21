@@ -67,8 +67,8 @@ a systemd user service, on the machine where plots are rendered (`rig-4090`).
   - Each row can copy its hash or its full config JSON. Its WandB link appears when the config
     records a WandB URL. **plots** opens the Plots view filtered to `plots/<experiment_path>/`:
     plots select runs by hash inside the file, never in the path.
-  - Maps from legacy layouts (`segments-*`, `hashed-v1`) get a limited view: the run path or hash
-    and the params recoverable from it.
+  - Maps from older run_id layouts get a limited view: the run path or hash and the params
+    recoverable from it.
   - The address bar carries `#v=runs&p=<project>&e=<experiment>&q=<filter>`; `#p=&f=` plot links
     work as before. In the Runs view `/` focuses the run filter, `Esc` clears it, and the plot
     keys (`r`, `d`, `j`/`k`, arrows, `b`) are off.

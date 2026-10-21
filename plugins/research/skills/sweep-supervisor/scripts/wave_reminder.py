@@ -1,31 +1,33 @@
 #!/usr/bin/env python3
-"""Remind the chat that a dispatched wave is live, so the sweep-supervisor printout keeps coming.
+"""State, at session start, the facts of every live wave in this project. No instructions.
 
-Runs as a SessionStart and UserPromptSubmit hook on both hosts. Reads the hook payload on stdin,
-looks for `<project>/.waves/_state/<wave_id>/queue.json` with no `finished_at`, and prints one
-`additionalContext` line per live wave. Prints nothing when no wave is live. Never fails: a hook
-error must not get in the way of the user's prompt.
+Runs as a SessionStart hook on both hosts. Reads the hook payload on stdin, looks for
+`<project>/.waves/_state/<wave_id>/queue.json` with no `finished_at`, and prints one
+`additionalContext` line per live wave:
 
-Also runs as a PostToolUse hook on shell commands: right after `supervisor.py register ... --confirm`
-it tells the agent to start the printout in the same turn, so monitoring never waits for a prompt.
-Every other shell command is silent.
+    Live wave <id> in this project: <done>/<total> done, ETA <clock>, <n> warnings. Dashboard: <url>.
 
-The wave layout constants are copied from supervisor.py and rigsync.py rather than imported, so the
-hook starts in milliseconds on every prompt; tests/test_hooks.py keeps the copies in step.
+The numbers come from the supervisor's own `brief_view` of the wave's snapshot (the same data the
+printout and the rig-board viewer show); the dashboard is the rig-board viewer's Experiments tab,
+named only when the machine registry declares the viewer's port. Prints nothing for any other hook
+event or when no wave is live, and never fails: a hook error must not get in the way of a session.
+
+The wave layout constants are copied from supervisor.py and rigsync.py rather than imported, so a
+project without live waves costs no import at all; tests/test_hooks.py keeps the copies in step.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
 import sys
-import time
+import tomllib
 from pathlib import Path
 
 WAVE_RE = re.compile(r"\d{8}-\d{6}")  # rigsync.WAVE_RE
-TERMINAL = {"done", "failed", "excluded"}  # supervisor.TERMINAL_STATES
-PROMPT_EVERY_S = 5 * 60  # on UserPromptSubmit, remind at most this often per session
+WILDCARD_BINDS = {"", "0.0.0.0", "::", "[::]"}
 
 
 def project_root(cwd: str) -> Path | None:
@@ -38,8 +40,8 @@ def project_root(cwd: str) -> Path | None:
     return None
 
 
-def live_waves(root: Path) -> list[tuple[str, int, int]]:
-    """(wave_id, done, total) for every wave whose queue has no finished_at."""
+def live_waves(root: Path) -> list[tuple[str, dict]]:
+    """(wave_id, queue) for every wave whose queue has no finished_at."""
     out = []
     for qp in sorted((root / ".waves" / "_state").glob("*/queue.json")):
         wave_id = qp.parent.name
@@ -49,51 +51,58 @@ def live_waves(root: Path) -> list[tuple[str, int, int]]:
             queue = json.loads(qp.read_text())
         except (OSError, ValueError):
             continue
-        if queue.get("finished_at"):
-            continue
-        runs = queue.get("runs") or []
-        done = sum(r.get("state") in TERMINAL for r in runs)
-        out.append((wave_id, done, len(runs)))
+        if isinstance(queue, dict) and not queue.get("finished_at"):
+            out.append((wave_id, queue))
     return out
 
 
-def throttled(session: str, key: str) -> bool:
-    """True when this session was already reminded about `key` within PROMPT_EVERY_S."""
-    data = os.environ.get("CLAUDE_PLUGIN_DATA") or os.environ.get("PLUGIN_DATA")
-    if not data or not session:
-        return False
-    stamp = Path(data) / "wave_reminder" / f"{re.sub(r'[^A-Za-z0-9_.-]', '_', session)}.json"
+def registry_path() -> Path:
+    return Path(os.environ.get("RIGSYNC_REGISTRY") or "~/.config/rigsync/machines.toml").expanduser()
+
+
+def dashboard_url() -> str | None:
+    """The rig-board viewer's Experiments tab, from the registry's `[board]` port and bind address."""
     try:
-        seen = json.loads(stamp.read_text())
+        board = tomllib.loads(registry_path().read_text()).get("board")
     except (OSError, ValueError):
-        seen = {}
-    now = time.time()
-    if now - seen.get(key, 0) < PROMPT_EVERY_S:
-        return True
-    seen[key] = now
-    try:
-        stamp.parent.mkdir(parents=True, exist_ok=True)
-        stamp.write_text(json.dumps(seen))
-    except OSError:
-        pass
-    return False
-
-
-REGISTER_RE = re.compile(r"supervisor\.py\b.*\bregister\b.*--wave[ =](\d{8}-\d{6})")
-
-
-def registered_wave(payload: dict) -> str | None:
-    """The wave id a just-run `supervisor.py register --confirm` registered, else None."""
-    if payload.get("tool_name") not in ("Bash", "shell", "local_shell"):
         return None
-    tool_input = payload.get("tool_input")
-    command = tool_input.get("command") if isinstance(tool_input, dict) else None
-    if isinstance(command, list):
-        command = " ".join(str(part) for part in command)
-    if not isinstance(command, str) or "--confirm" not in command or "--dry-run" in command:
+    port = board.get("port") if isinstance(board, dict) else None
+    if not isinstance(port, int) or isinstance(port, bool):
         return None
-    match = REGISTER_RE.search(command)
-    return match.group(1) if match else None
+    bind = str(board.get("bind") or "")
+    host = "localhost" if bind in WILDCARD_BINDS else bind
+    return f"http://{host}:{port}/#experiments"
+
+
+def load_supervisor():
+    path = Path(__file__).resolve().with_name("supervisor.py")
+    spec = importlib.util.spec_from_file_location("wave_reminder_supervisor", path)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def fact(root: Path, wave_id: str, queue: dict, sup, board_config, url: str | None) -> str:
+    runs = queue.get("runs") or []
+    done, total, eta, warnings = sum(r.get("state") == "done" for r in runs), len(runs), "not computed yet", None
+    if sup is not None:
+        wave = sup.Wave(root, wave_id)
+        snapshot = sup.board.read_json(wave.snapshot_path)
+        if snapshot:
+            at = sup.now()
+            view = sup.brief_view(snapshot, at)
+            done, total = view["done"], view["total"]
+            moment = view["eta"]
+            eta = sup.clock(moment["at"], at) if moment["kind"] == "eta" else "unavailable"
+            warnings = len(sup.wave_warnings(wave, snapshot, at, board_config))
+    parts = [f"{done}/{total} done", f"ETA {eta}"]
+    if warnings is not None:
+        parts.append(f"{warnings} warning{'s' if warnings != 1 else ''}")
+    line = f"Live wave {wave_id} in this project: {', '.join(parts)}."
+    return line + (f" Dashboard: {url}." if url else "")
 
 
 def main() -> int:
@@ -101,40 +110,35 @@ def main() -> int:
         payload = json.loads(sys.stdin.read() or "{}")
     except ValueError:
         return 0
-    if not isinstance(payload, dict):
-        return 0
-    event = payload.get("hook_event_name") or "SessionStart"
-    if event == "PostToolUse":
-        wave = registered_wave(payload)
-        if wave:
-            text = (
-                f"Wave {wave} was just registered. Start its `sweep-supervisor` printout now, in this turn, "
-                f"without asking: run `table --wave {wave} --cycle --full`, post it, then arm the host's "
-                f"scheduled wake-up at the chat update interval (the user's N minutes, else 1) and paste "
-                f"`table --wave {wave}` verbatim at every tick until it says finished."
-            )
-            print(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}))
+    if not isinstance(payload, dict) or (payload.get("hook_event_name") or "SessionStart") != "SessionStart":
         return 0
     root = project_root(payload.get("cwd") or os.getcwd())
     waves = live_waves(root) if root else []
     if not waves:
         return 0
-    key = ",".join(w for w, _, _ in waves)
-    # SessionStart always reminds and starts the throttle window, so the first prompt does not repeat it
-    if throttled(payload.get("session_id") or "", key) and event == "UserPromptSubmit":
-        return 0
-    lines = [
-        f"Wave {w} is live ({done}/{total} runs finished): keep posting the `sweep-supervisor` "
-        f"printout (`table --wave {w}`) on its cadence, and re-arm the scheduled wake-up if none "
-        f"is armed in this chat."
-        for w, done, total in waves
-    ]
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": "\n".join(lines)}}))
+    try:
+        sup = load_supervisor()
+    except Exception:  # the facts degrade to the queue's own counts
+        sup = None
+    board_config = None
+    if sup is not None:
+        try:
+            board_config = sup.board.load_config(registry_path())
+        except Exception:
+            board_config = None
+    url = dashboard_url()
+    lines = []
+    for wave_id, queue in waves:
+        try:
+            lines.append(fact(root, wave_id, queue, sup, board_config, url))
+        except Exception:
+            lines.append(fact(root, wave_id, queue, None, None, url))
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "\n".join(lines)}}))
     return 0
 
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except Exception:  # a reminder hook must never break the session
+    except Exception:  # a hook must never break the session
         sys.exit(0)

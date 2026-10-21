@@ -1,254 +1,119 @@
 ---
 name: visualizations
-description: Create or update Research 2.0 plots as self-contained interactive HTML from provenance-valid experiment evaluation outputs, keep run_id selection inside the file instead of the export path, preserve each single producer's complete numbered hierarchy, run plotting directly on rig-4090 without orchestration or wave machinery, decide exact titles, title line arrangement, metric explanations, interaction affordances, and fully resolved export paths on every plotting-code edit, logging the reasoning to program/DECISIONS.md, and show every selectable run_id param by its full name with an (i) hover explanation from PARAM_GLOSSARY.json. Use when the user asks to plot, visualize, chart, make figures from results, add or modify scripts under visualizations/, or open, view, or serve rendered plots through the read-only plot server; do not use to recompute missing evaluation data.
+description: Create or update Research 2.0 plots as self-contained interactive HTML from experiment evaluation outputs - titles that state the selected params by full name, meaningful axis and metric text, a PARAM_GLOSSARY.json with hover explanations, run selection inside the file, one file per figure under the producer's complete numbered hierarchy, and a plot-server URL for each render. Use when the user asks to plot, visualize, chart, make figures from results, add or modify scripts under visualizations/, or open, view, or serve rendered plots through the read-only plot server; do not use to recompute missing evaluation data.
 ---
 
 # visualizations
 
-Plotting code conventions. Canon: `../research-project-init/references/conventions.md`.
-
-Directives are closed (see the canon section of that name). Take plot placement, naming, and
-style from these directives and this project's own plotting code alone; never copy a plotting
-layout or convention from another project on disk.
-
-Require the Research 2.0 scaffold and read the active execution agreement. **Which plots to make**
-and **plot communication** — titles, their line arrangement, metric explanations and placement,
-interaction affordances, library, and export paths — are agent-decided (conventions, "Autonomy").
-Every quality check below stays in force: autonomy removes the wait, never the check. The
-specification and its reasoning go to `program/DECISIONS.md`; the chat gets the plot's link and,
-when the plot reveals something, one or two lines on what. Param full names and explanations (the
-`PARAM_GLOSSARY.json` entries below) are agent-written and logged the same way; an entry is reused
-by every later plot. Scientific
-interpretation and claim changes remain owned by the user, who may override any part of a plot's
-specification at any time.
+Plots read `evaluations/` and write self-contained HTML under `plots/`. Project facts:
+`../research-project-init/references/conventions.md`. The read-only plot server:
+[references/plot-server.md](references/plot-server.md).
 
 ## Placement
 
-- Identify the plot's single producer and its complete numbered leaf hierarchy, including every
-  sub-experiment level. Call that hierarchy `<experiment_path>`; for example,
-  `000_qat_ptq_metric_equivalence/002_weight_error`.
-- Viz code lives at `visualizations/<experiment_path>/<script_stem>.py`, mirroring the complete
-  producer hierarchy. `code/` stays purely experiment code.
-- Input: **`evaluations/` only**. Read the producer's recorded experiment-wide
-  `RUN_ID_PATH_LAYOUT` and resolve inputs with
-  `run_id_path(..., layout=RUN_ID_PATH_LAYOUT)` from the canonical helper. Under `hashed-v2` the
-  identity params come from `load_run_id_spec(source_path("config/<experiment_path>"))` (the
-  tracked `config/<experiment_path>/RUN_ID_VERSIONS.json`) and every run is the
-  directory `evaluations/<experiment_path>/rid-<32 hex>/`; read its params from its `.run_id.json`
-  or `RUN_ID_MAP.json` and its readable label from `run_id_label`. Under a legacy pin pass
-  `segments=RUN_ID_SEGMENTS` when the pin is `segments-v2`/`segments-v1`. A hash is resolved to its
-  params through `.run_id.json`, `RUN_ID_MAP.json`, or `run-identity`, never recomputed by hand.
-  Never infer layout from slash depth or force `nested`. Viz never reads checkpoints or recomputes; if a quantity is absent
-  from evaluations, the producer experiment must export it first.
-- Param names: `load_param_glossary(source_path("config/<experiment_path>"), params)` reads the
-  tracked `config/<experiment_path>/PARAM_GLOSSARY.json` (§ Param glossary) for every identity
-  param the page lets the reader select, under every layout.
-- Output: under `plots/<experiment_path>/<script_stem>/` — one subfolder per script (stem =
-  filename without `.py`) after the complete producer hierarchy, holding one HTML file per figure.
-  `RUN_ID_PATH_LAYOUT` governs reads only; it never shapes a plot output path.
-- If a visualization consumes multiple producer experiment paths, stop without inferring its
-  placement; that taxonomy requires a separate user decision.
-- Unit tests for a plotting script are optional and create-on-demand. When one is written, it
-  belongs at `tests/visualizations/<experiment_path>/<script_stem>/test_*.py` (pytest).
+- The producer's complete numbered leaf hierarchy is `<experiment_path>`, e.g.
+  `000_qat_ptq_metric_equivalence/002_weight_error`. Code lives at
+  `visualizations/<experiment_path>/<script_stem>.py` and writes only below
+  `plots/<experiment_path>/<script_stem>/`, one HTML file per figure:
 
-## Interface: argparse, NOT hydra
+  ```
+  plots/000_grokking/plot_loss/loss_curve.html
+  plots/001_compression/002_weight_error/plot_layers/layer_error.html
+  ```
 
-Plotting is too dynamic to standardize into configs. Each script takes CLI args via argparse, with argument names matching **1:1** the producer experiment's param names (run_id/config params), plus extra viz-specific args as needed.
+- Plot paths carry no run_id: no `key=value` directories, no per-run folders. Name each leaf for
+  what it shows. Rerunning rewrites a leaf whole; two different scripts resolving to the same leaf
+  is an error — resolve every concrete export path before rendering and check it against other
+  scripts' outputs.
+- A plot that combines multiple producer experiment paths has no defined home: ask the user. An
+  existing plotter whose paths flatten the hierarchy is reported, not moved.
+- Inputs are `evaluations/` only, through `run_id_path(..., layout=RUN_ID_PATH_LAYOUT)` with
+  params from `load_run_id_spec(source_path("config/<experiment_path>"))`; each run is
+  `evaluations/<experiment_path>/rid-<32 hex>/`, its params in `.run_id.json` or `RUN_ID_MAP.json`.
+  A quantity missing from evaluations is exported by the producer first; plots never read
+  checkpoints. An experiment pinned to an older layout: see `run-identity`
+  references/legacy-layouts.md.
+- Tests, when wanted: `tests/visualizations/<experiment_path>/<script_stem>/test_*.py`.
 
-These args **scope** which runs the figure covers; they no longer pin the one run it shows.
-Default to every run available in `evaluations/` and treat each arg as an optional filter, so the
-emitted file carries the whole selectable space:
+## Interface
+
+argparse, not hydra. Argument names match the producer's param names 1:1 and act as optional
+filters; by default the file covers every run in `evaluations/`, so the reader can select among
+them:
 
 ```bash
-# every run:
-<environment.name>/bin/python visualizations/000_grokking/002_loss/plot_curve.py
-# restricted to one model:
 <environment.name>/bin/python visualizations/000_grokking/002_loss/plot_curve.py --model mlp
 ```
 
-## Output paths — per-script subfolder, one file per figure
+## Communicating clearly
 
-Each script writes only below the plot root obtained by replacing its leading `visualizations/`
-with `plots/` and removing `.py`. This preserves every numbered hierarchy component and adds the
-script stem exactly once. Inside that root a figure is one leaf file, and
-run_id selection lives inside the file rather than in the path:
+Decide these for every plot, each time the plotting code changes:
 
-```
-plots/000_grokking/plot_loss/loss_curve.html
-plots/000_grokking/plot_acc_vs_lr/acc_vs_lr.html
-plots/001_compression/002_weight_error/plot_layers/layer_error.html   # nested producer
-```
-
-No plot path carries run_id segments: no `key=value` directories, no per-run subfolders anywhere
-under `plots/`. Protect `plots/`, the complete `<experiment_path>`, `<script_stem>`, and the leaf
-filename — none of them may be collapsed. A script may emit several leaves when it produces
-genuinely distinct figures; name each leaf for what it shows, and keep leaf and stem distinct so
-variants of one figure stay expressible.
-
-Rewriting a leaf whole is the expected result of every rerun. That self-overwrite needs no new
-decision while the resolved path is unchanged. Two different scripts resolving to the same leaf is
-still an error: choose a new leaf and report it rather than letting one clobber the other.
-
-Before modifying an existing single-producer plotter, verify that its code and output roots
-preserve the producer's complete `<experiment_path>`. Report a flattened or otherwise mismatched
-layout and stop; do not move or rewrite artifacts.
-
-## Artifact contract — self-contained interactive HTML
-
-Every plot is one self-contained interactive HTML file at
-`plots/<experiment_path>/<script_stem>/<leaf>.html` that a colleague can open in a browser with no
-network, no server, and no sibling files:
-
-- **One self-contained file.** Inline every script, style, and datum. No `http(s)://` references,
-  no CDN tags, no external asset paths. Confirm it renders correctly from `file://` with the
-  network unavailable.
-- **Plotly is the default library**, because it satisfies that contract and gives legend series
-  toggling natively. A different library for a specific plot is part of its communication
-  specification: use one only where the plot needs it and log why;
-  never mix libraries silently within a project.
-- **White background, always.** The page and the figure render on white regardless of the
-  reader's browser or OS theme. Set the HTML `body` background to `#ffffff` explicitly, set the
-  figure's `paper_bgcolor` and `plot_bgcolor` to `#ffffff` (Plotly's default `plotly` template
-  paints the plot area grey, so overriding it is mandatory), and never emit a dark-mode or
-  `prefers-color-scheme` variant. Keep text and gridline colors dark enough to stay legible on
-  white.
-- **File size is not a constraint.** `plots/` is gitignored, so plots are shared by sending the
-  file. Never propose committing plot output, and never downsample data to shrink a file.
-- **Selection first, figure second.** The page lets the user choose among the run_id params the
-  file covers, then renders the figure for that selection. Under `hashed-v2` the selection is keyed
-  by run hash and always shows each run's label beside it, so a reader never has to decode a hash.
-- **Every selectable param is self-explaining.** Each run_id param in the selector is shown by its
-  glossary **full name only** — never the raw config key — followed by an **(i)** icon whose hover
-  tooltip shows the glossary explanation. Under `hashed-v2` the per-run label beside each hash is
-  rendered with the same full names (`Full name = value, …`), built in the page from the run's
-  params; `run_id_label` stays the raw WandB form and is not what the selector shows. Embed the
-  glossary entries the page uses in the `plot-data` JSON block, so the file still explains itself
-  offline. A selectable param with no glossary entry stops the render: propose the entry (§ Param
-  glossary) instead of falling back to the raw key. Axis and metric text is unaffected.
-- **Two download buttons, always.** Every plot carries an "All runs" button that saves the whole
-  file and a "Selection" button that saves a trimmed self-contained file holding only the runs the
-  current view shows; both save under the leaf filename. Inline this skill's
-  `assets/plot-download.js` verbatim as the first `<script>` in `<head>` — the plotting script
-  carries its text as a constant, never a path into the skill install — and meet the page
-  contract in its header: `data-plot-leaf` on `<html>`, every per-run datum under the `runs`
-  object of the `plot-data` JSON block keyed by run_id (the `rid-<32 hex>` hash under `hashed-v2`)
-  with `<` escaped, a `window.plotSelectedRuns()` returning the run_ids in view, and rendering only
-  from `DOMContentLoaded` or later. The buttons are fixed page furniture, not part of the
-  communication specification, and the user cannot decline them. An existing plotter that lacks
-  them gains them with its next edit.
-- **Reader toolbar, always.** Inline this skill's `assets/plot-shell.js` verbatim, as a constant
-  like the download script, as the second `<script>` in `<head>`: after `plot-download.js` and
-  before Plotly. Mark the run-selection container (one or more elements) `data-plot-controls` and
-  the provenance block `data-plot-provenance`, and draw only through `Plotly.newPlot` or
-  `Plotly.react`. It gives every plot a sticky toolbar: hide or show the run selection (a
-  one-line summary of the current values stays visible while it is hidden), box zoom or pan, zoom
-  in, out and reset, an x-only or y-only zoom lock, mouse-wheel zoom, hover at x, crosshair
-  spikes, legend and every series on or off, log y, fit the figure to the window, PNG and SVG
-  export named after the leaf, fullscreen, and keyboard shortcuts (`?` lists them). Reader
-  settings persist in the browser and survive selection changes; provenance folds behind a
-  summary line. Like the download buttons it is fixed furniture, outside the communication
-  specification, and the user cannot decline it; an existing plotter gains it with its next edit,
-  and the plot server injects it into older plots it shows. Never hand-build a second zoom,
-  hide-selection, or export control in the page.
-- **Offer the affordances the figure's shape earns**: a series toggle whenever it carries two or
-  more line series, and a slider or stepper whenever it spans an ordered dimension such as layer,
-  epoch, step, or checkpoint. Decide each one as part of the specification and say why; the user
-  may decline one. Never impose a fixed interaction checklist beyond what the shape implies.
+- **Title.** It states every selected identity param as `Full name = {value}` with the glossary's
+  full name, never the raw key, and re-renders with the selection. Arrange params across title
+  lines for this plot's reader rather than reusing another plot's arrangement. With no fixed
+  param, use a plain semantic title.
+- **Axes and metrics.** Name every axis and say, inside the figure (axis label, subtitle, legend,
+  annotation, or caption), what each plotted metric measures and whether higher, lower, a target,
+  or no direction is better. Cover separate panels, derived metrics, and encodings separately
+  unless one explanation fits all. When the producer's code and schema don't ground a metric's
+  meaning, ask rather than guess.
+- **Selector.** Each selectable param shows its glossary full name only, followed by an **(i)**
+  icon whose hover shows the explanation. Under `hashed-v2` the selection is keyed by run hash and
+  shows each run's params beside it in the same full names (`Full name = value, …`).
+- **Affordances.** A series toggle for two or more line series, a slider or stepper for an
+  ordered dimension (layer, epoch, step, checkpoint); nothing the figure's shape doesn't call for.
+- **Provenance.** The selected run_ids in the figure; the producer `<experiment_path>`, project
+  revision, render time, and evaluation paths in an unobtrusive page block, never in the title.
+- Choose the smallest visualization that answers the question.
 
 ## Param glossary
 
-`config/<experiment_path>/PARAM_GLOSSARY.json` is the tracked, per-experiment source of every
-param's full name and explanation, beside `RUN_ID_VERSIONS.json` under every layout. It is neither
-a hydra config nor identity: editing it never changes a run_id. Shape:
+`config/<experiment_path>/PARAM_GLOSSARY.json`, tracked beside `RUN_ID_VERSIONS.json`; not
+identity, so editing it never changes a run_id:
 
 ```json
 {"lr": {"name": "Learning rate", "explanation": "Step size of each optimizer update; higher learns faster but can diverge."}}
 ```
 
-- A name is the param's plain-language full name; an explanation says what the param controls
-  and what changing it does, in one or two sentences a reader understands without the code.
-- **Agent-written, logged.** Before a plot needs a param with no entry, or when an entry's wording
-  should change, write the exact `name` and `explanation` grounded in the producer's config and
-  code, and log it. Never render a raw key in its place.
-- Every later plot of the experiment reuses an entry. The user may reword any entry at any time.
-- Commit the glossary with the plotting code that first needs it.
+The name is the plain-language full name; the explanation says what the param controls and what
+changing it does, in a sentence or two grounded in the producer's config and code. Read entries
+with `load_param_glossary(source_path("config/<experiment_path>"), params)`, which fails on a
+missing entry: write the entry rather than fall back to the raw key. Entries are reused by later
+plots, and the user may reword any of them. Commit the glossary with the plotting code.
 
-## Design & execution
+## The HTML file
 
-- Before every creation or modification of plotting code, read the producer's authoritative
-  identity (`load_run_id_spec` under `hashed-v2`; the ordered `RUN_ID_PARAMS` and, when pinned,
-  `RUN_ID_SEGMENTS` under a legacy pin), `RUN_ID_PATH_LAYOUT`, metric definitions, evaluation
-  schema, and scientific contract. Determine which identity params the figure covers and which of
-  them the page lets the reader select.
-- Decide one exact communication specification per plot: the title, the visible in-figure metric
-  explanation, the interaction affordances, and the complete project-relative export path rooted
-  at `plots/` and ending in its leaf filename. Explain what every plotted metric measures and its
-  higher/lower/target/range/no-universal-direction interpretation, and decide that text's exact
-  placement.
-- The title states **every** selected identity param as `Full name = {value}`, using its glossary
-  full name (never the raw key), so a figure is never ambiguous about which runs it shows and
-  never needs decoding. Titles are dynamic: they re-render with the selection.
-  Decide the title template with every placeholder identified, and log one fully resolved
-  example.
-- **Decide how the params are arranged across title lines** — which params share a line, in what
-  order, and where the semantic part sits — for this plot's reader. This differs per plot: decide
-  it each time, never carry one over from another plot, and log why.
-- Keep provenance in the file, since `plots/` is gitignored and the file travels alone: the
-  selected run_ids (with their labels under `hashed-v2`) in-figure, and the producer
-  `<experiment_path>`, the project revision at render time, the render timestamp, and the
-  evaluation source paths read in an unobtrusive page-level block. That metadata stays out of the
-  title and must never crowd it.
-- Dropping run_id segments normally makes the export path fully determined before the code edit.
-  If runtime values still prevent that, decide the complete path template and identify every
-  placeholder explicitly. Before rendering, resolve every concrete export path, including its leaf
-  filename, and reject any destination that collides with a different script's output. A template
-  never stands in for a concrete destination: a new or changed resolved path is resolved and
-  collision-checked again, even when it conforms to the template.
-- Cover multiple axes, panels, derived metrics, and visual encodings separately unless one shared
-  explanation is unambiguous. Stop rather than guess when metric semantics are not grounded. Put
-  the explanation in an axis label, subtitle, legend, annotation, or in-figure caption; surrounding
-  prose alone does not satisfy the requirement.
-- Edit the plotting code and render without waiting, then log the specification, every fully
-  resolved concrete export path, and the reasoning behind each choice to `program/DECISIONS.md`.
-  Every later plotting-code edit decides, checks, and logs its specification again, even when it
-  is unchanged.
-- After rendering, open the file and verify that the decided text is present, legible, and
-  unchanged in the page's default view, that every decided affordance actually works, and that
-  the decided strings are present in the HTML source, that every selectable param shows its
-  glossary full name with a working (i) hover explanation, that the page and plot area
-  are white, and that both download buttons save a file that reopens offline — the selection
-  file holding only the runs in view, and that the reader toolbar hides and shows the selection
-  and its zoom in, out and reset act on the figure. When a check fails, fix the code, render again, and log
-  the correction; never hide a check that still fails.
-- **Hand the user each rendered file as a URL.** Run this skill's
-  `scripts/plot_server.py url <file>` on the rendering machine for every leaf written. Always give
-  the user the printed `public:` URL first, as a clickable link: the user usually browses from a
-  different machine, where a `127.0.0.1` link does not resolve. Give the `local:` URL only as a
-  secondary line labeled for this machine or an SSH tunnel, and open it in an IDE browser tab when
-  the host can open one for the project's workspace. When no `public:` line is printed, say so and
-  point to `[plots] public_url` in `references/plot-server.md`. Never start an ad-hoc server,
-  copy the file elsewhere, or print the access token. If the file is not servable, the server is
-  not answering, or it does not serve the file yet (a sandboxed server publishes a new project
-  within 2 minutes), say so and point to `references/plot-server.md`; the file path stays the
-  fallback.
-- **Run lookup.** The plot server's **Runs** view (header toggle) shows hash ↔ params for one
-  experiment from its `evaluations/<experiment_path>/RUN_ID_MAP.json` and the tracked
-  `config/<experiment_path>/RUN_ID_{VERSIONS,HISTORY}.json` (or the copies the map embeds): filter
-  by `key=value`, paste a hash or prefix (an old hash resolves through `RUN_ID_HISTORY.json`), copy
-  a run's config, and jump to the plots that include it. The map embeds every run's resolved
-  config, so the Runs view exposes those configs to anyone who can open the page (never `.env`). Point the user there when they ask which run a hash in a plot is.
-- **No fixed plot checklist**: choose the smallest visualization that answers the question the
-  plot is for.
-- Treat every plotting render as a direct, non-orchestrated fast path. Run its argparse command in
-  the foreground on **`rig-4090`**, where evaluations converge. When another host is active,
-  connect directly to `rig-4090` and run from its project checkout; stop if that checkout cannot
-  be identified or reached.
-- Do not invoke `sweep-dispatch`, `rig-sync`, or
-  `experiments-tracking` for plotting. Do not create orchestration control state, mint a wave id,
-  generate launch scripts, dispatch work, start tmux, or add/update `EXPERIMENTS.md` rows.
-- Every plotting-code edit and render ⇒ a `program/DECISIONS.md` line with the specification and
-  resolved paths, and a `research-journal` entry when the plot reveals something.
-- **After every wave, unattended.** `sweep-supervisor`'s `analyze` follow-up applies this skill
-  when a wave finishes: it re-renders the experiment's plotters, or creates the first ones, with
-  every rule above in force — titles, axis and metric text, glossary, verification — and hands the
-  `public:` URLs to `followup-report` instead of a chat.
+- One self-contained file: every script, style, and datum inline, no network references; it
+  must render from `file://` offline. Plotly is the default library. `plots/` is gitignored, so
+  plots travel as files; size is not a constraint and data is never downsampled.
+- White page and plot area always (`body` `#ffffff`, `paper_bgcolor` and `plot_bgcolor`
+  `#ffffff`), no dark-mode variant.
+- Inline this skill's `assets/plot-download.js` verbatim as the first `<script>` in `<head>` (it
+  adds "All runs" and "Selection" download buttons) and `assets/plot-shell.js` verbatim as the
+  second, before Plotly (the reader toolbar: hide the selection, zoom, export, fullscreen).
+  Carry their text as constants in the plotting script, never as paths into the skill install.
+  The page contract they need: `data-plot-leaf` on `<html>`; per-run data under `runs` in the
+  `plot-data` JSON block keyed by run_id, with `<` escaped; `window.plotSelectedRuns()` returning
+  the run_ids in view; rendering from `DOMContentLoaded` or later; the selection container marked
+  `data-plot-controls` and the provenance block `data-plot-provenance`; drawing only through
+  `Plotly.newPlot` or `Plotly.react`. Both scripts are fixed furniture on every plot; don't build
+  a second zoom, hide, or export control.
+
+## Render and hand over
+
+- Plotting is a direct command, not a launch: run the argparse command in the foreground on
+  `rig-4090`, where evaluations converge, from its project checkout. No wave, tmux, `sweep-dispatch`,
+  `rig-sync`, or EXPERIMENTS.md rows.
+- After rendering, open the file and check that the title, axis, and metric text are present and
+  legible, the (i) hovers work, the page is white, the affordances work, and both download buttons
+  produce files that reopen offline.
+- Give the user each rendered file as a link from `scripts/plot_server.py url <file>` (this
+  skill's installed directory) run on the rendering machine: the `public:` URL first, the
+  `local:` one only as a secondary line. If no `public:` line prints or the server does not serve
+  the file yet, say so and point to `references/plot-server.md`.
+- The server's **Runs** view maps hashes to params for an experiment; point the user there for
+  "which run is this hash".
+- A plot that reveals something gets a `research-journal` entry.
+- After a wave finishes, `sweep-supervisor`'s `analyze` follow-up applies this skill unattended,
+  with the same rules.

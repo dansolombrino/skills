@@ -870,7 +870,7 @@ def print_plan_summary(plan: dict, out: Path) -> None:
     for note in plan["notes"]:
         print(f"  note: {note}")
     print(f"plan written: {out}")
-    print("Log this summary to program/DECISIONS.md, then apply (agent-decided; rollback undoes it):")
+    print("Apply with (a rollback manifest is written first; migrate rollback undoes it):")
     print(f"  runid.py --project {plan['project']} --experiment {plan['experiment']} migrate apply --plan {out} --confirm")
 
 

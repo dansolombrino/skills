@@ -1,215 +1,95 @@
 ---
 name: rig-sync
-description: Deploy exact tested Git revisions as per-wave worktrees and move artifacts across configured Research 2.0 GPU rigs, including the continuous hub-ward offload that keeps a disk-constrained rig usable. Use when preparing an approved empty rig clone, verifying GitHub and rig identity, materializing an authorized wave commit as a worktree, checking cross-rig revision consistency, listing which waves are active on a machine, proposing or running an approved prune of finished wave worktrees and unused environments, transferring selected artifacts, collecting wave evaluations to the hub, offloading a supervised wave's checkpoints from a rig short on disk, restoring a run's checkpoints to the rig resuming it, or copying a declared shared-cache subtree to a rig. Pair with environment-sync; do not use for legacy projects, environment provisioning, destructive Git recovery, deletion of anything but approved prune targets and checksum-verified offloaded checkpoints, or writes outside an approved engineering envelope.
+description: Deploy exact tested Git revisions as per-wave worktrees and move artifacts across configured Research 2.0 GPU rigs, including the continuous hub-ward offload that keeps a disk-constrained rig usable. Use when validating declared rig paths, preparing a rig clone, copying the project .env or shell cache settings to a rig, materializing a wave commit as a worktree, checking cross-rig revision consistency, listing which waves are active on a machine, pruning finished wave worktrees and unused environments, transferring selected artifacts, collecting wave evaluations to the hub, offloading a supervised wave's checkpoints from a rig short on disk, restoring a run's checkpoints to the rig resuming it, or copying a declared shared-cache subtree to a rig. Pair with environment-sync; do not use for legacy projects, environment provisioning, or destructive Git recovery.
 ---
 
 # rig-sync
 
-Run this skill's bundled `scripts/rigsync.py` against a structured research-project root. Read
-[references/configuration.md](references/configuration.md) when creating or repairing `sync.toml`
-or the user registry. Git/GitHub distributes launch source; rsync moves selected artifacts.
-
-Each machine's `repo_path` is a main checkout plus the shared storage tree. A wave never executes
-from the main checkout: `deploy-revision` gives it a detached worktree `.waves/<wave_id>` pinned
-to its `wave--<wave_id>` tag, and deployment never moves the main checkout. Waves of different
-revisions therefore coexist on one machine.
+`scripts/rigsync.py` moves source by Git and artifacts by rsync across the rigs declared in the
+project's `sync.toml` and the user registry `~/.config/rigsync/machines.toml` (formats:
+[references/configuration.md](references/configuration.md)). Each machine's `repo_path` is a main
+checkout plus shared storage; a wave runs from its own worktree `.waves/<wave_id>` at its tag,
+and deployment never moves the main checkout.
 
 **Resolving this skill's own files.** `scripts/rigsync.py` means *this skill's installed
-directory* — the folder holding the SKILL.md you are reading — not the research project. Use that
-directory's absolute path. Never resolve it against the project root: the project's own `scripts/`
-holds shell wave scripts only and has no `rigsync.py`.
-
-Read `program/00-execution-agreement.md` and the Research 2.0 conventions
-(`../research-project-init/references/conventions.md`, including "Directives are closed" — never
-infer paths, machine entries, or defaults from another project on disk) first. Stop when the
-project surfaces are absent. Autonomy follows conventions, "Autonomy":
-
-- **Agent-decided** (dry run, then `--confirm`, then one `program/DECISIONS.md` line):
-  `deploy-revision` of the tagged wave commit, `prepare` on a rig already declared in the user
-  registry, `offload` (on by default for every non-hub lane rig; Slurm targets such as `leonardo`
-  excluded, and `supervisor.py` rejects offload entries that are not lane rigs), `collect`, `prune`
-  of waves whose rows are all terminal, and `pull`, `push`, `sync-cache`, and `restore` for the
-  named source, destination, revision, and selector inside the envelope, plus `provision-env` and
-  `push-env` on declared rigs (conventions, "Secrets").
-- **Always ask**: new destinations, `--overwrite`, and any destructive recovery.
-
-## Safety contract
-
-- Run `check-paths` before the first remote step on a project, `doctor` before dispatch,
-  `verify-revision` before every initial/recovery launch, and `status` before artifact movement.
-  Run `environment-sync verify` separately after revision deployment; Git consistency does not
-  prove installed-environment consistency.
-- Run a `--dry-run` before every remote write, then confirm it as above for the named source,
-  destination, and selector. Deploying the tagged wave commit as worktrees on the envelope's rigs
-  is agent-decided.
-- Never force-push, reset, stash, clean, merge, add `--delete`, delete remote files, or infer an
-  SSH alias/path. This skill performs exactly two deletions. `prune` (below) runs only after its
-  dry run, and only on waves whose rows are all terminal. `offload` (below) removes a
-  rig's copy of a checkpoint only under its fixed predicate, and is on by default for every non-hub
-  lane rig of a wave's pool (Slurm targets such as `leonardo` excluded; `supervisor.py` rejects
-  offload entries that are not lane rigs) rather than authorized per pass — the data still exists, checksum-verified,
-  on the hub. `collect` deletes nothing on either side.
-  Never delete a file by hand because `offload` kept it: the clause it names is the reason.
-- Treat `rig-4090` as local when its configured name or hostname matches the current host; do not
-  require self-SSH. Use bounded, noninteractive SSH for peers.
-- Treat a configured registry `hostname` as an identity assertion: `doctor` must compare it with
-  the selected machine's observed hostname and fail on drift.
-- Treat the registry's storage roots and `caches` the same way: a rig's volumes and shared cache
-  paths are **declared, never guessed**, and never defaulted to `$HOME`/`~/.cache`. A rig may
-  declare several roots (`storage_roots`; the single `storage_root` form still works). A project's
-  root is the declared root containing its resolved `repo_path`; never add a root to the registry
-  to make a path pass. `doctor` resolves `repo_path` before comparing, fails a root that sits on the
-  system filesystem (an unmounted volume), checks that root's headroom against its quota rather
-  than `df` alone,
-  probes a **non-interactive** shell for the cache values, and fails a project `.env` that
-  re-declares any of them.
-- `provision-env` edits shell startup files on the rig. It is safe unattended because the script
-  backs up `.zshenv` and `.bashrc` on every run (`.rigsync.prev`, plus the first-ever
-  `.rigsync.bak`), verifies a non-interactive shell sees every declared value, and restores the
-  backup itself when it does not. Run its dry run, then `--confirm`, and log it; on a shared
-  machine log that the change affects that account's every future shell.
-- `push-env` places the hub's `.env` on a peer that Git left without one. It **moves secrets**, so
-  the script makes the safe path the only one: ssh only, a declared machine only, the file lands
-  0600, no value is ever printed, an identical peer file is a no-op, and a different peer file is
-  kept and its differing key names reported. Run it without asking; never pass `--overwrite`
-  without explicit user approval.
-- Never spell a rig's project path or storage floor by hand. Read them back with `repo-path` and
-  `storage-env`; a second copy of a declared fact is a second thing that can be wrong.
-- Stop dispatch when `doctor` fails for an assigned rig.
-- Refuse deployment when the main checkout's branch/remote differs, the hub does not ignore
-  `.waves/` and `.envs/` (the wave-isolation contract is missing: say so), the remote tag does not
-  name the approved SHA or the remote branch does not contain it, or the repository uses
-  unconfigured submodules/Git LFS. Never repair an existing worktree: `verify-revision` reports
-  its drift and the wave stops.
-- Git on every machine must support `git worktree remove` (2.17 or newer); `doctor` checks it.
+directory* — the folder holding the SKILL.md you are reading — not the research project, whose own
+`scripts/` holds shell wave scripts only.
 
 ## Commands
 
-Set `RIGSYNC_SCRIPT` to the absolute path of this skill's own `scripts/rigsync.py` — see
-"Resolving this skill's own files" above — then run:
-
 ```bash
+RIGSYNC_SCRIPT=/absolute/path/to/rig-sync/scripts/rigsync.py
 python3 "$RIGSYNC_SCRIPT" check-paths
 python3 "$RIGSYNC_SCRIPT" repo-path --machine behemoth
 python3 "$RIGSYNC_SCRIPT" storage-env --machine behemoth
 python3 "$RIGSYNC_SCRIPT" doctor --machines rig-4090,rig-3090-ti,rig-3080-ti,behemoth
-python3 "$RIGSYNC_SCRIPT" provision-env --machines rig-4090,rig-3090-ti,behemoth --dry-run
-python3 "$RIGSYNC_SCRIPT" provision-env --machines rig-4090,rig-3090-ti,behemoth --confirm
-python3 "$RIGSYNC_SCRIPT" prepare --machine rig-3090-ti --dry-run
-python3 "$RIGSYNC_SCRIPT" prepare --machine rig-3090-ti --confirm
-python3 "$RIGSYNC_SCRIPT" push-env --machine rig-3090-ti --dry-run
-python3 "$RIGSYNC_SCRIPT" push-env --machine rig-3090-ti --confirm
-python3 "$RIGSYNC_SCRIPT" deploy-revision --wave 20260802-120000 \
-  --revision <40-char-sha> --branch main --machines rig-4090,rig-3090-ti --dry-run
-python3 "$RIGSYNC_SCRIPT" deploy-revision --wave 20260802-120000 \
-  --revision <40-char-sha> --branch main --machines rig-4090,rig-3090-ti --confirm
-python3 "$RIGSYNC_SCRIPT" verify-revision --wave 20260802-120000 \
-  --revision <40-char-sha> --branch main --machines rig-4090,rig-3090-ti
+python3 "$RIGSYNC_SCRIPT" provision-env --machines rig-4090,rig-3090-ti,behemoth --dry-run|--confirm
+python3 "$RIGSYNC_SCRIPT" prepare --machine rig-3090-ti --dry-run|--confirm
+python3 "$RIGSYNC_SCRIPT" push-env --machine rig-3090-ti --dry-run|--confirm
+python3 "$RIGSYNC_SCRIPT" deploy-revision --wave 20260802-120000 --revision <40-char-sha> --branch main --machines rig-4090,rig-3090-ti --dry-run|--confirm
+python3 "$RIGSYNC_SCRIPT" verify-revision --wave 20260802-120000 --revision <40-char-sha> --branch main --machines rig-4090,rig-3090-ti
 python3 "$RIGSYNC_SCRIPT" activity --machines rig-4090,leonardo
-python3 "$RIGSYNC_SCRIPT" prune --machines rig-4090,leonardo --waves 20260802-120000 --dry-run
-python3 "$RIGSYNC_SCRIPT" prune --machines rig-4090,leonardo --waves 20260802-120000 --confirm
-python3 "$RIGSYNC_SCRIPT" offload --machine behemoth --wave 20260802-120000 --dry-run
-python3 "$RIGSYNC_SCRIPT" offload --machine behemoth --wave 20260802-120000 --confirm
+python3 "$RIGSYNC_SCRIPT" prune --machines rig-4090,leonardo --waves 20260802-120000 --dry-run|--confirm
+python3 "$RIGSYNC_SCRIPT" offload --machine behemoth --wave 20260802-120000 --dry-run|--confirm
 python3 "$RIGSYNC_SCRIPT" restore --machine rig-3090-ti --wave 20260802-120000 --run <run_id_name> --confirm
-python3 "$RIGSYNC_SCRIPT" collect --wave 20260802-120000 --machine behemoth --dry-run
-python3 "$RIGSYNC_SCRIPT" collect --wave 20260802-120000 --confirm
+python3 "$RIGSYNC_SCRIPT" collect --wave 20260802-120000 [--machine behemoth] --dry-run|--confirm
 python3 "$RIGSYNC_SCRIPT" collect --check --wave 20260802-120000
 python3 "$RIGSYNC_SCRIPT" sync-cache --var HF_DATASETS_CACHE --subpath <relative subtree> --to rig-3090-ti --dry-run
 python3 "$RIGSYNC_SCRIPT" status --group evaluations
-python3 "$RIGSYNC_SCRIPT" pull evaluations/000_exp --from rig-3090-ti --dry-run
-python3 "$RIGSYNC_SCRIPT" pull evaluations/000_exp --from rig-3090-ti --confirm
+python3 "$RIGSYNC_SCRIPT" pull evaluations/000_exp --from rig-3090-ti --dry-run|--confirm
 ```
 
-`deploy-revision` requires the remote `wave--<wave_id>` tag to name the approved SHA and the remote
-branch to contain it (the branch may have moved on — tracking commits, later waves — which is what
-lets recovery redeploy an old wave). It fetches the tag and runs
-`git worktree add --detach .waves/<wave_id> <sha>` where the worktree is absent; an existing one is
-only verified. `verify-revision` requires the worktree to belong to this `repo_path`, its `HEAD`
-and the tag to name the SHA, and its `code/`, `config/`, `scripts/`, dependency manifests,
-Python/uv pins, and `sync.toml` to be clean; it also checks the main checkout's branch and remote.
-Always include the hub in both: it is the fingerprint reference. `sweep-dispatch` combines this
-gate with `environment-sync`.
+Every write has a `--dry-run`. `rig-4090` is local when its name or hostname matches the current
+host; peers get bounded, non-interactive SSH.
 
-`activity` is read-only: per machine it groups this project's tmux lanes, `running` statuses, and —
-on a `gpus = "job"` machine — queued or running Slurm jobs submitted from `repo_path`, by wave id,
-and lists the machine's wave worktrees and keyed environments. Evidence without a wave id is shown
-under `?`.
+- `check-paths` — each `repo_path` sits under one of its rig's declared storage roots. Run it
+  before the first remote step: it catches a misplaced path before anything is cloned there.
+- `repo-path` / `storage-env` — read a rig's project path and storage floor back; never retype
+  them.
+- `doctor` — before dispatch: hostname identity, Git (2.17+ for worktrees), storage roots
+  resolved and mounted, quota headroom (`quota`, not `df` alone), shared cache values visible to a
+  non-interactive shell, and no project `.env` redeclaring them.
+- `provision-env` — writes the rig's declared shared-cache variables into a marked block of
+  `.zshenv`/`.bashrc`, backs both up, verifies a non-interactive shell, and restores the backup
+  when that fails. On a shared machine it changes that account's every future shell.
+- `prepare` — clones the hub remote into an absent or empty `repo_path`.
+- `push-env` — copies the hub's `.env` to a declared peer (Git leaves a fresh clone without one):
+  lands 0600, prints key names only, does nothing when identical, and keeps a different peer file,
+  naming the differing keys, unless `--overwrite`.
+- `deploy-revision` — requires the remote tag `wave--<wave_id>` to name the SHA and the branch to
+  contain it, then `git worktree add --detach .waves/<wave_id>`; an existing worktree is only
+  verified. `verify-revision` checks the worktree is this repo's, on the tag, and clean in `code/`,
+  `config/`, `scripts/`, and the dependency manifests. Always include the hub. Both refuse a hub
+  that does not ignore `.waves/` and `.envs/`.
+- `activity` — read-only: per machine, this project's tmux lanes, `running` statuses, and Slurm
+  jobs grouped by wave, plus worktrees and keyed environments.
+- `prune` — removes the named waves' worktrees (never forced) and every `.envs/<env_key>` no
+  remaining worktree uses; refuses a wave with activity, unattributable activity, a dirty
+  worktree, or one the supervisor still has registered without `finished_at`. A pruned wave stays
+  recoverable from its tag.
+- `offload` — one pass of the hub-ward copy for a supervised wave on a rig short on disk: copies
+  checkpoint and evaluation files older than two minutes to the hub, then frees a rig checkpoint
+  only when it is this wave's, settled, not the newest checkpoint of an unfinished run, and
+  SHA-256-identical on the hub, leaving `<file>.offloaded.json` first. Evaluations are kept. It
+  refuses when the hub is under its own floor. `restore` copies one run's checkpoints back to the
+  rig that will resume it.
+- `collect` — copies a wave's evaluation records (`.run_id.json`, `.run_config.json`,
+  `.status.json`, metrics) from every pool rig to the hub; never deletes, never copies
+  checkpoints, sha256-verifies each file. A finished hub record is not overwritten (a later
+  rerun's files replace a `failed` attempt); a `.run_id.json`/`.run_config.json` that differs is a
+  hard error for a person to settle. `collect --check` changes nothing and lists rig records the
+  hub lacks or holds differently: the "reconciled" precondition of the dispatch run_id gate and
+  `runid migrate plan`. A rig it cannot reach passes only for a finished wave whose final collect
+  from it succeeded.
+- `sync-cache` — copies one relative subtree of a declared shared cache hub → rig, under a lock,
+  never deleting.
+- `pull`/`push` — artifact selectors `<group>` or `<group>/<path>` from `[artifacts]`; `pull` is
+  peer → here. A cluster with `transfer_ssh` declared moves data through that host.
 
-`prune` removes the named waves' worktrees with `git worktree remove` (never forced), then every
-`.envs/<env_key>` no remaining worktree uses; it refuses a wave with any activity, any activity it
-cannot attribute to a wave, a dirty worktree, and a wave the hub's supervisor still has registered
-without `finished_at` (`sweep-supervisor finish` first), and leaves unrecognized `.envs/` entries alone.
-It is run by `sweep-dispatch` when a wave ends and by `experiments-tracking` reconciliation,
-with `--confirm` right after its dry run (agent-decided, logged). A pruned wave stays
-recoverable: `deploy-revision` recreates its worktree from the tag. `push-source` never establishes Research 2.0 launch consistency and must not
-be used by dispatch.
+## Limits
 
-`offload` is one pass of the continuous hub-ward copy that lets a rig with little disk keep
-working; low disk is never a reason to leave a rig out of a wave. `sweep-supervisor` runs it every
-cycle for the rigs a wave declared, and it needs that wave's queue on the hub (it refuses any
-other wave). Per pass it lists the wave's checkpoint and evaluation directories on the rig, copies
-to the same relative paths on the hub every file written more than two minutes ago that the hub
-lacks, then frees a rig file **only when every clause holds**: it is under the run's recorded
-checkpoint directory inside `[artifacts.checkpoints]`; the run's status carries this wave id (this
-wave produced it); it was written more than two minutes ago; it is not the newest checkpoint of a
-run that is not `done` (a resume needs it); and the hub copy's SHA-256 equals the rig's. It writes
-`<file>.offloaded.json` (path, size, checksum, hub path, time, wave) atomically **before**
-unlinking, so an interrupted pass leaves the file or the receipt, never neither. Evaluations are
-copied and always kept: the run's self-guard and reconciliation read them, and both accept a
-receipt in place of an offloaded final artifact. It refuses to run when the hub is under its own
-storage floor. `restore` is the way back: hub → rig copy of one run's checkpoints for a run that
-will resume on a rig that never had them. `sync-cache` copies one relative subtree of a **declared**
-shared cache (`[machines.<rig>.caches]`) hub → rig, never deletes, and serializes on a lock in the
-rig's cache so two lanes never fetch the same data at once; it refuses undeclared variables and
-paths with `..`.
-
-### Collect evaluation records to the hub
-
-`rigsync collect --wave <wave_id> [--machine <rig>] --confirm` (run on the hub) copies the wave's
-evaluation directories (`eval_dir`: `.run_id.json`, `.run_config.json`, `.status.json`, metrics and
-results) from each rig in the wave's pool to the same relative path on the hub. It never deletes
-on either side and never copies checkpoints (`offload` owns those). It is additive and runs
-without asking; `--dry-run` prints the plan.
-
-- Files are collected once 120 s old; `.status.json` and every file of a finished (`done`/`failed`)
-  run are collected at once.
-- A differing hub copy is replaced only by a newer rig copy of a run the hub does not yet record as
-  finished; `.status.json` never turns a finished hub record back into an unfinished one. A
-  finished hub copy that differs is a `[conflict]`: reported, kept. The one exception is a rerun:
-  when the hub records a `failed` attempt and the rig holds a finished attempt of the same run that
-  started later, the rerun's files replace the failed try's.
-- A `.run_id.json` / `.run_config.json` that differs between rig and hub is a hard error: nothing
-  of that run is copied, the command exits non-zero, and a person settles it.
-- Every copied file is sha256-verified against the rig.
-- Naming the hub is a no-op. Slurm rigs work like any other (listing over `ssh`, copy over
-  `transfer_ssh`).
-
-`rigsync collect --check [--wave <wave_id>]` changes nothing and exits non-zero, listing every rig
-run record (`.run_id.json`, `.run_config.json`) that is missing or different on the hub; without
-`--wave` it checks every wave registered on the hub. This is the "reconciled" precondition the
-dispatch gate and `runid migrate plan` (`run-identity`) require. A rig it cannot reach passes for a
-finished wave whose final collect from that rig succeeded (`finished_at` and `collect_last` in the
-wave's queue): nothing writes those records any more.
-
-`offload` copies evaluations by these same rules before freeing checkpoints.
-
-Artifact selectors are `<group>` or `<group>/<relative/path>`, where `<group>` is declared under
-`[artifacts]` in `sync.toml`. `pull` means peer → current rig; `push` means current rig → peer.
-
-## Setup and stop conditions
-
-- Require project-local `sync.toml` and user-local `~/.config/rigsync/machines.toml`. The registry
-  is written once per machine and shared by every project on it, so a rig with no entry cannot be
-  declared at all. Require `check-paths` to pass before `prepare`: it catches a `repo_path` under
-  none of the rig's storage roots while that is still a one-line edit rather than a misplaced clone.
-- `prepare` on a rig already declared in the user registry and in `sync.toml` is agent-decided
-  (dry run, `--confirm`, one log line); a destination that is not declared is a new destination and
-  always asks. With `[git]` configured it clones the hub remote into an absent/empty path and
-  refuses a non-empty non-Git directory. Follow it with `push-env`: `.env` is ignored by Git, so the fresh clone has
-  none and nothing else will put one there.
-- Preserve existing registry entries. Add canonical rig aliases only from discovered SSH config
-  and hostname facts or explicit user input.
-- Keep project locations only in `sync.toml`; keep SSH identity only in the user registry.
-- If Git/rsync/SSH, the project path, GitHub authentication, remote identity, or a machine mapping
-  is missing, stop with the exact failed check. Never substitute `scp`, ad-hoc tarballs, or
-  hand-written rsync.
+- A rig without a registry entry, or a destination not in both files, is not a target; storage
+  roots and caches are declared by the user, never inferred or added to make a check pass.
+- `push-source` is not a wave deployment; waves use `deploy-revision`.
+- `prune` and `offload` are the only deletions. A failed check is reported, not repaired: no
+  force-push, reset, stash, clean, merge, `scp`, tarball, or hand-written rsync.

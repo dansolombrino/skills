@@ -35,13 +35,14 @@ folder holding this SKILL.md, never the research project). It does two things:
 
 A code expires within about a minute of the redirect: paste promptly, or ask for a new link.
 
-## Never
+## Limits
 
-- Store the password, the one-time-code secret, or recovery codes, or drive the login page by
-  script: that removes the second factor and is outside what the cluster permits. The login is
-  always the user's.
-- Answer anyone but `phone.chat_id`; print or log the bot token, a code, a verifier, or a token.
-- Generate a new key pair: the bridge signs the key the SSH config already uses.
+- The login is always the user's: the bridge does not store the password, the one-time-code
+  secret, or recovery codes, and does not script the login page (that would remove the second
+  factor, which the cluster does not permit).
+- It answers only `phone.chat_id` and never prints or logs the bot token, a code, a verifier, or
+  a token.
+- It signs the key the SSH config already uses rather than generating a new pair.
 
 ## Setup (once per hub)
 
@@ -49,8 +50,8 @@ Read [references/setup.md](references/setup.md). In short: the user creates a bo
 @BotFather and writes its token to an owner-only file; `[phone]` and each rig's
 `[machines.<rig>.ssh_login]` go into the machine registry; `chat-id` finds the chat id after the
 user messages the bot; `check` must pass; the service is installed from
-`assets/phone-bridge.service`; the supervisor's `notify_command` points at `send`. Creating the
-bot and its token is the user's (it is a new account); everything after that is the agent's.
+`assets/phone-bridge.service`; the supervisor's `notify_command` points at `send`. The user
+creates the bot and its token (a new account); the remaining steps are scripted.
 
 ```bash
 BRIDGE=/absolute/path/to/phone-bridge/scripts/bridge.py

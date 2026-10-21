@@ -15,7 +15,7 @@ slurm = ["leonardo"]
 
 [supervisor]
 cycle_every = 60             # seconds between service passes (probe, feed, recover, offload, table); >= 10
-tick_every = 120             # idle seconds between one agent tick's end and the next; events wake it at once
+tick_every = 1800            # safety-net seconds between agent ticks when nothing happens; events wake it at once
 agent_timeout = 900          # a tick that runs longer is stopped; the next one starts fresh
 followup_timeout = 10800     # a follow-up (post-wave plots, fix-and-redispatch) that runs longer is stopped
 notify_command = ["curl", "-s", "-d", "{text}", "https://ntfy.sh/<private topic>"]   # optional; see Notices
@@ -25,6 +25,12 @@ model = "<model alias or id>"
 effort = "<low|medium|high|xhigh|max>"
 command = ["<headless agent executable>", "...", "{prompt}"]
 ```
+
+The agent is woken at once by every event that needs judgment — a failed run or job, a lane
+stopped, blocked or relaunched, a rig down or back, a run whose heartbeat went stale
+(`heartbeat-stale`, once per episode), a lane idle with nothing to take while another still holds
+runs (`lane-idle-tail`, once per episode), a collect, offload or submission failure, an answer, the
+wave turning terminal — so `tick_every` is only a safety net. An explicit value is respected.
 
 `command` is an argv list, never a shell string. `{prompt}`, `{model}`, and `{effort}` are
 substituted per tick; `{prompt}` is required. The tick runs with the project root as its working
@@ -112,6 +118,7 @@ user before the first wave; `sweep-dispatch` refuses to launch otherwise.
 | `…/snapshot.json`, `…/table.md` | the last cycle's view; `table` re-renders it with a fresh written-time |
 | `…/decisions.md` | one line per agent decision, stamped with model and effort |
 | `…/questions.json` | non-blocking questions and their answers |
+| `…/watch.json` | the warnings `watch` already announced to a chat (a cleared one is forgotten) |
 | `…/agent-logs/` | one log per tick |
 | `<rig repo_path>/.waves/_state/<wave_id>/lanes/gpu<ids>/{queue,running,finished}` | a lane's buffer; `drain` ends the lane, `../offload` makes exit 88 wait |
 | `<board root>/supervisor/<project>__<wave_id>.json` | pointer that makes the service supervise the wave |
@@ -123,3 +130,15 @@ no project needs a change. `finish --confirm` moves the pointer to `finished/` w
 (`--abandon` only when the user gave it up); the state directory stays as the wave's record. The
 rig-board viewer's Experiments tab reads `snapshot.json` through this script's `brief_view`, the
 same data the brief printout renders, so the page and the chat never disagree.
+
+## Watch
+
+`supervisor.py --root <project> watch --wave <id> [--poll 20] [--timeout 21600]` blocks, reading
+only local files (the snapshot, the queue, the follow-up records) every `--poll` seconds, and
+returns as soon as there is a warning it has not announced yet — any `⚠` line of the printout (a
+stale, blocked, down or waiting lane, a failed run, an open question, an expiring or expired
+certificate), a follow-up that failed or ended without a report, or no supervisor cycle for ten
+minutes — or the wave is terminal, or the timeout passes. It prints one reason line
+(`watch: new ⚠ …`, `watch: wave finished`, `watch: timeout, nothing new; run watch again`) and
+then the `table` printout, and exits 0; an unregistered wave exits 2. It is what a chat runs in the
+background instead of a timer.

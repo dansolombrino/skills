@@ -1,4 +1,4 @@
 interface:
   display_name: "Research Project Init"
   short_description: "Scaffold a fresh Research 2.0 repository"
-  default_prompt: "Use $research-project-init to scaffold a fresh Research 2.0 project without asking anything: find or create its empty private GitHub repository with gh, default everything decidable, bring up rigs and secrets the safe way, log each step to program/DECISIONS.md, and require a machine-registry entry for every intended rig."
+  default_prompt: "Use $research-project-init to scaffold a fresh Research 2.0 project: the taxonomy and templates, its private GitHub repository with gh, the exact uv environment, and every intended rig, which needs a machine-registry entry."

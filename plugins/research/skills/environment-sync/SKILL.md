@@ -1,6 +1,6 @@
 ---
 name: environment-sync
-description: Provision and verify exact, lock-keyed uv-managed Python wave environments across configured Research 2.0 rigs. Use when installing or repairing a supported project environment, building the environment for a wave or for the staged lock before the pre-dispatch smoke, diagnosing Python/package drift, validating GPU runtime compatibility, or establishing the mandatory parity gate before dispatch. Do not use to adopt legacy projects, converge operating systems, manage containers or Conda, mutate system packages, or write outside an approved engineering envelope.
+description: Provision and verify exact, lock-keyed uv-managed Python wave environments across configured Research 2.0 rigs. Use when installing or repairing a supported project environment, building the environment for a wave or for the staged lock before the pre-dispatch smoke, diagnosing Python/package drift, validating GPU runtime compatibility, or establishing the mandatory parity gate before dispatch. Do not use to adopt legacy projects, converge operating systems, manage containers or Conda, or mutate system packages.
 ---
 
 # environment-sync
@@ -22,24 +22,12 @@ Two kinds of environment exist, and this skill builds only the second:
   re-synced while an active wave uses it.
 
 **Resolving this skill's own files.** `scripts/` and `assets/` here mean *this skill's installed
-directory* — the folder holding the SKILL.md you are reading — not the research project. Use that
-directory's absolute path. Never resolve them against the project root: the project's own
-`scripts/` holds shell wave scripts only and has no `envsync.py`.
+directory* — the folder holding the SKILL.md you are reading — not the research project, whose
+`scripts/` holds shell wave scripts only. `scripts/envsync.py` imports `rig-sync`'s
+`scripts/rigsync.py` by sibling path, so both skills must be installed from the same plugin.
 
-**`rig-sync` must be installed alongside this skill.** `scripts/envsync.py` imports
-`rig-sync/scripts/rigsync.py` by sibling path — it reuses that config loader, machine selection,
-and doctor rather than keeping a second copy of the rules. Installing this skill without
-`rig-sync`, or outside the plugin's own directory layout, makes every command fail at import with
-a missing-file error rather than a contract failure. Install both, from the same plugin.
-
-Read `program/00-execution-agreement.md` and the Research 2.0 conventions
-(`../research-project-init/references/conventions.md`, including "Directives are closed" — never
-infer environment contents or defaults from another project on disk) first. Stop when the
-project surfaces are absent. `provision` and `verify` are **agent-decided** (conventions,
-"Autonomy"): run the dry run, confirm it for the exact revision and the envelope's rigs without a
-prompt, and log the result in one line; only a failure reaches the chat. A new environment key is
-additive and never touches one an active wave uses. Missing tools, new destinations, credentials,
-and scope expansion always ask.
+Project facts: `../research-project-init/references/conventions.md`. A new environment key is
+additive and never touches one an active wave uses.
 
 ## Contract
 
@@ -47,8 +35,8 @@ and scope expansion always ask.
   `code/common/environment.py`.
 - Require an exact `X.Y.Z` Python pin, exact `[tool.uv].required-version = "==X.Y.Z"`, and
   `[environment].manager = "uv"`, a single-directory `name` for the hub development
-  environment, and a tokenized Python `gpu_smoke` command. When no name has been recorded, use
-  `.venv` and log it; use another name only when the user gives one.
+  environment (`.venv` unless the user names another), and a tokenized Python `gpu_smoke`
+  command.
   Reject names that collide with the project taxonomy, `.git`, `.env`, `.envs`, `.waves`, or
   `.rigsync_cache`.
 - Require the project `.gitignore` to ignore `.waves/` and `.envs/`, and the project not to be
@@ -73,16 +61,15 @@ and scope expansion always ask.
 2. Run `provision --dry-run` for the exact target and named rigs: `--wave <wave_id> --revision <sha>`
    after `rig-sync deploy-revision` created the wave worktrees (always including the hub), or
    `--staged --machines <hub>` before the dispatch commit exists, for the pre-dispatch smoke (the
-   hub's environment files must then equal the index). Show pinned uv/Python, the environment key
-   and path, every target, and each available
-   `uv sync --frozen --exact --no-install-project --dry-run` result in the decision log; when
-   pinned uv is absent, log its versioned installer plan. Then `--confirm` without a prompt.
+   hub's environment files must then equal the index). It shows pinned uv/Python, the environment
+   key and path, every target, and each `uv sync --frozen --exact --no-install-project --dry-run`
+   result (or the versioned uv installer plan). Then `--confirm`.
 3. On confirmation, install pinned uv under ignored `.rigsync_cache/`, install the exact
    uv-managed Python, and exact-sync `.envs/<env_key>`. Building a key that does not exist yet is
    always allowed, even while other waves run. Re-syncing an existing key is refused while any
    active wave on that machine uses it, or while activity cannot be attributed to a wave.
-4. Run `verify` with the same target across the complete rig set, then once per approved GPU lane.
-   Require every rig's fingerprint to equal the local hub and every bounded GPU smoke to succeed. A machine whose
+4. Run `verify` with the same target across the complete rig set, then once per pool GPU lane.
+   Require every rig's fingerprint to equal the hub's and every bounded GPU smoke to succeed. A machine whose
    registry entry declares `gpus = "job"` (a Slurm login node) is verified with `--machines`
    only: the GPU probe is skipped and reported as `gpus=deferred to job`, `--lane` is refused for
    it, and the smoke runs as the first step of every job instead.
@@ -117,8 +104,8 @@ drift/incompatibility, not an experiment failure.
 
 - Reuse project `sync.toml` and the user rig registry; never infer aliases, paths, credentials,
   private indexes, or extra `behemoth` GPU authorization.
-- Use only the official versioned uv installer, with no profile changes, on the named targets of
-  the envelope. Never log index credentials or values from `.env`.
+- Use only the official versioned uv installer, with no profile changes, on the named targets.
+  Never log index credentials or values from `.env`.
 - Keep uv's default dependency-group selection authoritative. Reject per-rig extras, manual
   installs, missing locks, stale locks, and non-exact pins.
 - If any rig fails installation, fingerprint comparison, or GPU smoke, report the exact rig and

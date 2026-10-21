@@ -1,4 +1,4 @@
 interface:
   display_name: "Progress Updates"
-  short_description: "Status/ETA tables every minute or at a chosen interval"
-  default_prompt: "Use $progress-updates to post a status and ETA table every minute while this transfer runs."
+  short_description: "Status/ETA table when a long task changes or on request"
+  default_prompt: "Use $progress-updates to watch this transfer and tell me when it finishes, stalls, or fails."

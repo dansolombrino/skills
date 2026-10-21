@@ -799,6 +799,193 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(sum("SSH certificate" in line for line in lines), 1)
         self.assertEqual(sum("1 run(s) failed" in line for line in lines), 2, "per wave")
 
+    # ── events that wake the agent, and the chat's watch ──
+
+    def test_the_scheduled_tick_is_a_half_hour_safety_net_unless_the_registry_says_otherwise(self) -> None:
+        self.assertEqual(supervisor.load_settings(self.registry).tick_every, 1800)
+        self.registry.write_text(self.registry.read_text().replace("cycle_every = 60", "cycle_every = 60\ntick_every = 120"))
+        self.assertEqual(supervisor.load_settings(self.registry).tick_every, 120)
+
+    def test_register_points_the_chat_at_watch(self) -> None:
+        code, out, err = self.cli("register", "--wave", WAVE, "--manifest", str(self.manifest()), "--confirm")
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"NEXT: in a chat, run `watch --wave {WAVE}` as a background command", out)
+        self.assertNotIn("without asking", out)
+
+    def test_unattended_prompts_keep_their_envelope_in_the_wave_readme_and_decide(self) -> None:
+        self.register()
+        self.assertEqual(self.cli("followup", "--wave", WAVE, "--kind", "fix", "--text", "bug")[0], 0)
+        self.assertEqual(self.cli("followup", "--wave", WAVE, "--kind", "analyze", "--text", "done")[0], 0)
+        prompts = [supervisor.followup_prompt(record) for record in self.followups()]
+        prompts.append(supervisor.agent_prompt(supervisor.Wave(self.hub, WAVE), "test"))
+        for prompt in prompts:
+            self.assertNotIn("DECISIONS.md", prompt)
+            self.assertNotIn("execution-agreement", prompt)
+            self.assertIn("README", prompt)
+        for prompt in prompts[:2]:
+            self.assertIn(f"`decide --wave {WAVE}`", prompt)
+
+    def stale_heartbeat(self, minutes_ago: float) -> None:
+        run = self.queue()["runs"][0]
+        lane = self.lane(self.hub)
+        if (lane / "queue" / run["entry"]).exists():
+            (lane / "queue" / run["entry"]).rename(lane / "running" / run["entry"])
+        beat = supervisor.iso(supervisor.now() - supervisor.timedelta(minutes=minutes_ago))
+        write(self.hub / run["status_path"], json.dumps({"state": "running", "wave_id": WAVE, "heartbeat": beat, "elapsed_s": 600}))
+
+    def events(self, name: str) -> list[dict]:
+        return [r for r in supervisor.Wave(self.hub, WAVE).ledger() if r["event"] == name]
+
+    def test_a_stale_heartbeat_wakes_the_agent_once_per_episode(self) -> None:
+        self.register()
+        self.cli("cycle", "--wave", WAVE)
+        self.stale_heartbeat(minutes_ago=10)
+        self.cli("cycle", "--wave", WAVE)
+        self.cli("cycle", "--wave", WAVE)
+        [event] = self.events("heartbeat-stale")
+        self.assertEqual((event["rig"], event["gpu"], event["run"]), ("hub", "0", "model=m0"))
+        self.assertGreaterEqual(event["heartbeat_age_s"], 590)
+        self.assertIn("heartbeat-stale", supervisor.URGENT_EVENTS)
+        self.assertIn("heartbeat-stale", supervisor.wake_due(supervisor.Wave(self.hub, WAVE), supervisor.load_settings(self.registry)))
+        self.stale_heartbeat(minutes_ago=0)  # it beat again: the episode is over
+        self.cli("cycle", "--wave", WAVE)
+        self.assertEqual(len(self.events("heartbeat-stale")), 1)
+        self.stale_heartbeat(minutes_ago=5)
+        self.cli("cycle", "--wave", WAVE)
+        self.assertEqual(len(self.events("heartbeat-stale")), 2, "a new staleness episode is news again")
+
+    def test_an_idle_lane_with_nothing_to_take_wakes_the_agent_for_tail_stealing_once(self) -> None:
+        self.register(runs=4)
+        self.cli("cycle", "--wave", WAVE)
+        for run in [r for r in self.queue()["runs"] if r["lane"] == {"rig": "hub", "gpu": "0"}]:
+            self.finish_entry(self.hub, run["entry"], 0, run["artifact"])
+        self.cli("cycle", "--wave", WAVE)
+        self.cli("cycle", "--wave", WAVE)
+        [event] = self.events("lane-idle-tail")
+        self.assertEqual((event["rig"], event["gpu"], event["busy"]), ("hub", "0", ["peer gpu0"]))
+        self.assertIn("lane-idle-tail", supervisor.URGENT_EVENTS)
+        self.assertIn("lane-idle-tail", supervisor.wake_due(supervisor.Wave(self.hub, WAVE), supervisor.load_settings(self.registry)))
+
+    def test_an_idle_lane_is_not_a_tail_while_the_queue_still_feeds_it_or_nothing_else_runs(self) -> None:
+        self.register(runs=1, pool={"hub": {"lanes": ["0"]}, "peer": {"lanes": ["0"]}})
+        self.cli("cycle", "--wave", WAVE)  # one run: hub takes it, peer has nothing - a tail from the start
+        self.assertEqual([e["rig"] for e in self.events("lane-idle-tail")], ["peer"])
+        run = self.queue()["runs"][0]
+        self.finish_entry(self.hub, run["entry"], 0, run["artifact"])
+        self.cli("cycle", "--wave", WAVE)  # terminal: nothing in flight anywhere, so no new tail
+        self.assertEqual(len(self.events("lane-idle-tail")), 1)
+
+    def snap(self, *, lanes=(), failed=(), questions=(), certs=None, written_ago_s: float = 0, finished_at=None) -> None:
+        at = supervisor.now()
+        lanes = list(lanes) or [self.row("hub", "running", "model=m0")]
+        snapshot = {
+            "written_at": supervisor.iso(at - supervisor.timedelta(seconds=written_ago_s)),
+            "counts": {"done": 1, "failed": len(failed), "queued": 0, "assigned": 0, "running": 1, "excluded": 0}, "total": 5,
+            "wave_eta": supervisor.iso(at + supervisor.timedelta(hours=1)), "wave_eta_basis": "feeder simulation",
+            "finished_at": finished_at, "lanes": lanes, "failed": list(failed), "questions": list(questions),
+            "rigs": {"hub": {"kind": "lanes", "done": 1}, "peer": {"kind": "lanes", "done": 0}}, "certs": certs or {},
+        }
+        board.write_json(supervisor.Wave(self.hub, WAVE).snapshot_path, snapshot)
+
+    @staticmethod
+    def row(rig: str, state: str, run=None, problem=None) -> dict:
+        return {"kind": "lane", "rig": rig, "gpu": "0", "state": state, "run": run, "done": 0, "lane_free_at": None, "problem": problem}
+
+    def watch(self, timeout: str = "0") -> str:
+        code, out, err = self.cli("watch", "--wave", WAVE, "--poll", "1", "--timeout", timeout)
+        self.assertEqual(code, 0, err)
+        return out
+
+    def test_watch_fires_once_on_each_kind_of_warning(self) -> None:
+        self.register()
+        board_config = board.load_config(self.registry)
+        at = supervisor.now()
+        soon = supervisor.iso(at + supervisor.timedelta(minutes=20))
+        gone = supervisor.iso(at - supervisor.timedelta(minutes=1))
+        question = {"id": "q1", "text": "use gpu 5?", "meanwhile": "unused", "status": "open"}
+        steps = [
+            ("stale lane", dict(lanes=[self.row("hub", "stale", "model=m0")]), "hub gpu0 stale (run model=m0)"),
+            ("blocked lane", dict(lanes=[self.row("hub", "blocked", problem="revision: drift")]), "hub gpu0: revision: drift"),
+            ("rig down", dict(lanes=[self.row("peer", "rig down", problem="down since 09:00")]), "peer gpu0: down since 09:00"),
+            ("waiting lane", dict(lanes=[self.row("peer", "waiting for board")]), "peer gpu0 waiting for board"),
+            ("failed run", dict(failed=[{"run": "model=m3", "note": "exit 1 on hub gpu0"}]), "failed: `model=m3` (exit 1 on hub gpu0)"),
+            ("question", dict(questions=[question]), "needs you [q1] use gpu 5?"),
+            ("cert expiring", dict(certs={"cluster": {"expires_at": soon}}), "cluster: SSH certificate expires"),
+            ("cert expired", dict(certs={"cluster": {"expires_at": gone}}), "cluster: SSH certificate expired"),
+            ("service silent", dict(written_ago_s=1200), "no supervisor cycle for 20m"),
+        ]
+        for name, snapshot, line in steps:
+            with self.subTest(name):
+                self.snap(**snapshot)
+                out = self.watch()
+                self.assertIn(f"watch: new ⚠ {line}", out)
+                self.assertIn("Status written ", out, "the printout follows the reason")
+                self.assertIn("watch: timeout, nothing new; run watch again", self.watch(), "an announced warning does not fire twice")
+        self.snap()
+        record = supervisor.enqueue_followup(board_config, supervisor.Wave(self.hub, WAVE), self.queue(), "analyze", "x")
+        path, _ = supervisor.find_followup(board_config, record["id"])
+        board.write_json(path, {**record, "status": "failed", "outcome": "exit 1", "log": "/tmp/f.log"})
+        self.assertIn("watch: new ⚠ follow-up analyze exit 1 without a report; log /tmp/f.log", self.watch())
+        self.assertIn("timeout", self.watch())
+
+    def test_watch_fires_again_when_a_cleared_warning_comes_back(self) -> None:
+        self.register()
+        failed = [{"run": "model=m3", "note": None}]
+        self.snap(failed=failed)
+        self.assertIn("watch: new ⚠ failed: `model=m3`", self.watch())
+        self.assertIn("timeout", self.watch())
+        self.snap(failed=failed + [{"run": "model=m4", "note": None}])
+        out = self.watch()
+        self.assertIn("watch: new ⚠ failed: `model=m4`", out)
+        self.assertNotIn("new ⚠ failed: `model=m3`", out, "only the new failure is the reason")
+        self.snap()  # requeued: the failures cleared
+        self.assertIn("timeout", self.watch())
+        self.snap(failed=failed)
+        self.assertIn("watch: new ⚠ failed: `model=m3`", self.watch())
+
+    def test_watch_blocks_until_something_happens_and_survives_a_torn_snapshot(self) -> None:
+        self.register()
+        self.snap()
+        snapshot_path = supervisor.Wave(self.hub, WAVE).snapshot_path
+        ticks: list[float] = []
+
+        def later(seconds: float) -> None:
+            ticks.append(seconds)
+            if len(ticks) == 1:
+                snapshot_path.write_text('{"torn')  # the service caught mid-write
+            elif len(ticks) == 2:
+                self.snap(lanes=[self.row("hub", "stale", "model=m0")])
+
+        with mock.patch.object(supervisor.time, "sleep", side_effect=later):
+            out = self.watch(timeout="3600")
+        self.assertEqual(len(ticks), 2)
+        self.assertTrue(out.startswith("watch: new ⚠ hub gpu0 stale (run model=m0)\n"), out)
+
+    def test_watch_returns_when_the_wave_turns_terminal(self) -> None:
+        self.register()
+        self.snap(failed=[{"run": "model=m3", "note": None}])
+        self.watch()
+
+        def finish(_seconds: float) -> None:
+            self.snap(failed=[{"run": "model=m3", "note": None}], finished_at=supervisor.iso(supervisor.now()))
+
+        with mock.patch.object(supervisor.time, "sleep", side_effect=finish):
+            out = self.watch(timeout="3600")
+        self.assertTrue(out.startswith("watch: wave finished\n"), out)
+        self.assertIn("finished ", out)
+        self.assertTrue(self.watch().startswith("watch: wave finished"), "a finished wave answers at once")
+
+    def test_watch_times_out_with_nothing_new_and_refuses_an_unknown_wave(self) -> None:
+        self.register()
+        self.snap()
+        out = self.watch()
+        self.assertTrue(out.startswith("watch: timeout, nothing new; run watch again\n"), out)
+        self.assertIn("Status written ", out)
+        code, _out, err = self.cli("watch", "--wave", "20990101-000000", "--poll", "1", "--timeout", "0")
+        self.assertEqual(code, 2)
+        self.assertIn("not registered", err)
+        self.assertEqual(self.cli("watch", "--wave", WAVE, "--poll", "0")[0], 2)
+
     def test_the_service_follows_a_newer_installed_release(self) -> None:
         root = self.base / "cache" / "research"
         relative = Path("skills/sweep-supervisor/scripts/supervisor.py")

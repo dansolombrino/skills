@@ -1,32 +1,9 @@
 {
-  "description": "sweep-supervisor: right after a wave is registered, start its printout; at session start and on prompts, remind the agent of any live wave in this project so its printout and timer resume. Silent otherwise.",
+  "description": "sweep-supervisor: at session start, state the facts (progress, ETA, warnings, dashboard) of each live wave in this project. Silent otherwise.",
   "hooks": {
     "SessionStart": [
       {
         "matcher": "startup|resume|clear|compact",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/skills/sweep-supervisor/scripts/wave_reminder.py\"",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/skills/sweep-supervisor/scripts/wave_reminder.py\"",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
         "hooks": [
           {
             "type": "command",
