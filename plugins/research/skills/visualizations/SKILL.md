@@ -208,9 +208,12 @@ a hydra config nor identity: editing it never changes a run_id. Shape:
   file holding only the runs in view. When a check fails, fix the code, render again, and report
   the correction; never hide a failed check.
 - **Hand the user each rendered file as a URL.** Run this skill's
-  `scripts/plot_server.py url <file>` on the rendering machine for every leaf written. When the
-  host can open a browser tab inside the user's IDE for the project's workspace, open the printed
-  `local:` URL there; otherwise print the `local:` and `public:` URLs. Never start an ad-hoc server,
+  `scripts/plot_server.py url <file>` on the rendering machine for every leaf written. Always give
+  the user the printed `public:` URL first, as a clickable link: the user usually browses from a
+  different machine, where a `127.0.0.1` link does not resolve. Give the `local:` URL only as a
+  secondary line labeled for this machine or an SSH tunnel, and open it in an IDE browser tab when
+  the host can open one for the project's workspace. When no `public:` line is printed, say so and
+  point to `[plots] public_url` in `references/plot-server.md`. Never start an ad-hoc server,
   copy the file elsewhere, or print the access token. If the file is not servable, the server is
   not answering, or it does not serve the file yet (a sandboxed server publishes a new project
   within 2 minutes), say so and point to `references/plot-server.md`; the file path stays the

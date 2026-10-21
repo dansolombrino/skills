@@ -698,9 +698,9 @@ def cmd_url(config: PlotsConfig, args: argparse.Namespace) -> int:
         )
         return 2
     route = quote(path.as_posix())
-    print(f"local: {local_base(config)}{route}")
     if config.public_url:
         print(f"public: {config.public_url}{route}")
+    print(f"local: {local_base(config)}{route}")
     if not server_answers(config):
         print(f"server: not answering on {local_base(config)}; see references/plot-server.md", file=sys.stderr)
         return 3
