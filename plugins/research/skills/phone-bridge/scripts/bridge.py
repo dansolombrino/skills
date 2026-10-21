@@ -58,6 +58,7 @@ class Login:
     public_key: Path
     identity: str
     provisioner: str
+    command: str  # the bot command that sends this rig's login link, without the slash
 
 
 @dataclass(frozen=True)
@@ -100,8 +101,11 @@ def load_config(registry: Path) -> Config:
         provisioner = login.get("provisioner")
         if not isinstance(provisioner, str) or not provisioner:
             raise BridgeError(f"{where}.provisioner must name the CA's OIDC provisioner")
+        command = login.get("command", "renew_" + re.sub(r"[^a-z0-9_]", "_", rig.lower()))
+        if not isinstance(command, str) or not re.fullmatch(r"[a-z0-9_]{1,32}", command):
+            raise BridgeError(f"{where}.command must be 1-32 lowercase letters, digits or underscores (Telegram's rule)")
         logins.append(Login(rig, _path(entry["ssh_cert"], f"{where}: ssh_cert"),
-                            _path(login.get("public_key"), f"{where}.public_key"), identity, provisioner))
+                            _path(login.get("public_key"), f"{where}.public_key"), identity, provisioner, command))
     return Config(
         registry=registry,
         token_file=_path(phone.get("token_file"), f"{registry}: phone.token_file"),
@@ -283,7 +287,7 @@ def finish_renewal(config: Config, state: str, code: str) -> str:
     record = data.pop(state, None)
     pending.save(data)
     if record is None:
-        raise BridgeError("that link is not the latest one (or was already used); send /renew for a new one")
+        raise BridgeError("that link is not the latest one (or was already used); ask for a new one")
     login = next((item for item in config.logins if item.rig == record["rig"]), None)
     if login is None:
         raise BridgeError(f"{record['rig']} is no longer configured")
@@ -296,7 +300,7 @@ def finish_renewal(config: Config, state: str, code: str) -> str:
     id_token = tokens.get("id_token")
     if not id_token:
         raise BridgeError(f"the identity provider refused the code: {tokens.get('error_description') or tokens.get('error') or 'no id_token'}"
-                          " (codes expire within about a minute; send /renew)")
+                          f" (codes expire within about a minute; send /{login.command})")
     # ask for the longest validity the CA allows: fewer logins, same 2FA each time
     longest = longest_duration(entry)
     lifetime = ["--not-after", longest] if longest else []
@@ -312,11 +316,20 @@ def finish_renewal(config: Config, state: str, code: str) -> str:
 # ───────────────────────────── the bot ─────────────────────────────
 
 
-HELP = (
-    "/renew [rig] — a fresh login link\n"
-    "/status — when each certificate expires\n"
-    "After logging in, paste the address the browser could not open (http://127.0.0.1:…)."
-)
+def commands(config: Config) -> list[tuple[str, str]]:
+    """The bot's command menu: one renewal command per rig, then /status."""
+    return [(login.command, f"Login link to renew the {login.rig} SSH certificate") for login in config.logins] + [
+        ("status", "When each SSH certificate expires")]
+
+
+def help_text(config: Config) -> str:
+    lines = [f"/{name} — {description}" for name, description in commands(config)]
+    return "\n".join(lines + ["After logging in, paste the address the browser could not open (http://127.0.0.1:…)."])
+
+
+def register_commands(config: Config, token: str) -> None:
+    """Publish the menu, so typing / in the chat suggests the commands."""
+    telegram(token, "setMyCommands", commands=json.dumps([{"command": c, "description": d} for c, d in commands(config)]))
 
 
 def status_lines(config: Config) -> list[str]:
@@ -334,19 +347,17 @@ def status_lines(config: Config) -> list[str]:
 
 def handle(config: Config, token: str, text: str) -> str:
     text = text.strip()
-    if text.startswith("/renew"):
-        wanted = text.split()[1:] or [login.rig for login in config.logins]
-        replies = []
-        for login in config.logins:
-            if login.rig in wanted:
-                replies.append(f"{login.rig}: log in here, then paste the address the browser cannot open:\n{start_renewal(config, login)}")
-        return "\n\n".join(replies) or f"unknown rig; configured: {', '.join(l.rig for l in config.logins) or 'none'}"
-    if text.startswith("/status"):
+    word = text.split()[0].split("@")[0].lstrip("/") if text.startswith("/") else ""
+    chosen = [login for login in config.logins if word == login.command or word == "renew"]  # plain /renew: every rig
+    if chosen:
+        return "\n\n".join(
+            f"{login.rig}: log in here, then paste the address the browser cannot open:\n{start_renewal(config, login)}" for login in chosen)
+    if word == "status":
         return "\n".join(status_lines(config))
     pasted = parse_redirect(text)
     if pasted:
         return finish_renewal(config, *pasted)
-    return HELP
+    return help_text(config)
 
 
 def check_certs(config: Config, token: str, warned: dict[str, str]) -> None:
@@ -376,6 +387,10 @@ def serve(config: Config) -> int:
     if config.chat_id is None:
         raise BridgeError("phone.chat_id is not set yet: message the bot, then run `bridge.py chat-id`")
     print(f"[serve] {Path(__file__).resolve()}: chat {config.chat_id}, {len(config.logins)} certificate(s) watched", flush=True)
+    try:
+        register_commands(config, token)
+    except BridgeError as exc:
+        print(f"[serve] command menu: {exc}", file=sys.stderr, flush=True)
     offset, warned, last_check = None, {}, 0.0
     while True:
         maybe_self_update(config)

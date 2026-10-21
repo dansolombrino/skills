@@ -26,6 +26,7 @@ ssh_cert = "~/.ssh/id_leonardo-cert.pub"  # also read by sweep-supervisor's cert
 identity = "<login e-mail>"               # the certificate's Key ID
 provisioner = "cineca-hpc"                # `step ca provisioner list`
 public_key = "~/.ssh/id_leonardo.pub"     # signed in place; its -cert.pub is ssh_cert
+command = "renew_cineca"                  # bot command for this rig; default renew_<rig>
 ```
 
 `step` must already be bootstrapped against the CA (`step ca bootstrap --ca-url ...

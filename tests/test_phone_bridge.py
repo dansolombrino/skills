@@ -69,6 +69,7 @@ ssh_cert = "{self.base / 'id_leonardo-cert.pub'}"
 [machines.leonardo.ssh_login]
 identity = "me@uni.it"
 provisioner = "cineca-hpc"
+command = "renew_cineca"
 public_key = "{self.base / 'id_leonardo.pub'}"
 """)
         patches = [
@@ -169,11 +170,14 @@ public_key = "{self.base / 'id_leonardo.pub'}"
 
     def test_commands_and_help(self) -> None:
         with mock.patch.object(bridge, "http_json", side_effect=self.fake_http):
-            self.assertIn("log in here", bridge.handle(self.config, "tok", "/renew leonardo"))
-            self.assertIn("unknown rig", bridge.handle(self.config, "tok", "/renew behemoth"))
+            self.assertIn("log in here", bridge.handle(self.config, "tok", "/renew_cineca"))
+            self.assertIn("log in here", bridge.handle(self.config, "tok", "/renew_cineca@dansolombrino_rig_bot"))
+            self.assertIn("log in here", bridge.handle(self.config, "tok", "/renew"))
+        self.assertEqual(bridge.commands(self.config)[0][0], "renew_cineca")
+        self.assertIn("/renew_cineca", bridge.handle(self.config, "tok", "/renew_behemoth"))
         with mock.patch.object(bridge, "cert_expiry", return_value=None):
             self.assertIn("no valid certificate", bridge.handle(self.config, "tok", "/status"))
-        self.assertIn("/renew", bridge.handle(self.config, "tok", "hi"))
+        self.assertIn("/renew_cineca", bridge.handle(self.config, "tok", "hi"))
 
     def test_ipv4_is_tried_before_ipv6(self) -> None:
         v6 = (bridge.socket.AF_INET6, 1, 6, "", ("::1", 443, 0, 0))

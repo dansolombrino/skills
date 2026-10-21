@@ -18,7 +18,8 @@ folder holding this SKILL.md, never the research project). It does two things:
 
 ## The renewal, end to end
 
-1. An hour before the certificate expires (and again when it has), or on `/renew`, the bot sends a
+1. An hour before the certificate expires (and again when it has), or on `/renew_<rig>` (or the
+   rig's `command`), the bot sends a
    login link: an OIDC authorization request with PKCE, built from the CA's published provisioner.
    The verifier stays on the hub (`state_dir`, owner-only).
 2. The user logs in on the identity provider's page with password and one-time code.
@@ -32,7 +33,7 @@ folder holding this SKILL.md, never the research project). It does two things:
    the 12 h default), checks the new expiry, and replies with it. `sweep-supervisor` picks the rig
    back up on its next cycle by itself.
 
-A code expires within about a minute of the redirect: paste promptly, or send `/renew`.
+A code expires within about a minute of the redirect: paste promptly, or ask for a new link.
 
 ## Never
 
@@ -60,6 +61,7 @@ python3 "$BRIDGE" send "text"  # one notice
 python3 "$BRIDGE" serve        # the bot (run by the user service)
 ```
 
-In the chat with the bot: `/renew [rig]`, `/status`, or a pasted redirect address. Running from a
+In the chat with the bot: each rig's renewal command (`/renew_<rig>`, or its `command`), `/status`,
+or a pasted redirect address; `serve` publishes them as the chat's command menu. Running from a
 versioned plugin install, `serve` moves itself onto a newer installed version once its `check`
 passes.
