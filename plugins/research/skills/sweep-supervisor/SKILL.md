@@ -87,7 +87,7 @@ re-arm the wake-up if this chat has none.
 4. A `⚠ needs you [<id>]` line is a supervisor question. When the user answers in chat, record it with
    `answer`; the service wakes the agent on it. Until then the stated status quo holds.
 5. When the printout says `finished`, post it, run the prune (`rig-sync prune --dry-run`, then
-   `--confirm`; do, then report), and stop the schedule.
+   `--confirm`; logged), and stop the schedule.
 6. A direct request ("move X to behemoth", "stop using the 3080") goes through the same commands
    the agent uses (`queue`, `lane`, `steal`), with `--reason "user: ..."`. A change of a cluster's
    tracked core-hour cap goes through `pool --rig <cluster> --core-hours-cap <h> --reason "..."`
@@ -115,7 +115,7 @@ Always the user's, asked with `ask` while the status quo holds: any rig, card, o
 the pool; a `behemoth` card without a grant for this wave; anything belonging to another project
 or another user; deleting anything `offload` and `prune` do not cover; cancelling or superseding
 runs outside this standing authorization (another wave's runs, a supersede, a running Slurm job);
-a run_id migration (`run-identity`); and settling an identity mismatch `collect` reports between a
+a run_id migration (`run-identity` refuses one while the wave is live anyway); and settling an identity mismatch `collect` reports between a
 rig and the hub.
 
 Before any kill, prove ownership: the lane is held on the fleet board by this wave's session, the

@@ -1,6 +1,6 @@
 ---
 name: research-project-init
-description: Scaffold a new or empty Research 2.0 repository with the standard experiment taxonomy, an explicit engineering execution agreement with manual/auto modes and approval tiers, exact uv environment, rig configuration, status helpers, journal guard, and host guidance, all under one consolidated approval. Use when starting, initializing, bootstrapping, or scaffolding a fresh research project; do not use to upgrade, migrate, or retrofit an existing project.
+description: Scaffold a new or empty Research 2.0 repository with the standard experiment taxonomy, an engineering execution agreement with its envelope, exact uv environment, rig configuration, status helpers, journal guard, decision log, and host guidance, asking at most one question (the remote and the rig secrets bring-up). Use when starting, initializing, bootstrapping, or scaffolding a fresh research project; do not use to upgrade, migrate, or retrofit an existing project.
 ---
 
 # Research Project Init
@@ -12,8 +12,9 @@ Scaffold only the Research 2.0 architecture. Read
 **These directives are the complete specification.** Scaffold from them alone. Never list, read,
 or copy from another project on disk — sibling projects, prior research checkouts, home-directory
 clones — to decide layout, file contents, dependencies, or defaults, and never treat an existing
-project as a template or precedent however similar it looks. Where a directive is missing or
-ambiguous, stop and ask the user; never close the gap by imitation. The only reads outside this
+project as a template or precedent however similar it looks. Where a directive is silent, take the
+conservative reversible default and log it (conventions, "Autonomy"); never close the gap by
+imitation. The only reads outside this
 project are the ones a directive names: the installed skill directories, the literal template
 values, and material the user supplies explicitly. See "Directives are closed" in
 [references/conventions.md](references/conventions.md).
@@ -30,14 +31,16 @@ values, and material the user supplies explicitly. See "Directives are closed" i
    omits `research`, stop and hand off to `project-init` to tag the project first. Never write or
    edit these three files here; the scaffold leaves them untouched and includes them in the first
    commit.
-3. Gather project name, path, GitHub remote, dispatch branch, exact Python patch, exact uv
-   version, bounded GPU smoke command, and whether evaluations/plots are committed. A one-line
-   description is optional: without one, `{{PROJECT_DESCRIPTION}}` falls back to the project name.
-   The hub development environment's single directory name (waves use lock-keyed environments
-   under `.envs/` instead) is `.venv` unless the user names another in the consolidated approval
-   below; the framework questions are asked there too, never in a round of their own. Reject
+3. Take everything from the request and these defaults, never from a questionnaire: project name
+   = the directory name; dispatch branch `main`; Python = the newest stable patch `uv python list`
+   offers for the newest minor torch supports; uv = the installed `uv --version`; GPU smoke = the
+   templated `code/common/environment_smoke.py` target; evaluations and plots are not committed;
+   hub development environment `.venv` (waves use lock-keyed environments under `.envs/`); torch
+   is the fixed framework. The description is optional: without one, `{{PROJECT_DESCRIPTION}}`
+   falls back to the project name. Anything the user states overrides its default. Reject
    project-surface collisions.
-4. Confirm the rig set this project will ever dispatch to, and require an entry in the user
+4. The rig set is every rig the request names, else every `board.rigs` machine in the user
+   registry; `leonardo` joins only when the user names it, with its account. Require an entry in the user
    registry `~/.config/rigsync/machines.toml`
    (`rig-sync` → `references/configuration.md`) for each one before scaffolding: `ssh`, `hostname`,
    its storage roots (`storage_roots`, or the single-root `storage_root`), plus
@@ -49,29 +52,21 @@ values, and material the user supplies explicitly. See "Directives are closed" i
    project decision. When one is absent, walk the user through declaring it and never infer a
    volume, never default a cache or `TMPDIR` to `$HOME` or `~/.cache`, and never copy another
    project's values.
-5. Write `engineering_mode: auto` unless the user asks for `manual`. Capture the
-   engineering repo/rig/GPU/budget envelope, approved destinations, and — when `leonardo` is in
-   the rig set — its account.
+5. Capture the engineering repo/rig/GPU/budget envelope, destinations, and — when `leonardo` is
+   in the rig set — its account in the execution agreement. There is no manual/auto split.
 
-## Consolidated approval
+## The one question
 
-Ask **once**, in one round, after admission and before writing anything. The single approval
-covers, listed explicitly:
-
-- the scaffold preview: the tree, every templated file, and the execution agreement;
-- the first commit and its push to the approved remote and branch;
-- the hub environment: the staged-lock provision, `verify`, and GPU smoke, plus the hub
-  development environment;
-- rig bring-up for every intended rig, including `rig-sync provision-env` (it edits shell startup
-  files; on a shared machine say that it affects that account's every future shell) and
-  `rig-sync push-env` (it moves secrets);
-- the open questions, asked together: the framework and anything else admission left open (the
-  hub development environment is `.venv` unless the user names another).
-
-Both engineering modes ask this round; it states `engineering_mode: auto` and the user may switch
-it to `manual` in the same answer. Once approved, every step below runs without another prompt and is reported
-in one line each. A step that turns out to need something the approval did not cover — a new
-destination, a non-empty path, a rig without a registry entry — stops and asks.
+Ask **once**, after admission and before writing anything, and only for what falls under
+conventions' **Always ask**: the GitHub remote (a new remote; skip it when the request names one),
+and consent to `rig-sync provision-env` (it edits shell startup files; on a shared machine say
+that it affects that account's every future shell) and `rig-sync push-env` (it moves secrets) on
+the rig set. List the rig set and the defaults taken in one line each so the user can correct
+them in the same answer; that list is not a second question. Everything below then runs without
+another prompt: the scaffold, the first commit and its push to that remote and branch, the hub
+environment, and rig bring-up. Each step is logged to `program/DECISIONS.md`; the chat gets the
+final outcome. A step that needs something the answer did not cover — a new destination, a
+non-empty path, a rig without a registry entry — stops and asks.
 
 ## Scaffold
 
@@ -79,7 +74,8 @@ destination, a non-empty path, a rig without a registry entry — stops and asks
    `logs/`, `plots/`, `scripts/`, `tests/`, `visualizations/`, `shitpads/`, and `references/`.
    Put a `.gitkeep` in every directory that would otherwise be empty so the initial
    commit actually preserves the complete taxonomy.
-2. Create `program/00-execution-agreement.md`, the current engineering contract, under 200 lines.
+2. Create `program/00-execution-agreement.md`, the current engineering contract, under 200 lines,
+   and `program/DECISIONS.md` with its header and the init decisions as its first lines.
 3. Create `README.md`, `AGENTS.md`, `CLAUDE.md`, `JOURNAL.md`, `EXPERIMENTS.md`, `.env.example`, `.env`,
    `.gitignore`, `.vscode/settings.json`, `sync.toml`, `pyproject.toml`, and `.python-version` from the
    templates. `.vscode/settings.json` is committed project policy, not machine-local state: it is the
@@ -98,7 +94,7 @@ destination, a non-empty path, a rig without a registry entry — stops and asks
    values empty unless the user supplies them through an authorized secret source. Mirror every
    key in `.env.example` with empty values and explanatory comments.
 4. Install `.githooks/pre-commit`. It requires a journal update when experiment-relevant files are
-   committed; `research-journal` appends the entry and shows it afterwards, in both modes.
+   committed; `research-journal` appends the entry without asking.
 5. Create `code/common/run_id.py`, `code/common/status.py`, `code/common/paths.py` (which resolves
    the repo-relative storage values in `.env` against the shared project root, honouring the
    `RESEARCH_PROJECT_ROOT` a wave exports, and tracked inputs against the running source tree), and
@@ -109,16 +105,16 @@ destination, a non-empty path, a rig without a registry entry — stops and asks
 
 ## Git, environment, and rigs
 
-1. Initialize Git, configure only the approved remote/branch, then make the first commit and
-   push it as the consolidated approval covers. Never force-push or overwrite remote history.
+1. Initialize Git, configure only the answered remote/branch, then make the first commit and
+   push it. Never force-push or overwrite remote history.
 2. Configure `environment-sync`, run doctor, and require the exact environment plus GPU smoke
    gate on the hub for the staged lock (`provision --staged`, then `verify --staged` with the hub
    lane). Create the hub development environment named in `[environment].name` with the pinned uv
    (`UV_PROJECT_ENVIRONMENT=<name> uv sync --frozen`); it is the user's, and waves never use it.
-   The consolidated approval covers it; report the result.
+   Log the result.
 3. Bring up every intended rig in this order; each step's failure stops the ones after it. The
-   consolidated approval covers every step, `provision-env` and `push-env` included; show each dry
-   run in the report, not as a new question.
+   one question's answer covers every step, `provision-env` and `push-env` included; each dry run
+   goes to the decision log, not to a new question.
    1. Confirm the user registry declares every intended rig, storage roots included (admission
       above). A rig with no entry cannot be declared in `sync.toml` at all, and one with no
       storage root fails the path gate below.
@@ -131,14 +127,15 @@ destination, a non-empty path, a rig without a registry entry — stops and asks
    4. Run `rig-sync provision-env --dry-run` then `--confirm` for each rig that declares caches.
       Without this a rig has no `HF_HOME`/`UV_CACHE_DIR` and falls back to `~/.cache` — the small
       quota'd volume on a shared machine. It edits shell startup files: outside this bundle it
-      always asks, and here the consolidated approval named it.
+      always asks, and here the one question named it.
    5. Run `rig-sync prepare` for each peer. Preserve non-empty paths and report them blocked.
    6. Run `rig-sync push-env` for each peer. `.env` is ignored by Git, so a fresh clone has none
       and nothing else will put one there. It moves secrets: outside this bundle it always asks,
-      and here the consolidated approval named it.
+      and here the one question named it.
    7. Run `rig-sync doctor` and the `environment-sync` gates for every intended peer.
 4. Finish the local scaffold when remote setup is unavailable, but report remote execution as
-   blocked until its independent gates pass.
+   blocked until its independent gates pass. Report to the chat once, at the end: what is ready,
+   what is blocked and why.
 
 Never deviate from the taxonomy, create compatibility shims, or silently weaken a gate. Never take
 structure, file contents, or defaults from another project on disk.

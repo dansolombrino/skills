@@ -22,19 +22,16 @@ holds shell wave scripts only and has no `rigsync.py`.
 Read `program/00-execution-agreement.md` and the Research 2.0 conventions
 (`../research-project-init/references/conventions.md`, including "Directives are closed" — never
 infer paths, machine entries, or defaults from another project on disk) first. Stop when the
-project surfaces are absent. Approval follows the tiers in conventions, "Approval tiers",
-identically in both engineering modes:
+project surfaces are absent. Autonomy follows conventions, "Autonomy":
 
-- **Do, then report** (dry run, then `--confirm`, then one line): `deploy-revision` of the tagged
-  wave commit, `prepare` on a rig already declared in the user registry, `offload` (on by default
-  for every non-hub lane rig; Slurm targets such as `leonardo` excluded, and `supervisor.py`
-  rejects offload entries that are not lane rigs), `collect`, and `prune` of waves whose rows are
-  all terminal.
-- **Always ask**: `provision-env` and `push-env` outside `research-project-init`'s
-  consolidated approval, new destinations, `--overwrite`, and any destructive recovery.
-- Every other write (`pull`, `push`, `sync-cache`, `restore` outside a supervised wave) is
-  mode-owned: manual mode shows the dry run and waits; auto mode confirms only the named source,
-  destination, revision, and selector covered by the approved envelope.
+- **Agent-decided** (dry run, then `--confirm`, then one `program/DECISIONS.md` line):
+  `deploy-revision` of the tagged wave commit, `prepare` on a rig already declared in the user
+  registry, `offload` (on by default for every non-hub lane rig; Slurm targets such as `leonardo`
+  excluded, and `supervisor.py` rejects offload entries that are not lane rigs), `collect`, `prune`
+  of waves whose rows are all terminal, and `pull`, `push`, `sync-cache`, and `restore` for the
+  named source, destination, revision, and selector inside the envelope.
+- **Always ask**: `provision-env` and `push-env` outside `research-project-init`'s one question,
+  new destinations, `--overwrite`, and any destructive recovery.
 
 ## Safety contract
 
@@ -42,9 +39,9 @@ identically in both engineering modes:
   `verify-revision` before every initial/recovery launch, and `status` before artifact movement.
   Run `environment-sync verify` separately after revision deployment; Git consistency does not
   prove installed-environment consistency.
-- Run a `--dry-run` before every remote write, then confirm it by its tier above for the named
-  source, destination, and selector. Deploying the tagged wave commit as worktrees on the
-  envelope's rigs is do-then-report.
+- Run a `--dry-run` before every remote write, then confirm it as above for the named source,
+  destination, and selector. Deploying the tagged wave commit as worktrees on the envelope's rigs
+  is agent-decided.
 - Never force-push, reset, stash, clean, merge, add `--delete`, delete remote files, or infer an
   SSH alias/path. This skill performs exactly two deletions. `prune` (below) runs only after its
   dry run, and only on waves whose rows are all terminal. `offload` (below) removes a
@@ -67,8 +64,8 @@ identically in both engineering modes:
   probes a **non-interactive** shell for the cache values, and fails a project `.env` that
   re-declares any of them.
 - `provision-env` edits shell startup files on the rig, so it **always asks**: show its
-  `--dry-run` and wait for the user before `--confirm`, in both modes. The only exception is
-  `research-project-init`, whose consolidated approval names it explicitly. On a shared machine,
+  `--dry-run` and wait for the user before `--confirm`. The only exception is
+  `research-project-init`, whose one question names it explicitly. On a shared machine,
   say so explicitly — the change affects that account's every future shell.
 - `push-env` places the hub's `.env` on a peer that Git left without one. It **moves secrets**, so
   it always asks (the same `research-project-init` exception applies): say so, show the
@@ -140,8 +137,8 @@ under `?`.
 `.envs/<env_key>` no remaining worktree uses; it refuses a wave with any activity, any activity it
 cannot attribute to a wave, a dirty worktree, and a wave the hub's supervisor still has registered
 without `finished_at` (`sweep-supervisor finish` first), and leaves unrecognized `.envs/` entries alone.
-It is proposed by `sweep-dispatch` when a wave ends and by `experiments-tracking` reconciliation,
-and runs with `--confirm` right after its dry run (do, then report). A pruned wave stays
+It is run by `sweep-dispatch` when a wave ends and by `experiments-tracking` reconciliation,
+with `--confirm` right after its dry run (agent-decided, logged). A pruned wave stays
 recoverable: `deploy-revision` recreates its worktree from the tag. `push-source` never establishes Research 2.0 launch consistency and must not
 be used by dispatch.
 
@@ -199,8 +196,8 @@ Artifact selectors are `<group>` or `<group>/<relative/path>`, where `<group>` i
   is written once per machine and shared by every project on it, so a rig with no entry cannot be
   declared at all. Require `check-paths` to pass before `prepare`: it catches a `repo_path` under
   none of the rig's storage roots while that is still a one-line edit rather than a misplaced clone.
-- `prepare` on a rig already declared in the user registry and in `sync.toml` is do-then-report
-  (dry run, `--confirm`, one line); a destination that is not declared is a new destination and
+- `prepare` on a rig already declared in the user registry and in `sync.toml` is agent-decided
+  (dry run, `--confirm`, one log line); a destination that is not declared is a new destination and
   always asks. With `[git]` configured it clones the hub remote into an absent/empty path and
   refuses a non-empty non-Git directory. Follow it with `push-env`: `.env` is ignored by Git, so the fresh clone has
   none and nothing else will put one there.

@@ -11,9 +11,8 @@ every behavioral departure user-approved before writing it.
 
 In a Research 2.0 project (its `.project.toml` lists `research`), require that scaffold first;
 in any other project, integrate into the existing codebase as it stands. Behavioral deviations
-are an always-protected choice: engineering-auto may not approve them, and the user's row-level
-approval remains required regardless of the active mode. Mechanical deviations are do, then
-report in every mode.
+are an always-protected choice: no autonomy rule approves them, and the user's row-level
+approval remains required. Mechanical deviations are made and logged without asking.
 
 References are always user-supplied: the user names each one by path or URL, or places it in the
 project's `references/` directory. This skill is the only sanctioned path for external source code

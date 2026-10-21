@@ -68,10 +68,10 @@ Trigger: a sweep must vary a param that is not in the identity, or `check_run_id
    (`git show wave--<wave_id>:<file>`) and record the value it ran with, sourced as
    `file:line@sha`; a param that did not exist yet is `null` with source `"absent"`. Ask the user
    only when the code cannot settle it. Rerun the plan with `--backfill-file`.
-3. **Report the plan summary** (counts per machine, the old → new map, every backfill with its
-   source, plots to re-render, WandB renames) and carry on: a migration is do, then report in both
-   engineering modes (conventions, "Approval tiers"), because `apply` writes a rollback manifest
-   first and `migrate rollback` undoes it.
+3. **Log the plan summary** (counts per machine, the old → new map, every backfill with its
+   source, plots to re-render, WandB renames) to `program/DECISIONS.md` and carry on: a migration
+   is agent-decided (conventions, "Autonomy"), because `apply` writes a rollback manifest first and
+   `migrate rollback` undoes it.
 4. **Apply** with `--confirm`. It re-verifies the preconditions and that nothing changed since the
    plan, writes the rollback manifest and per-machine backups first, renames run dirs and rewrites
    every file naming an old hash on the hub and each rig, appends the version and history entries

@@ -373,7 +373,27 @@ def _relative(value: object, where: str) -> str:
     return value
 
 
-def build_queue(manifest: dict, project_root: Path, config, settings: Settings) -> dict:
+def gpu_grants(manifest: dict) -> dict[str, dict]:
+    """A user grant of cards beyond a shared rig's owned set: per wave, quoted verbatim, never inferred."""
+    grants_in = manifest.get("gpu_grants", {})
+    if not isinstance(grants_in, dict):
+        raise SupervisorError("manifest: `gpu_grants` must be a table of rig -> grant")
+    grants: dict[str, dict] = {}
+    for rig, grant in grants_in.items():
+        spot = f"manifest: gpu_grants.{rig}"
+        if not isinstance(grant, dict):
+            raise SupervisorError(f"{spot} must be a table")
+        gpus = grant.get("gpus")
+        if not isinstance(gpus, list) or not gpus or not all(isinstance(g, int) and not isinstance(g, bool) and g >= 0 for g in gpus):
+            raise SupervisorError(f"{spot}.gpus must list GPU indices")
+        words = grant.get("user_words")
+        if not isinstance(words, str) or not words.strip():
+            raise SupervisorError(f"{spot}.user_words must quote the user's grant verbatim")
+        grants[rig] = {"gpus": sorted(set(gpus)), "user_words": words.strip(), "date": _require(grant, "date", str, spot)}
+    return grants
+
+
+def build_queue(manifest: dict, project_root: Path, config, settings: Settings, board_config=None) -> dict:
     """Validate a dispatch manifest and turn it into the wave's queue. Nothing here is inferred."""
     where = "manifest"
     wave_id = _require(manifest, "wave_id", str, where)
@@ -384,6 +404,7 @@ def build_queue(manifest: dict, project_root: Path, config, settings: Settings) 
     if not pool_in:
         raise SupervisorError("manifest: `pool` names no rig")
     weights_in = _require(manifest, "weights", dict, where)
+    grants = gpu_grants(manifest)
     pool: dict[str, dict] = {}
     for rig, entry in pool_in.items():
         machine = config.machines.get(rig)
@@ -417,7 +438,17 @@ def build_queue(manifest: dict, project_root: Path, config, settings: Settings) 
                 if indices & seen:
                     raise SupervisorError(f"manifest: pool.{rig}.lanes overlap on gpu {sorted(indices & seen)}")
                 seen |= indices
+            shared = board_config.rigs.get(rig) if board_config is not None else None
+            if shared is not None and shared.shared:
+                foreign = seen - shared.owned_gpus - set(grants.get(rig, {}).get("gpus", ()))
+                if foreign:
+                    raise SupervisorError(
+                        f"manifest: {rig} is shared and gpu {sorted(foreign)} is not ours (owned: "
+                        f"{sorted(shared.owned_gpus)}); only a user grant in `gpu_grants.{rig}` allows it"
+                    )
             pool[rig] = {"kind": "lanes", "lanes": list(lanes)}
+    if set(grants) - set(pool):
+        raise SupervisorError(f"manifest: gpu_grants names rigs outside the pool: {sorted(set(grants) - set(pool))}")
     offload = manifest.get("offload", [])
     if not isinstance(offload, list) or any(rig not in pool or pool[rig]["kind"] != "lanes" for rig in offload):
         raise SupervisorError("manifest: `offload` must list pool rigs that run lanes")
@@ -480,6 +511,7 @@ def build_queue(manifest: dict, project_root: Path, config, settings: Settings) 
         "agent": {"model": agent.model, "effort": agent.effort},
         "pool": pool,
         "weights": {rig: float(weights_in[rig]) for rig in pool},
+        "gpu_grants": grants,
         "offload": sorted(set(offload)),
         "ready": {rig: [] for rig in pool},
         "blocked_lanes": {},
@@ -498,7 +530,7 @@ def register(wave: Wave, manifest_path: Path, config, board_config, settings: Se
         raise SupervisorError(f"cannot read manifest {manifest_path}: {exc}") from exc
     if not isinstance(manifest, dict) or manifest.get("wave_id") != wave.wave_id:
         raise SupervisorError(f"{manifest_path}: wave_id does not match --wave {wave.wave_id}")
-    queue = build_queue(manifest, wave.project_root, config, settings)
+    queue = build_queue(manifest, wave.project_root, config, settings, board_config)
     if wave.queue_path.exists():
         raise SupervisorError(f"wave {wave.wave_id} is already registered; a wave is registered once")
     lanes = sum(len(entry.get("lanes", [])) for entry in queue["pool"].values())
@@ -1117,6 +1149,7 @@ class Cycle:
         args = argparse.Namespace(
             rig=rig, gpu=gpu, project=queue["project"], experiment=queue["experiment"], wave=queue["wave_id"],
             project_root=queue["project_root"], runs_total=len(queue["runs"]), tmux_session=session,
+            granted_gpus=queue.get("gpu_grants", {}).get(rig, {}).get("gpus", []),
         )
         sink = io.StringIO()
         try:

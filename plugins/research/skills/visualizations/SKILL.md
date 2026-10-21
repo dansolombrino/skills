@@ -1,6 +1,6 @@
 ---
 name: visualizations
-description: Create or update Research 2.0 plots as self-contained interactive HTML from provenance-valid experiment evaluation outputs, keep run_id selection inside the file instead of the export path, preserve each single producer's complete numbered hierarchy, run plotting directly on rig-4090 without orchestration or wave machinery, decide exact titles, title line arrangement, metric explanations, interaction affordances, and fully resolved export paths on every plotting-code edit, stating the reasoning in the reply and the journal, and show every selectable run_id param by its full name with an (i) hover explanation from PARAM_GLOSSARY.json. Use when the user asks to plot, visualize, chart, make figures from results, add or modify scripts under visualizations/, or open, view, or serve rendered plots through the read-only plot server; do not use to recompute missing evaluation data.
+description: Create or update Research 2.0 plots as self-contained interactive HTML from provenance-valid experiment evaluation outputs, keep run_id selection inside the file instead of the export path, preserve each single producer's complete numbered hierarchy, run plotting directly on rig-4090 without orchestration or wave machinery, decide exact titles, title line arrangement, metric explanations, interaction affordances, and fully resolved export paths on every plotting-code edit, logging the reasoning to program/DECISIONS.md, and show every selectable run_id param by its full name with an (i) hover explanation from PARAM_GLOSSARY.json. Use when the user asks to plot, visualize, chart, make figures from results, add or modify scripts under visualizations/, or open, view, or serve rendered plots through the read-only plot server; do not use to recompute missing evaluation data.
 ---
 
 # visualizations
@@ -12,13 +12,13 @@ style from these directives and this project's own plotting code alone; never co
 layout or convention from another project on disk.
 
 Require the Research 2.0 scaffold and read the active execution agreement. **Which plots to make**
-is mode-owned: manual mode asks what the user wants; auto mode chooses inside the approved envelope.
-**Plot communication** — titles, their line arrangement, metric explanations and placement,
-interaction affordances, library, and export paths — is agent-decided in both engineering modes
-(conventions, "Approval tiers": do, then report), with every check below kept and the reasoning
-stated in the reply and the journal. Param full names and explanations (the `PARAM_GLOSSARY.json`
-entries below) are do, then report too: write each new or changed entry and show it in the reply;
-an entry is reused by every later plot. Scientific
+and **plot communication** — titles, their line arrangement, metric explanations and placement,
+interaction affordances, library, and export paths — are agent-decided (conventions, "Autonomy").
+Every quality check below stays in force: autonomy removes the wait, never the check. The
+specification and its reasoning go to `program/DECISIONS.md`; the chat gets the plot's link and,
+when the plot reveals something, one or two lines on what. Param full names and explanations (the
+`PARAM_GLOSSARY.json` entries below) are agent-written and logged the same way; an entry is reused
+by every later plot. Scientific
 interpretation and claim changes remain owned by the user, who may override any part of a plot's
 specification at any time.
 
@@ -104,7 +104,7 @@ network, no server, and no sibling files:
   network unavailable.
 - **Plotly is the default library**, because it satisfies that contract and gives legend series
   toggling natively. A different library for a specific plot is part of its communication
-  specification: use one only where the plot needs it and state why in the reply and the journal;
+  specification: use one only where the plot needs it and log why;
   never mix libraries silently within a project.
 - **White background, always.** The page and the figure render on white regardless of the
   reader's browser or OS theme. Set the HTML `body` background to `#ffffff` explicitly, set the
@@ -167,10 +167,9 @@ a hydra config nor identity: editing it never changes a run_id. Shape:
 
 - A name is the param's plain-language full name; an explanation says what the param controls
   and what changing it does, in one or two sentences a reader understands without the code.
-- **Do, then report, in both engineering modes.** Before a plot needs a param with no entry, or
-  when an entry's wording should change, write the exact `name` and `explanation` grounded in the
-  producer's config and code, and show it in the reply. Never write an entry silently and never
-  render a raw key in its place.
+- **Agent-written, logged.** Before a plot needs a param with no entry, or when an entry's wording
+  should change, write the exact `name` and `explanation` grounded in the producer's config and
+  code, and log it. Never render a raw key in its place.
 - Every later plot of the experiment reuses an entry. The user may reword any entry at any time.
 - Commit the glossary with the plotting code that first needs it.
 
@@ -189,11 +188,11 @@ a hydra config nor identity: editing it never changes a run_id. Shape:
 - The title states **every** selected identity param as `Full name = {value}`, using its glossary
   full name (never the raw key), so a figure is never ambiguous about which runs it shows and
   never needs decoding. Titles are dynamic: they re-render with the selection.
-  Decide the title template with every placeholder identified, and give one fully resolved
-  example in the report.
+  Decide the title template with every placeholder identified, and log one fully resolved
+  example.
 - **Decide how the params are arranged across title lines** — which params share a line, in what
   order, and where the semantic part sits — for this plot's reader. This differs per plot: decide
-  it each time, never carry one over from another plot, and say why in the report.
+  it each time, never carry one over from another plot, and log why.
 - Keep provenance in the file, since `plots/` is gitignored and the file travels alone: the
   selected run_ids (with their labels under `hashed-v2`) in-figure, and the producer
   `<experiment_path>`, the project revision at render time, the render timestamp, and the
@@ -209,18 +208,18 @@ a hydra config nor identity: editing it never changes a run_id. Shape:
   explanation is unambiguous. Stop rather than guess when metric semantics are not grounded. Put
   the explanation in an axis label, subtitle, legend, annotation, or in-figure caption; surrounding
   prose alone does not satisfy the requirement.
-- Do, then report: edit the plotting code and render without waiting, then state in the reply the
-  specification, every fully resolved concrete export path, and the reasoning behind each choice,
-  and record the same in the `research-journal` entry for the plot. Every later plotting-code edit
-  decides, checks, and reports its specification again, even when it is unchanged.
+- Edit the plotting code and render without waiting, then log the specification, every fully
+  resolved concrete export path, and the reasoning behind each choice to `program/DECISIONS.md`.
+  Every later plotting-code edit decides, checks, and logs its specification again, even when it
+  is unchanged.
 - After rendering, open the file and verify that the decided text is present, legible, and
   unchanged in the page's default view, that every decided affordance actually works, and that
   the decided strings are present in the HTML source, that every selectable param shows its
   glossary full name with a working (i) hover explanation, that the page and plot area
   are white, and that both download buttons save a file that reopens offline — the selection
   file holding only the runs in view, and that the reader toolbar hides and shows the selection
-  and its zoom in, out and reset act on the figure. When a check fails, fix the code, render again, and report
-  the correction; never hide a failed check.
+  and its zoom in, out and reset act on the figure. When a check fails, fix the code, render again, and log
+  the correction; never hide a check that still fails.
 - **Hand the user each rendered file as a URL.** Run this skill's
   `scripts/plot_server.py url <file>` on the rendering machine for every leaf written. Always give
   the user the printed `public:` URL first, as a clickable link: the user usually browses from a
@@ -238,8 +237,8 @@ a hydra config nor identity: editing it never changes a run_id. Shape:
   by `key=value`, paste a hash or prefix (an old hash resolves through `RUN_ID_HISTORY.json`), copy
   a run's config, and jump to the plots that include it. The map embeds every run's resolved
   config, so the Runs view exposes those configs to anyone who can open the page (never `.env`). Point the user there when they ask which run a hash in a plot is.
-- **No fixed plot checklist**: manual mode asks what the user wants; auto mode chooses the smallest
-  visualization that answers the question the plot is for.
+- **No fixed plot checklist**: choose the smallest visualization that answers the question the
+  plot is for.
 - Treat every plotting render as a direct, non-orchestrated fast path. Run its argparse command in
   the foreground on **`rig-4090`**, where evaluations converge. When another host is active,
   connect directly to `rig-4090` and run from its project checkout; stop if that checkout cannot
@@ -247,6 +246,5 @@ a hydra config nor identity: editing it never changes a run_id. Shape:
 - Do not invoke `sweep-dispatch`, `rig-sync`, or
   `experiments-tracking` for plotting. Do not create orchestration control state, mint a wave id,
   generate launch scripts, dispatch work, start tmux, or add/update `EXPERIMENTS.md` rows.
-- Every plotting-code edit and render ⇒ append a `research-journal` entry with the specification,
-  the resolved paths, and the reasoning (do, then report), plus what the plot reveals when it
-  reveals something.
+- Every plotting-code edit and render ⇒ a `program/DECISIONS.md` line with the specification and
+  resolved paths, and a `research-journal` entry when the plot reveals something.

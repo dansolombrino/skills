@@ -1,4 +1,4 @@
 interface:
   display_name: "Experiment Design"
   short_description: "Design reproducible experiments and run identities"
-  default_prompt: "Use $experiment-design to compile an approved research step into a reproducible experiment, electing its hashed-v2 run identity and reporting the reasoning, with technical choices owned by the active engineering mode."
+  default_prompt: "Use $experiment-design to compile a requested research step into a reproducible experiment, deciding its technical choices and hashed-v2 run identity autonomously and logging the reasoning to program/DECISIONS.md."

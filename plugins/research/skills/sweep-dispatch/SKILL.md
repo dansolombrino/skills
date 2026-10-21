@@ -10,13 +10,13 @@ are running the wave belongs to `sweep-supervisor`, a hub service plus an unatte
 feed, rebalance, recover, offload, and report it; this skill never polls a rig. Canon: `../research-project-init/references/conventions.md`. Templates: [references/templates.md](references/templates.md). CINECA Leonardo is one more target: when a wave assigns any run to `leonardo`, read [references/cineca-slurm.md](references/cineca-slurm.md) before gate 2 and follow it wherever it differs from this file; do not load it otherwise. Dispatch always happens **from rig-4090** (the hub). GitHub distributes one tested, tagged commit through `rig-sync`, which materializes it as the wave's own detached worktree `.waves/<wave_id>/` on every assigned machine; `environment-sync` establishes runtime parity in the wave's lock-keyed environment `.envs/<env_key>/`; rsync is only for artifacts. If either gate fails, stop. Because every wave executes from its own worktree and environment, waves of different revisions may run on the same machine at the same time; GPU exclusivity stays `rig-board`'s job.
 
 Read `program/00-execution-agreement.md` first and require the Research 2.0 surfaces. Stop on a
-legacy layout; do not offer migration or recover it as-is. Dispatch is a **standing policy** in
-both engineering modes (conventions, "Approval tiers"): inside the approved repo, branch, rigs/GPUs,
-compute/budget, and destination envelope, build the pool, deploy, and
-launch, and report each gate's preview instead of waiting on it. Shared `behemoth` cards beyond
-gpu0, new destinations, destructive actions, cancelling or superseding runs outside the wave's
-standing authorization (another wave's runs, a supersede, a running Slurm job), and envelope
-expansion always ask, in every mode.
+legacy layout; do not offer migration or recover it as-is. Dispatch is **agent-decided**
+(conventions, "Autonomy"): inside the envelope's repo, branch, rigs/GPUs, compute/budget, and
+destinations, build the pool, commit, deploy, and launch without a prompt, logging each gate's
+preview to `program/DECISIONS.md` instead of printing it. Shared `behemoth` cards beyond gpu0
+(which the supervisor also refuses without `gpu_grants`), new destinations, destructive actions,
+cancelling or superseding runs outside the wave's standing authorization (another wave's runs, a
+supersede, a running Slurm job), and envelope expansion always ask.
 
 Vocabulary (canon): a **wave** is one dispatch decision, identified by `YYYYMMDD-HHMMSS`; its **pool** is the set of lanes and cluster caps it may use; a **lane** is one GPU set on one rig; a **slice** is whatever part of the wave a rig ends up running. Lanes run in parallel, runs within a lane run sequentially, and a run belongs to the lane that claims it from the wave's queue — never to a lane chosen in advance. A **run** is one experiment execution; a **job** is one Slurm allocation on `leonardo`, which hosts exactly one run — the cluster has jobs, not lanes. Use both words strictly and never call a job a run or a lane.
 
@@ -33,7 +33,7 @@ rerun — there is no bypass; then `check_run_id_plan` (gate 1c) compares every 
 `.run_config.json` already at its path. Identical passes (resume/retry); any difference **halts**
 before anything is generated and names the differing keys — otherwise new runs collide with old
 artifacts: overwritten, or silently skipped as "done". Under `hashed-v2`, the route is the next
-identity version plus a run_id migration through `run-identity` (do, then report; `experiment-design`
+identity version plus a run_id migration through `run-identity` (agent-decided, logged; `experiment-design`
 § 2b). Under a legacy `segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1` pin,
 `RUN_ID_PARAMS` may change only while no checkpoint, evaluation, or plot output and no wave README
 or script exists; after the first such surface, any identity-schema change (including any change to
@@ -89,8 +89,8 @@ be monitored and reconciled, never recovered or relaunched by this skill.
 planned run whose semantic identity already has a `todo` or `inpr` row in another wave, and
 cross-check live evidence with `rig-sync activity --machines <assigned set>` (tmux lanes, running
 statuses, queued or running Slurm jobs, grouped by wave). Two waves on one run would write the same
-status and artifact paths. Never silently drop or duplicate the run: offer the user either to
-leave it out of this wave or to supersede the old placement (§ Supersede).
+status and artifact paths. Leave such a run out of this wave and log it — the old placement keeps
+it; superseding the old placement (§ Supersede) happens only when the user asks for it.
 1e. **rig declaration check** — resolve each assigned rig's project path with
 `rig-sync repo-path --machine <rig>` and its storage floor with
 `rig-sync storage-env --machine <rig>`; the supervisor exports them to each lane, so they are
@@ -109,15 +109,16 @@ before launch and say exactly what is missing: a wave nobody supervises is not l
 chat promises updates it cannot deliver.
 2. **Resolve usable rigs and GPUs.** First read the fleet board: `rig-board` `status --reconcile`
 shows every lane held by any project on the hub, foreign cards, and unreachable rigs. Held and
-foreign lanes are not free capacity in any mode. The pool is **every lane the board shows free on
-the envelope's rigs and GPUs** — a standing policy in both modes: report the board and the pool you
-took, never ask which rigs are free. Held lanes stay out and are reported with their holder and
-ETA; when no envelope lane is free, report that and do not widen the pool, which always asks. Never
-infer availability from `nvidia-smi`. On `behemoth`, gpu0 is the only default. Any additional
-named card requires an explicit per-wave user grant regardless of mode and is never persisted. For
+foreign lanes are not free capacity. The pool is **every lane the board shows free on the
+envelope's rigs and GPUs**: take it and log it, never ask which rigs are free. Held lanes stay out
+and are logged with their holder and ETA; when no envelope lane is free, say so in the chat and do
+not widen the pool, which always asks. Never infer availability from `nvidia-smi`. On `behemoth`,
+gpu0 is the only default. Any additional named card requires an explicit per-wave user grant, is
+never persisted, and goes into the manifest as `gpu_grants.behemoth` with the user's words
+verbatim — `register` refuses the lane without it. For
 `leonardo`, first pass the certificate precondition in `references/cineca-slurm.md` (print the
 login commands and wait when it fails), then require the project account declared in the envelope
-and check its remaining budget with `saldo -b` (report it; never ask about core-hours);
+and check its remaining budget with `saldo -b` (log it; never ask about core-hours);
 every job is one GPU, 8 cores, 128 GB unless the user states that a run needs more.
 3. **Build and authorize the pool.** There is no static assignment: the wave is one ordered
 queue, and every lane in the pool takes the next run it is eligible for when it has room, so a
@@ -130,23 +131,24 @@ for that reason: list it under `offload`, and `rig-sync offload` keeps freeing i
 waits instead of stopping; every non-hub lane rig in the pool is listed under `offload` by
 default (Slurm targets such as `leonardo` excluded; `supervisor.py` rejects offload entries that
 are not lane rigs).
-Report — do not wait on — the pool (rig, GPU set, per lane), the queue order,
-**the simulated wave completion and each lane's expected share**, runs pinned to a rig by VRAM or
-data, offload rigs, exact smoke command, staged files, journal entry, branch/remote, environment
-key and fingerprint, provisioning dry run, commit/tag/push, worktree deployment scope, and any
-supersede, and the chat update interval in minutes (the user's number, else 1).
+Log — never print or wait on — the pool (rig, GPU set, per lane), the queue order, the simulated
+wave completion and each lane's expected share, runs pinned to a rig by VRAM or data, offload
+rigs, exact smoke command, staged files, branch/remote, environment key and fingerprint,
+provisioning dry run, commit/tag/push, worktree deployment scope, and any supersede. The chat
+gets one line at launch: wave id, run count, lanes per rig, simulated completion, update interval
+in minutes (the user's number, else 1).
 `leonardo` is outside the balancing: its queue wait is not predictable, so dispatch sets its job
 cap (no core-hour cap unless the user asks for one), each run it takes becomes one job, and its
-ETA is reported as scheduler estimate plus run estimate. Report for it the account,
+ETA is reported as scheduler estimate plus run estimate. Log for it the account,
 partition/QOS, resource line, walltime basis, and the budget estimate (`runs × walltime_h × 8`
-core-hours per job) beside the account's remaining hours. State the
-**standing authorization** this approval grants for the life of the wave: inside the pool,
+core-hours per job) beside the account's remaining hours. Log the
+**standing authorization** the wave carries for its life: inside the pool,
 `sweep-supervisor` may start, move, requeue, and steal this wave's own runs, resubmit its own
 jobs and cancel its own jobs the cluster has not started yet, fetch data into declared caches, and free checksum-verified checkpoints on offload
-rigs, without asking again; everything outside the pool comes back to the user. In both modes
-this preview is a report: record that every item is within the envelope and carry on. Anything
-outside it — a rig, card, or budget beyond the envelope — is an always-ask question. Restate any
-shared-GPU grant verbatim; a granted `behemoth` card is part of the pool for this wave only.
+rigs, without asking; everything outside the pool comes back to the user. Check every item is
+within the envelope and carry on. Anything outside it — a rig, card, or budget beyond the
+envelope — is an always-ask question. Record any shared-GPU grant verbatim in the manifest and the
+journal; a granted `behemoth` card is part of the pool for this wave only.
 4. **Mint the wave id** when the pool is fixed: `date '+%Y%m%d-%H%M%S'` on rig-4090.
 One id for the whole dispatch, shared by every rig and lane. Never use a semantic slug.
 
@@ -200,12 +202,12 @@ scripts/NNN_exp/_lanes/wave_<wave_id>/
 
 After generation and before any tmux launch:
 
-1. Stage only the approved code/config/scripts/tracking/JOURNAL files. Require every execution
+1. Stage only this wave's code/config/scripts/tracking/JOURNAL files. Require every execution
    file to be tracked and no unstaged or non-ignored untracked file under `code/`, `config/`,
    `scripts/`, or a root dependency manifest. Record a hash of the staged patch.
 2. Run the experiment's design-time smoke command on rig-4090 with the environment for the
    **staged** lock: `environment-sync provision --staged --machines rig-4090` (a new key is built
-   only if absent; do, then report, like any provisioning), then `verify --staged --machines rig-4090`
+   only if absent; agent-decided, like any provisioning), then `verify --staged --machines rig-4090`
    prints `ENVIRONMENT_DIR`; substitute it for the smoke command's `<env>` placeholder. Missing smoke
    metadata makes the project unsupported. After the smoke, require the same staged-patch hash and
    a clean execution tree; a test that rewrites source invalidates itself. The committed wave has
@@ -213,8 +215,8 @@ After generation and before any tmux launch:
 3. Commit as `dispatch(<NNN_exp>): wave <wave_id>`. Refuse an existing `wave--<wave_id>` ref, then
    create that annotated tag at `HEAD`. Push the configured branch and exact tag without force;
    verify GitHub resolves both to the full local commit SHA. A push failure blocks dispatch.
-4. Run `rig-sync deploy-revision --wave <wave_id>` first as a dry run, then confirm it (do, then
-   report: no prompt) for **every rig in the pool plus the hub together**
+4. Run `rig-sync deploy-revision --wave <wave_id>` first as a dry run, then confirm it (no
+   prompt) for **every rig in the pool plus the hub together**
 (any lane may claim any run, so every pool rig needs the worktree and the environment). It
    adds the detached worktree `.waves/<wave_id>` at the tagged commit on each machine, only
    verifies one that already exists, and never moves any main checkout — so other waves keep
@@ -233,7 +235,7 @@ The chat never launches a lane, polls a rig, or writes the fleet board. After th
 environment gates pass:
 
 1. Write the supervisor manifest and run `sweep-supervisor` `register --wave <wave_id> --manifest
-   <file> --dry-run`, then `--confirm`, and report what was registered.
+   <file> --dry-run`, then `--confirm`, and log what was registered.
 2. The supervisor service does the rest on its next cycle: it repeats `rig-sync verify-revision`
    and read-only `environment-sync verify` for a lane immediately before starting it (when the
    lane is on the current local hub it runs the same commands without self-SSH), starts each lane
@@ -245,7 +247,7 @@ environment gates pass:
    lane started or names why not, then follow `sweep-supervisor` § In a chat for the periodic
    printout at the chat update interval. A chat that stalls loses only the printout.
 
-Tell the user how to watch manually too: for a peer, `ssh <rig>` then
+Log how to watch manually (the user reads it from `program/DECISIONS.md` when wanted): for a peer, `ssh <rig>` then
 `tmux attach -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>`; for the current local hub, run the
 `tmux attach` command directly; for `leonardo`, `ssh leonardo squeue --me`.
 
@@ -273,8 +275,8 @@ agent. What stays true here:
 
 ## Supersede — replacing in-flight placements of the same runs
 
-Only after the user chose it at gate 1h, and with an explicit user authorization per action in
-every engineering mode (cancelling work is destructive). Show the exact list first.
+Only when the user asks for it, with an explicit user authorization (cancelling work is
+destructive). Show the exact list in that one question.
 
 - **Slurm:** `scancel` exactly the overlapping jobs, by id (from `leonardo.jobs` and the
   `<old_wave_id>__<run_id_name>` job-name match); never by user, partition, or pattern.
@@ -288,7 +290,7 @@ every engineering mode (cancelling work is destructive). Show the exact list fir
 - **Rows:** flip the old wave's rows for those runs to `superseded` with a note naming the new
   wave (`experiments-tracking`). A superseded row is terminal and never recovered.
 - **Partial state:** a superseded run may have left a checkpoint that the new wave would resume
-  from, possibly across a code change. Decide it and report: keep (resume) when the new wave's
+  from, possibly across a code change. Decide it and log it: keep (resume) when the new wave's
   source revision equals the old wave's, otherwise quarantine.
   Quarantine is a rename to `<checkpoint dir>.superseded-<old_wave_id>`, never a deletion; the
   status file is simply overwritten by the new wave.
@@ -298,10 +300,10 @@ every engineering mode (cancelling work is destructive). Show the exact list fir
 
 A terminal wave's worktree, and any keyed environment no remaining worktree uses, is disk that
 nothing needs — but a failed run may still be recovered, and recovery recreates what was pruned.
-So pruning is **done by this skill and reported**, never silent and never skipped: when the final
-summary of a wave is posted, run
+So pruning is **done by this skill and logged**, never skipped: when the final summary of a wave
+is posted, run
 `rig-sync prune --machines <wave's machines plus the hub> --waves <wave_id> --dry-run`, then the
-same command with `--confirm`, and report what was removed. `prune` refuses active or
+same command with `--confirm`, and log what was removed. `prune` refuses active or
 dirty worktrees by itself; still list only waves whose rows are all terminal.
 
 ## Status and ETA updates
@@ -316,7 +318,7 @@ once-per-wave `write_run_id_map(<evaluations experiment dir>, layout=RUN_ID_PATH
 
 - Append `todo` rows to EXPERIMENTS.md for every generated run — **one row per (run, wave)**, carrying its wave id, with `rig` and `gpu` blank until a lane claims it. A run re-launched in a later wave gets a **new row**, never an in-place update.
 - After `register`, the supervisor's agent is the single writer of those rows for the life of the wave (format and rules: `experiments-tracking`); the board is written by the supervisor service.
-- Append the exact launch entry with `research-journal` (do, then report: show it after writing)
-  before the dispatch commit; never bypass the journal hook. The entry names
+- Append the exact launch entry with `research-journal` (written, not echoed) before the
+  dispatch commit; never bypass the journal hook. The entry names
   the wave, rationale, environment fingerprint, the pool and offload rigs, the standing
   authorization, and any one-off behemoth authorization.

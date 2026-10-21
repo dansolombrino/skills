@@ -35,9 +35,9 @@ a missing-file error rather than a contract failure. Install both, from the same
 Read `program/00-execution-agreement.md` and the Research 2.0 conventions
 (`../research-project-init/references/conventions.md`, including "Directives are closed" — never
 infer environment contents or defaults from another project on disk) first. Stop when the
-project surfaces are absent. `provision` and `verify` are **do, then report** in both engineering
-modes (conventions, "Approval tiers"): run the dry run, confirm it for the exact revision and the
-envelope's rigs without a prompt, and report the result in one line. A new environment key is
+project surfaces are absent. `provision` and `verify` are **agent-decided** (conventions,
+"Autonomy"): run the dry run, confirm it for the exact revision and the envelope's rigs without a
+prompt, and log the result in one line; only a failure reaches the chat. A new environment key is
 additive and never touches one an active wave uses. Missing tools, new destinations, credentials,
 and scope expansion always ask.
 
@@ -48,7 +48,7 @@ and scope expansion always ask.
 - Require an exact `X.Y.Z` Python pin, exact `[tool.uv].required-version = "==X.Y.Z"`, and
   `[environment].manager = "uv"`, a single-directory `name` for the hub development
   environment, and a tokenized Python `gpu_smoke` command. When no name has been recorded, use
-  `.venv` and report it; use another name only when the user gives one.
+  `.venv` and log it; use another name only when the user gives one.
   Reject names that collide with the project taxonomy, `.git`, `.env`, `.envs`, `.waves`, or
   `.rigsync_cache`.
 - Require the project `.gitignore` to ignore `.waves/` and `.envs/`, and the project not to be
@@ -75,8 +75,8 @@ and scope expansion always ask.
    `--staged --machines <hub>` before the dispatch commit exists, for the pre-dispatch smoke (the
    hub's environment files must then equal the index). Show pinned uv/Python, the environment key
    and path, every target, and each available
-   `uv sync --frozen --exact --no-install-project --dry-run` result; when pinned uv is absent, show
-   its versioned installer plan. Then `--confirm` without a prompt (do, then report).
+   `uv sync --frozen --exact --no-install-project --dry-run` result in the decision log; when
+   pinned uv is absent, log its versioned installer plan. Then `--confirm` without a prompt.
 3. On confirmation, install pinned uv under ignored `.rigsync_cache/`, install the exact
    uv-managed Python, and exact-sync `.envs/<env_key>`. Building a key that does not exist yet is
    always allowed, even while other waves run. Re-syncing an existing key is refused while any

@@ -30,7 +30,7 @@ def load_project_init():
 class CoreContractTests(unittest.TestCase):
     def test_plugin_version_and_distributed_skills(self) -> None:
         manifest = json.loads((CORE / ".codex-plugin/plugin.json").read_text())
-        self.assertEqual(manifest["version"], "2.0.0")
+        self.assertEqual(manifest["version"], "3.0.0")
         claude_manifest = json.loads((CORE / ".claude-plugin/plugin.json").read_text())
         catalog = json.loads((ROOT / ".claude-plugin/marketplace.json").read_text())
         entry = next(plugin for plugin in catalog["plugins"] if plugin["name"] == "core")
@@ -108,29 +108,33 @@ class CoreContractTests(unittest.TestCase):
 
         # Shared vocabulary appears in the contract and in every body.
         for text_name, text in {"contract": contract, **bodies}.items():
-            self.assertIn("Did I sniff that right", text, text_name)
+            self.assertNotIn("Did I sniff that right", text, text_name)
+            self.assertIn("trigger confirmation", text, text_name)
             self.assertIn("greenlight", text, text_name)
             self.assertIn("not doing yet", text, text_name)
-            self.assertIn("Engineering-auto may not bypass this gate", text, text_name)
+            self.assertIn("bypasses this gate", text, text_name)
+            self.assertNotIn("Engineering-auto", text, text_name)
 
         # The hold forbids the host's planning mode, host-neutrally.
         for text_name in ("contract", "brainstorm-hold", "intent-gate"):
             text = contract if text_name == "contract" else bodies[text_name]
             self.assertIn("planning mode", text, text_name)
 
-        # The combined skill confirms each detected mode separately.
-        self.assertIn("once per mode", bodies["intent-gate"].lower())
-        self.assertIn("Never bundle", bodies["intent-gate"])
+        # The combined skill names every detected mode in one line and never asks whether it was meant.
+        self.assertIn("one line naming every detected mode", bodies["intent-gate"])
+        self.assertIn("drop only that mode", bodies["intent-gate"])
 
-        # Exploration during a hold is negotiated, never assumed.
+        # Read-only exploration during a hold is on unless the user turns it off.
         for text_name in ("contract", "brainstorm-hold", "intent-gate"):
             text = contract if text_name == "contract" else bodies[text_name]
-            self.assertIn("Do you want exploration at this stage?", text, text_name)
+            self.assertNotIn("Do you want exploration at this stage?", text, text_name)
+            self.assertIn("read-only", text.lower(), text_name)
 
-        # The mirror re-fires on every later directive once active.
+        # The mirror re-fires only on a directive that changes the goal or scope.
         for text_name in ("contract", "intent-mirror", "intent-gate"):
             text = contract if text_name == "contract" else bodies[text_name]
-            self.assertIn("every later directive", text, text_name)
+            self.assertIn("changes the goal or scope", text, text_name)
+            self.assertIn("inside the confirmed scope", text, text_name)
 
 
 class ProjectInitTests(unittest.TestCase):

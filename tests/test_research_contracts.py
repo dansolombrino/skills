@@ -70,7 +70,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "11.1.0")
+        self.assertEqual(manifest["version"], "12.0.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -177,9 +177,9 @@ class ResearchContractTests(unittest.TestCase):
                     contract,
                 )
                 self.assertIn("every fully resolved concrete export path", contract)
-                # The decision is the agent's in both modes, and its reasoning is recorded.
+                # The decision is the agent's, and its reasoning is logged.
                 self.assertIn("reasoning", contract)
-                self.assertIn("journal", contract)
+                self.assertIn("decision log", contract.replace("`program/decisions.md`", "decision log"))
                 for gone in (
                     "wait for explicit user approval",
                     "reopens approval",
@@ -192,22 +192,21 @@ class ResearchContractTests(unittest.TestCase):
 
         ownership_evidence = {
             "visualizations": (
-                "is agent-decided in both engineering modes",
+                "are agent-decided (conventions, \"autonomy\")",
+                "autonomy removes the wait, never the check",
                 "decide the complete path template",
-                "state in the reply the specification, every fully resolved concrete export path, "
-                "and the reasoning",
-                "record the same in the `research-journal` entry",
+                "log the specification, every fully resolved concrete export path, and the reasoning",
             ),
             "conventions": (
-                "plot communication is **agent-decided in both engineering modes**",
+                "plot communication and which plots to make are **agent-decided**",
                 "decide the complete path template",
-                "record them in the journal entry for the plot",
+                "the reasoning behind each choice in the decision log",
                 "verify that the decided text is present, legible, and unchanged inside the figure",
             ),
             "execution agreement": (
                 "the agent decides each exact title",
                 "leaf-filename template and every placeholder",
-                "stated in the reply and the journal",
+                "the reasoning are logged in `program/decisions.md`",
             ),
         }
         for name, path in contracts.items():
@@ -216,10 +215,10 @@ class ResearchContractTests(unittest.TestCase):
                 for evidence in ownership_evidence[name]:
                     self.assertIn(evidence, contract)
 
-        # Which plots to make stays with the mode; the core plugin's gates are untouched.
+        # Which plots to make is the agent's too; the quality checks stay.
         visualization = " ".join(contracts["visualizations"].read_text().split())
-        self.assertIn("**Which plots to make** is mode-owned", visualization)
-        self.assertIn("manual mode asks what the user wants", visualization)
+        self.assertIn("**Which plots to make** and **plot communication**", visualization)
+        self.assertIn("choose the smallest visualization that answers the question", visualization)
 
     def test_single_producer_plots_preserve_full_experiment_hierarchy(self) -> None:
         skills = ROOT / "plugins/research/skills"
@@ -312,12 +311,11 @@ class ResearchContractTests(unittest.TestCase):
             self.assertIn("`Full name = {value}`", contract)
             self.assertNotIn("as `key={value}`", contract)
 
-        # Glossary entries are agent-written and reported like the rest of plot communication.
-        self.assertIn("are do, then report too", visualization)
+        # Glossary entries are agent-written and logged like the rest of plot communication.
+        self.assertIn("are agent-written and logged the same way", visualization)
         self.assertIn("an entry is reused by every later plot", visualization)
         self.assertIn("**Param full names come from a glossary.**", conventions)
-        self.assertIn("show it in the reply (do, then report)", conventions)
-        self.assertIn("plot communication and `PARAM_GLOSSARY.json` entries", templates)
+        self.assertIn("and code, and log it; an entry is reused", conventions)
         self.assertNotIn("always ask", " ".join(visualization.split()).split("## Design & execution")[0].lower())
 
     def test_every_plot_carries_both_download_buttons_without_approval(self) -> None:
@@ -674,7 +672,7 @@ class ResearchContractTests(unittest.TestCase):
         # hashed-v2: a run_id migration, always asked, never a sub-experiment
         self.assertIn("**`hashed-v2`** — never edit a version in place", design_schema)
         self.assertIn("**run_id migration** through `run-identity`", design_schema)
-        self.assertIn("The migration is **do, then report**", design_schema)
+        self.assertIn("The migration is agent-decided", design_schema)
         self.assertIn("the experiment stays one experiment", design_schema)
         # legacy pins: unchanged
         self.assertIn("immutable under every legacy layout (`segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, `hashed-v1`)", design_schema)
@@ -688,7 +686,7 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("immutable under every legacy layout", conventions)
         self.assertIn("new numbered sub-experiment", conventions)
         self.assertIn("any identity-schema change (including any change to `RUN_ID_SEGMENTS`) requires a new numbered sub-experiment", dispatch)
-        self.assertIn("the next identity version plus a run_id migration through `run-identity` (do, then report", dispatch)
+        self.assertIn("the next identity version plus a run_id migration through `run-identity` (agent-decided, logged", dispatch)
 
         def schema_decision(layout: str, surfaces: set[str]) -> str:
             if layout not in {"hashed-v2", "segments-v2", "segments-v1", "nested", "collapsed-v1", "hashed-v1"}:
@@ -839,7 +837,7 @@ class ResearchContractTests(unittest.TestCase):
         agreement = " ".join(PROJECT_TEMPLATES.read_text().lower().split())
         self.assertIn("new experiments use `hashed-v2` with no dialogue", agreement)
         self.assertIn(
-            "evolving a `hashed-v2` identity after its first output is a run_id migration through `run-identity` (do, then report; `migrate rollback` undoes it)",
+            "evolving a `hashed-v2` identity after its first output is a run_id migration through `run-identity` (agent-decided, logged; `migrate rollback` undoes it)",
             agreement,
         )
         self.assertIn("is never offered", agreement)
@@ -1126,7 +1124,6 @@ class ResearchContractTests(unittest.TestCase):
         ]
         self.assertIn("every election under a legacy segments pin", section)
         self.assertIn("even when the all-explicit path fit", section)
-        self.assertRegex(section, r"neither engineering mode may decide any step")
         self.assertIn("segments-v2", section)
         # The four steps, in order.
         steps = [
@@ -1162,15 +1159,15 @@ class ResearchContractTests(unittest.TestCase):
             (skills / "research-project-init/references/conventions.md").read_text().split()
         )
         election = design.split("## 2. run_id election", 1)[1].split("**Legacy pins.**", 1)[0]
-        self.assertIn("Agent-decided in both engineering modes", election)
-        self.assertIn("do, then report", election)
+        self.assertIn('Agent-decided (conventions, "Autonomy")', election)
         self.assertIn("There is no rendering dialogue", election)
         self.assertIn(
             "every param the sweep grid varies plus every behavior-affecting param whose value "
             "differs from the config default",
             election,
         )
-        self.assertIn("State the elected params and the reasoning", election)
+        self.assertIn("Log the elected params and the reasoning", election)
+        self.assertIn("program/DECISIONS.md", election)
         self.assertIn('`RUN_ID_PATH_LAYOUT = "hashed-v2"`', election)
         self.assertIn("RUN_ID_VERSIONS.json", election)
         self.assertIn("load_run_id_spec", election)
@@ -1179,17 +1176,16 @@ class ResearchContractTests(unittest.TestCase):
         self.assertNotIn("Neither engineering mode may decide", election)
 
         run_id = conventions.split("## run_id", 1)[1].split("### Legacy pins", 1)[0]
-        self.assertIn("Election is agent-decided in both engineering modes", run_id)
+        self.assertIn("**Election is agent-decided.**", run_id)
         self.assertIn("There is no rendering dialogue, byte report, or segment spec", run_id)
-        self.assertIn("in the reply and in the journal", run_id)
+        self.assertIn("(§ Decision log)", run_id)
         self.assertIn("checkpoints|evaluations|scripts|logs/<experiment_path>/rid-<32 hex>/", run_id)
         self.assertIn('`{"layout": "hashed-v2", "params": {param: value or null}}`', run_id)
         self.assertIn("by_hash: {hash: {params, version, wave_id, state, rig}}", run_id)
         # the config comparison is what makes the coverage gate mechanical
         self.assertIn("compares each planned run's resolved config", run_id)
-        tiers = conventions.split("### Approval tiers", 1)[1].split("## Directives are closed", 1)[0]
-        do_then_report = tiers.split("**Do, then report.**", 1)[1].split("**Standing policy**", 1)[0]
-        self.assertIn("run_id election and the `hashed-v2` run path", do_then_report)
+        autonomy = conventions.split("### Autonomy", 1)[1].split("## Directives are closed", 1)[0]
+        self.assertIn("run_id election and migrations", autonomy)
 
     def test_segments_v1_renders_losslessly_and_fails_hard_on_collisions(self) -> None:
         import hashlib
@@ -1606,9 +1602,9 @@ class ResearchContractTests(unittest.TestCase):
 
         self.assertIn("do not use to upgrade, migrate, or retrofit", skill)
         self.assertIn("stop as unsupported", skill)
-        self.assertIn("Write `engineering_mode: auto` unless the user asks for `manual`", skill)
+        self.assertNotIn("engineering_mode", skill)
         self.assertIn("## program/00-execution-agreement.md (initial)", templates)
-        self.assertIn("engineering_mode: auto  # or manual", templates)
+        self.assertNotIn("engineering_mode", templates)
         # The scientific half of the agreement and the Flywheel/orchestration
         # surfaces are owned by skills removed in 5.0.0; scaffolding them would
         # create records no installed skill maintains.
@@ -1644,7 +1640,7 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("TORCH_NUM_WORKERS=16", templates)
         self.assertIn("never copy or commit a token", templates)
         self.assertIn("`.gitkeep` in every directory", skill)
-        self.assertIn("single directory name", skill)
+        self.assertIn("hub development environment `.venv`", " ".join(skill.split()))
         self.assertIn('name = "{{ENVIRONMENT_NAME}}"', templates)
         self.assertIn("{{ENVIRONMENT_NAME}}/", templates)
 
@@ -1817,12 +1813,9 @@ class ResearchContractTests(unittest.TestCase):
         ).read_text()
 
         # `.venv` by default, reported; another name only when the user gives one
-        self.assertIn("use `.venv` and report it", " ".join(environment_sync.split()))
-        self.assertIn("single directory name", project_init)
-        self.assertIn(
-            "is `.venv` unless the user names another in the consolidated approval below",
-            " ".join(project_init.split()),
-        )
+        self.assertIn("use `.venv` and log it", " ".join(environment_sync.split()))
+        self.assertIn("hub development environment `.venv`", " ".join(project_init.split()))
+        self.assertIn("Anything the user states overrides its default", " ".join(project_init.split()))
         self.assertIn("hub development environment", environment_sync.lower())
         self.assertIn("hub development", project_init)
         self.assertIn('ENVIRONMENT_DIR="<ENVIRONMENT_DIR printed by environment-sync verify', dispatch)
@@ -1872,7 +1865,7 @@ class ResearchContractTests(unittest.TestCase):
         for text in (dispatch, tracking):
             self.assertIn("rig-sync prune", text)
             self.assertIn("--dry-run", text)
-        self.assertIn("propose pruning", tracking.lower())
+        self.assertIn("prune finished wave worktrees", tracking.lower())
         self.assertIn("activity", rig_sync)
         self.assertIn("--staged", env_sync)
         self.assertIn(".envs/<env_key>", env_sync)
@@ -2149,7 +2142,8 @@ class ResearchContractTests(unittest.TestCase):
             " on disk",
             conventions,
         )
-        self.assertIn("stop and ask the user", conventions)
+        self.assertIn("**Where a directive is silent, decide**", conventions)
+        self.assertIn("Never close the gap by imitating another project", conventions)
         self.assertIn("Reading outside the target project is legitimate", conventions)
         self.assertIn("the installed directory of a `research` skill", conventions)
         self.assertIn("References are always user-supplied", reference_code)
@@ -2443,56 +2437,20 @@ SKILLS = ROOT / "plugins/research/skills"
 
 
 class ApprovalTierContractTests(unittest.TestCase):
-    """Three approval tiers apply in both engineering modes; the mode owns only a few choices."""
+    """No engineering modes: the agent decides everything except a short Always-ask list, and logs it."""
 
-    def tiers(self) -> dict[str, str]:
+    def autonomy(self) -> str:
         conventions = compact_text(SKILLS / "research-project-init/references/conventions.md")
-        section = conventions.split("### Approval tiers", 1)[1].split("## Directives are closed", 1)[0]
-        bounds = ["**Do, then report.**", "**Standing policy**", "**Always ask**", "**Mode-owned.**"]
-        tiers = {}
-        for start, end in zip(bounds, bounds[1:] + ["A report is not a request"]):
-            tiers[start] = section.split(start, 1)[1].split(end, 1)[0]
-        return tiers
+        return conventions.split("### Autonomy", 1)[1].split("## Directives are closed", 1)[0]
 
-    def test_conventions_define_three_tiers_in_both_modes_plus_mode_owned_choices(self) -> None:
+    def test_conventions_define_autonomy_always_ask_and_the_decision_log(self) -> None:
         conventions = compact_text(SKILLS / "research-project-init/references/conventions.md")
-        self.assertIn("Three tiers apply identically in **both** engineering modes", conventions)
-        self.assertIn("never infer it from anything but the agreement", conventions)
-        self.assertIn("`research-project-init` writes `auto` unless the user asks for `manual`", conventions)
-        tiers = self.tiers()
-        do = tiers["**Do, then report.**"]
+        self.assertIn("There is no manual/auto split", conventions)
+        self.assertNotIn("Approval tiers", conventions)
+        self.assertNotIn("Mode-owned", conventions)
+        section = self.autonomy()
+        always = section.split("**Always ask**", 1)[1].split("**Everything else, the agent decides and does**", 1)[0]
         for action in (
-            "`rig-sync deploy-revision` of the tagged wave commit",
-            "`rig-sync prepare` on a rig already declared in the user registry",
-            "`environment-sync provision` and `verify`",
-            "a `research-journal` append — the entry is shown after it is written",
-            "every non-hub lane rig is offload-enabled by default (Slurm targets such as `leonardo` excluded; `supervisor.py` rejects offload entries that are not lane rigs)",
-            "checksum-verified on the hub",
-            "`rig-sync collect`",
-            "run_id election and the `hashed-v2` run path",
-            "plot communication",
-            "fully resolved concrete path",
-            "collision rejection",
-            "in-figure verification",
-            "the reasoning is stated in the reply and in the journal",
-            "a new or changed `PARAM_GLOSSARY.json` entry",
-            "a **run_id migration** (`run-identity`)",
-            "`migrate rollback` undoes it",
-            "`rig-sync prune` of waves whose rows are all terminal",
-            "the keep-or-quarantine choice for a superseded run's checkpoint",
-            "a mechanical source-to-target deviation under `integrate-reference-code`",
-        ):
-            self.assertIn(action, do)
-        standing = tiers["**Standing policy**"]
-        self.assertIn("every free lane on the envelope's rigs as `rig-board` shows them", standing)
-        self.assertIn("ordered for the fastest finish", standing)
-        self.assertIn("the gate previews are reports, not waits", standing)
-        self.assertIn("core-hours are not a gate", standing)
-        self.assertIn("never asks about them", standing)
-        self.assertNotIn("ceiling", standing)
-        always = tiers["**Always ask**"]
-        for action in (
-            "in both modes",
             "destructive operations",
             "history rewrites",
             "deletion of material data",
@@ -2504,59 +2462,79 @@ class ApprovalTierContractTests(unittest.TestCase):
             "a behavioral source-to-target deviation governed by `integrate-reference-code`",
             "cancelling or superseding runs outside the wave's standing authorization (another wave's runs, a supersede, a running Slurm job)",
             "`rig-sync provision-env` or `push-env` outside the `research-project-init` bundle",
+            "a run_id migration backfill value that neither config nor code settles",
             "System permission prompts are independent and always apply",
         ):
             self.assertIn(action, always)
-        for moved in ("prune", "run_id migration", "PARAM_GLOSSARY"):
+        for moved in ("prune", "PARAM_GLOSSARY", "which plots"):
             self.assertNotIn(moved, always)
-        mode = tiers["**Mode-owned.**"]
-        for choice in ("Experiment-design technical choices", "metrics", "which plots to make"):
-            self.assertIn(choice, mode)
-        self.assertIn("manual mode proposes and waits for the user", mode)
-        self.assertIn("auto mode decides inside the approved engineering envelope", mode)
+        decides = section.split("**Everything else, the agent decides and does**", 1)[1].split("**A missing or ambiguous directive", 1)[0]
+        for action in (
+            "experiment structure and naming", "technical choices", "metrics", "which plots to make",
+            "run_id election and migrations", "deploys", "environment provisioning", "offload", "collect",
+            "prune of all-terminal waves", "keep-or- quarantine of a superseded checkpoint", "glossary entries",
+            "journal entries", "mechanical reference-code deviations", "the dispatch pool", "commits",
+            "pushes to the envelope's own remote and branch (never a force-push)",
+            "amending the execution agreement inside its envelope", "only the wait is gone",
+        ):
+            self.assertIn(action, decides)
+        self.assertIn("**A missing or ambiguous directive is a decision, not a question.**", section)
+        self.assertIn("**Do the obvious next step.**", section)
+        self.assertIn("never end a turn offering a menu of such steps", section)
+        self.assertIn("never bundle a decidable item into the question", section)
+        # Invariants live in code, not prompts.
+        self.assertIn("### Invariants the scripts enforce", section)
+        self.assertIn("`supervisor.py register` refuses a pool lane on any other card", section)
+        self.assertIn("`board.py claim` refuses the card without `--granted-gpus`", section)
+        log = section.split("### Decision log", 1)[1]
+        self.assertIn("`program/DECISIONS.md`", log)
+        self.assertIn("**read it only when it is needed**", log)
+        self.assertIn("never paste it into the chat", log)
+        self.assertIn("A gate that passed is one log line, not a chat line", log)
 
-    def test_journal_appends_without_waiting_in_both_modes(self) -> None:
+    def test_no_skill_carries_engineering_modes_or_do_then_report(self) -> None:
+        for path in sorted(SKILLS.rglob("*")):
+            if path.suffix not in (".md", ".yaml") or not path.is_file():
+                continue
+            text = compact_text(path)
+            with self.subTest(path=str(path.relative_to(SKILLS))):
+                for phrase in ("engineering mode", "manual mode", "auto mode", "mode-owned", "do, then report",
+                               "do-then-report", "Approval tiers", "consolidated approval", "in the reply"):
+                    self.assertNotIn(phrase, text)
+
+    def test_journal_appends_and_commits_without_asking_or_echoing(self) -> None:
         journal = compact_text(SKILLS / "research-journal/SKILL.md")
-        self.assertIn("Appending is **do, then report** in both engineering modes", journal)
-        self.assertIn("without a per-entry prompt", journal)
-        self.assertIn("show the entry in the reply", journal)
-        self.assertNotIn("suggest the entry", journal.lower())
+        self.assertIn("Never ask before appending or committing, and never paste the entry into the chat", journal)
+        self.assertIn("belong in `program/DECISIONS.md`, not here", journal)
+        self.assertNotIn("show the entry", journal)
         self.assertNotIn("wait for approval", journal.lower())
         # append-only, with the one run_id migration exception
         self.assertIn("Append-only: never rewrite or delete past entries", journal)
         self.assertIn("except that a run_id migration (`run-identity`) replaces old run hashes", journal)
         metadata = (SKILLS / "research-journal/agents/openai.yaml").read_text()
-        self.assertIn("show me the entry afterwards", metadata)
-        for path in (
-            SKILLS / "sweep-dispatch/SKILL.md",
-            SKILLS / "experiment-design/SKILL.md",
-            SKILLS / "research-project-init/SKILL.md",
-        ):
-            text = compact_text(path)
-            self.assertNotIn("mode-aware authorization", text)
-            self.assertNotIn("according to `engineering_mode`", text)
+        self.assertIn("commit it without asking", metadata)
 
-    def test_dispatch_reports_the_pool_and_previews_instead_of_waiting(self) -> None:
+    def test_dispatch_is_agent_decided_and_logs_its_previews(self) -> None:
         dispatch = compact_text(SKILLS / "sweep-dispatch/SKILL.md")
         templates = compact_text(SKILLS / "sweep-dispatch/references/templates.md")
-        self.assertIn("Dispatch is a **standing policy** in both engineering modes", dispatch)
-        self.assertIn("report each gate's preview instead of waiting on it", dispatch)
+        self.assertIn("Dispatch is **agent-decided**", dispatch)
+        self.assertIn("logging each gate's preview to `program/DECISIONS.md` instead of printing it", dispatch)
         self.assertIn("The pool is **every lane the board shows free on the envelope's rigs and GPUs**", dispatch)
         self.assertIn("never ask which rigs are free", dispatch)
         self.assertIn("every non-hub lane rig in the pool is listed under `offload` by default (Slurm targets such as `leonardo` excluded", dispatch)
-        self.assertIn("this preview is a report", dispatch)
-        self.assertIn("do, then report: no prompt", dispatch)
-        self.assertNotIn("present the board and ask", dispatch.lower())
-        self.assertNotIn("Manual mode waits for approval", dispatch)
-        # irreversible actions still ask in every mode
+        self.assertIn("Log — never print or wait on — the pool", dispatch)
+        self.assertIn("The chat gets one line at launch", dispatch)
+        self.assertIn("Leave such a run out of this wave and log it", dispatch)
+        self.assertIn("goes into the manifest as `gpu_grants.behemoth` with the user's words verbatim", dispatch)
+        # irreversible actions still ask
         self.assertIn(
-            "cancelling or superseding runs outside the wave's standing authorization (another wave's runs, "
-            "a supersede, a running Slurm job), and envelope expansion always ask",
+            "cancelling or superseding runs outside the wave's standing authorization (another wave's runs, a "
+            "supersede, a running Slurm job), and envelope expansion always ask",
             dispatch,
         )
-        self.assertIn("with an explicit user authorization per action in every engineering mode", dispatch)
+        self.assertIn("Only when the user asks for it, with an explicit user authorization", dispatch)
         self.assertIn("Every lane the fleet board shows free on the envelope's rigs and GPUs", templates)
-        self.assertNotIn("Ask which rigs and GPUs are free", templates)
+        self.assertIn('"gpu_grants": {"behemoth"', templates)
         self.assertIn("`offload` lists every non-hub lane rig of the pool by default", templates)
         self.assertNotIn("non-hub pool rig", templates)
         self.assertNotIn("non-hub pool rig", dispatch)
@@ -2581,41 +2559,38 @@ class ApprovalTierContractTests(unittest.TestCase):
         for text in (dispatch, slurm, tick, supervisor, conventions, init, agreement):
             self.assertNotIn("core-hour ceiling", text)
 
-    def test_project_init_asks_one_consolidated_approval(self) -> None:
+    def test_project_init_asks_at_most_one_question(self) -> None:
         init = compact_text(SKILLS / "research-project-init/SKILL.md")
-        section = init.split("## Consolidated approval", 1)[1].split("## Scaffold", 1)[0]
-        self.assertIn("Ask **once**, in one round", section)
-        for item in (
-            "the scaffold preview",
-            "the first commit and its push",
-            "the hub environment",
-            "rig bring-up for every intended rig, including `rig-sync provision-env`",
-            "`rig-sync push-env` (it moves secrets)",
-            "the framework and anything else admission left open",
-        ):
-            self.assertIn(item, section)
-        self.assertIn("it states `engineering_mode: auto` and the user may switch it to `manual`", section)
-        self.assertIn("every step below runs without another prompt", section)
-        self.assertIn("A one-line description is optional: without one, `{{PROJECT_DESCRIPTION}}` falls back to the project name", init)
-        self.assertNotIn("wait before the first commit/push", init)
-        self.assertNotIn("Manual mode requires preview approval", init)
+        section = init.split("## The one question", 1)[1].split("## Scaffold", 1)[0]
+        self.assertIn("Ask **once**", section)
+        self.assertIn("only for what falls under conventions' **Always ask**", section)
+        self.assertIn("the GitHub remote (a new remote; skip it when the request names one)", section)
+        self.assertIn("`rig-sync provision-env` (it edits shell startup files", section)
+        self.assertIn("`rig-sync push-env` (it moves secrets)", section)
+        self.assertIn("that list is not a second question", section)
+        self.assertIn("Everything below then runs without another prompt", section)
+        self.assertIn("never from a questionnaire", init)
+        self.assertIn("The description is optional", init)
+        self.assertIn("`{{PROJECT_DESCRIPTION}}` falls back to the project name", init)
         templates = compact_text(SKILLS / "research-project-init/references/templates.md")
         self.assertIn("the description is optional and falls back to the project name", templates)
+        self.assertIn("## program/DECISIONS.md (initial)", templates)
+        self.assertNotIn("engineering_mode", markdown_template_block("program/00-execution-agreement.md (initial)"))
         metadata = (SKILLS / "research-project-init/agents/openai.yaml").read_text()
-        self.assertIn("one consolidated approval round", metadata)
+        self.assertIn("asking at most one question", metadata)
 
-    def test_secret_and_shell_writes_always_ask_outside_init_and_prune_reports(self) -> None:
+    def test_secret_and_shell_writes_always_ask_outside_init_and_prune_is_logged(self) -> None:
         rig_sync = compact_text(SKILLS / "rig-sync/SKILL.md")
         self.assertIn("`provision-env` edits shell startup files on the rig, so it **always asks**", rig_sync)
         self.assertIn("It **moves secrets**, so it always asks", rig_sync)
         self.assertIn("`prune` (below) runs only after its dry run, and only on waves whose rows are all terminal", rig_sync)
-        self.assertIn("runs with `--confirm` right after its dry run (do, then report)", rig_sync)
-        self.assertIn("`prepare` on a rig already declared in the user registry and in `sync.toml` is do-then-report", rig_sync)
+        self.assertIn("with `--confirm` right after its dry run (agent-decided, logged)", rig_sync)
+        self.assertIn("`prepare` on a rig already declared in the user registry and in `sync.toml` is agent-decided", rig_sync)
         env_sync = compact_text(SKILLS / "environment-sync/SKILL.md")
-        self.assertIn("`provision` and `verify` are **do, then report** in both engineering modes", env_sync)
+        self.assertIn("`provision` and `verify` are **agent-decided**", env_sync)
         self.assertNotIn("preview and wait before `--confirm`", env_sync)
 
-    def test_run_id_migration_reports_and_is_the_only_rewrite(self) -> None:
+    def test_run_id_migration_is_agent_decided_and_the_only_rewrite(self) -> None:
         texts = {
             "conventions": compact_text(SKILLS / "research-project-init/references/conventions.md"),
             "design": compact_text(SKILLS / "experiment-design/SKILL.md"),
@@ -2628,11 +2603,11 @@ class ApprovalTierContractTests(unittest.TestCase):
             with self.subTest(contract=name):
                 self.assertIn("run_id migration", text)
                 self.assertIn("`run-identity`", text)
-        self.assertIn("then `migrate apply` with the plan summary reported — do, then report; `migrate rollback` undoes it", texts["conventions"])
+        self.assertIn("then `migrate apply`, agent-decided and logged; `migrate rollback` undoes it", texts["conventions"])
         self.assertIn("while `rigsync collect --check` reports rig records the hub lacks", texts["conventions"])
-        self.assertIn("The migration is **do, then report**", texts["design"])
-        self.assertIn("reported with a rollback manifest", texts["tracking"])
-        self.assertIn("a run_id migration (`run-identity`); and settling an identity mismatch", texts["supervisor"])
+        self.assertIn("The migration is agent-decided", texts["design"])
+        self.assertIn("logged with a rollback manifest", texts["tracking"])
+        self.assertIn("a run_id migration (`run-identity` refuses one while the wave is live anyway); and settling an identity mismatch", texts["supervisor"])
         # wave README "never updated" and recovery both name the migration exception
         dispatch_templates = compact_text(SKILLS / "sweep-dispatch/references/templates.md")
         self.assertIn("The one exception is a run_id migration (`run-identity`)", dispatch_templates)
@@ -2683,7 +2658,7 @@ class ApprovalTierContractTests(unittest.TestCase):
         self.assertNotIn("like its run name, **cannot be changed retroactively**", design)
         self.assertIn("a run_id migration renames runs, it never refills a config", design)
         readme = compact_text(ROOT / "README.md")
-        self.assertIn("three approval tiers plus mode-owned choices", readme)
+        self.assertIn("logs each decision to `program/DECISIONS.md`", readme)
         self.assertIn("`rid-<32 hex>` hash (`hashed-v2`)", readme)
 
 

@@ -207,8 +207,8 @@ export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
 - `--time` in the header is only the fallback. The supervisor passes the real value on the
   `sbatch` command line, which overrides the header: the `experiments-tracking` ETA hierarchy with
   a 50% margin — **measured in this wave as soon as any run has finished**, the prior before that
-  — rounded up to 15 minutes. With no basis at all it uses the `default_walltime_s` reported in
-  the gate-3 report; never submit with a guessed
+  — rounded up to 15 minutes. With no basis at all it uses the `default_walltime_s` logged at
+  gate 3; never submit with a guessed
   24 h "to be safe", because walltime shapes priority and the per-GPU budget estimate. A per-step
   cost that differs by dataset (a tiny dataset that validates every few steps) is exactly what a
   flat guess gets wrong. A run whose
@@ -245,8 +245,8 @@ ssh -o BatchMode=yes -o ConnectTimeout=20 leonardo "cd <repo_path on leonardo> &
   `research-project-init`. The EXPERIMENTS.md row for the run carries `rig=leonardo`, `gpu=1`, and
   the job id in `notes`.
 - Before the first submission of a wave, run `saldo -b` and refuse any account whose consumed
-  hours are at or above its total or whose end date has passed; report the remaining hours and the
-  wave's estimate in the gate-3 report, and never ask about them. An account the envelope does not
+  hours are at or above its total or whose end date has passed; log the remaining hours and the
+  wave's estimate at gate 3, and never ask about them. An account the envelope does not
   declare asks first.
 - The supervisor keeps up to the pool's job cap submitted and tops it up as jobs end. Only when
   the user set a core-hour cap does it stop at that cap and raise a `budget-cap` event, which the
@@ -327,7 +327,8 @@ whether each resumes or restarts.
 ## Smoke job (once per hub setup, and after any change to this header)
 
 Validates access, account, partition, resource line, and the GPU from inside an allocation. It
-spends about 0.3 core-hours. Submit only with the user's explicit approval of the account:
+spends about 0.3 core-hours. Submit it without asking on the account the envelope declares; an
+undeclared account asks first:
 
 ```bash
 ssh -o BatchMode=yes -o ConnectTimeout=20 leonardo 'cat > $WORK/smoke_leonardo.sh <<"EOS"

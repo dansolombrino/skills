@@ -1,29 +1,31 @@
 ---
 name: experiment-design
-description: Compile an approved scientific step into a reproducible Research 2.0 experiment with NNN naming, agent-decided hashed-v2 run-id election, checkpoints, schema-v3 status telemetry, smoke criteria, and WandB decisions. Use when creating a new experiment or sub-experiment, writing training, finetuning, or evaluation code under code/NNN_..., or adding its Hydra configuration; do not use to migrate legacy experiment layouts.
+description: Compile a requested scientific step into a reproducible Research 2.0 experiment with NNN naming, agent-decided hashed-v2 run-id election, checkpoints, schema-v3 status telemetry, smoke criteria, and WandB decisions. Use when creating a new experiment or sub-experiment, writing training, finetuning, or evaluation code under code/NNN_..., or adding its Hydra configuration; do not use to migrate legacy experiment layouts.
 ---
 
 # experiment-design
 
-Protocol for compiling an approved scientific step into a new experiment. Read
+Protocol for compiling a scientific step into a new experiment. The user's request is the step;
+it needs no separate approval. Read
 `../research-project-init/references/conventions.md` and the active
 `program/00-execution-agreement.md` first. Stop as unsupported when Research 2.0 surfaces are
 absent; do not offer migration.
 
 Directives are closed (see the canon section of that name). Derive naming, structure, config
 shape, and defaults from these directives and this project alone. Never read another project on
-disk to copy how an experiment was laid out there; where a directive is missing, ask the user.
+disk to copy how an experiment was laid out there; where a directive is silent, decide and log it.
 
-Technical choices are mode-owned (conventions, "Approval tiers"): in manual mode, propose each
-technical choice and wait for the user; in auto mode, choose and record it inside the approved
-engineering envelope. The run_id election is agent-decided in both modes (section 2). Integrity
-gates and the always-ask actions never become delegable.
+Every choice below — naming, structure, checkpoints, smoke, WandB, metrics, the run_id election —
+is the agent's (conventions, "Autonomy"): decide it inside the engineering envelope, log each
+decision and its reason to `program/DECISIONS.md`, and build the experiment. Do not present a
+design for sign-off. Integrity gates and the **Always ask** actions never become delegable. Only a
+scientific question the request leaves open — what is being tested, not how — goes to the user.
 
 ## 1. Name & mirrored structure
 
-- Propose the next `NNN_[experiment_name]` (zero-padded, next free number; sub-experiments nest as `NNN_exp/NNN_sub_exp`).
+- Take the next `NNN_[experiment_name]` (zero-padded, next free number; sub-experiments nest as `NNN_exp/NNN_sub_exp`).
 - Treat the complete numbered leaf hierarchy as `<experiment_path>` and preserve it unchanged in
-  every engineering handoff. Once authorized by the active mode, create the matching dirs in
+  every engineering handoff. Create the matching dirs in
   `code/` and `config/`; later `evaluations/`, `visualizations/`, and `plots/` paths must retain the
   same hierarchy as their artifacts appear. Apply `visualizations` for plotting-code placement.
 - Unit tests for an experiment script are optional and create-on-demand. When one is written, it
@@ -33,13 +35,12 @@ gates and the always-ask actions never become delegable.
 
 ## 2. run_id election
 
-Agent-decided in both engineering modes (conventions, "Approval tiers": do, then report). There is
-no rendering dialogue. `run-identity` owns the election rules, lookup, and migration.
+Agent-decided (conventions, "Autonomy"). There is no rendering dialogue. `run-identity` owns the election rules, lookup, and migration.
 
 1. List the experiment's config params and elect the identity: **every param the sweep grid
-   varies plus every behavior-affecting param whose value differs from the config default**. State
-   the elected params and the reasoning for each inclusion and exclusion in the reply and the
-   journal entry; the user may correct it. Identity params are **top-level config keys only**; to
+   varies plus every behavior-affecting param whose value differs from the config default**. Log
+   the elected params and the reasoning for each inclusion and exclusion to `program/DECISIONS.md`;
+   the user may correct it. Identity params are **top-level config keys only**; to
    identify a nested value, elect its top-level subtree key (`optim`, never `optim.lr`).
 2. New experiments always use the `hashed-v2` layout. Record `RUN_ID_PATH_LAYOUT = "hashed-v2"` in
    the experiment's `.py` and write `config/<experiment_path>/RUN_ID_VERSIONS.json` as
@@ -99,13 +100,13 @@ Any change that adds/removes/renames a behavior-affecting config param (integrat
    identity? It may stay out only by explicitly recording why it is non-identifying.
 2. Inspect checkpoints, evaluations, plots, and wave records for this experiment.
    If none exists, rewrite the current `RUN_ID_VERSIONS.json` entry (legacy: `RUN_ID_PARAMS`) and
-   the EXPERIMENTS.md section header before the first launch, and report it.
+   the EXPERIMENTS.md section header before the first launch, and log it.
 3. Once any checkpoint, evaluation, or plot output or wave README/script exists:
-   - **`hashed-v2`** — never edit a version in place. Propose the next identity version and a
+   - **`hashed-v2`** — never edit a version in place. Append the next identity version and run a
      **run_id migration** through `run-identity`: its plan backfills the new params for old runs
      (from `.run_config.json`, or from the code at their wave tag with the source cited), refuses
-     a collision, and lists every rename and rewrite. The migration is **do, then report**: apply
-     it and report the plan summary; `migrate rollback` undoes it. It renames the old runs to their new hashes everywhere,
+     a collision, and lists every rename and rewrite. The migration is agent-decided: apply it and
+     log the plan summary; `migrate rollback` undoes it. It renames the old runs to their new hashes everywhere,
      WandB runs included; the experiment stays one experiment.
    - **Legacy pins** — `RUN_ID_PARAMS` and `RUN_ID_SEGMENTS` are immutable under every legacy
      layout (`segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, `hashed-v1`). Never change the
@@ -128,10 +129,10 @@ experiment untouched. A run_id migration changes a `hashed-v2` identity's params
 
 ## 4. Checkpoint checklist (must resolve)
 
-Resolve every item with the applicable engineering-mode owner; do not leave implicit defaults.
+Decide every item and log it; do not leave implicit defaults.
 
 1. Checkpoint filenames? (no repo-wide default — per-case)
-2. Contents? Present trade-offs: full training state (model+optimizer+scheduler+RNG+step+config snapshot; exact resume) vs weights-only (small; cannot truly resume).
+2. Contents? Weigh the trade-offs: full training state (model+optimizer+scheduler+RNG+step+config snapshot; exact resume) vs weights-only (small; cannot truly resume).
 3. Resume support in this script, yes/no? — decided NOW, before coding; sweep-rerun behavior later inherits this silently — **including unattended crash recovery**: after a machine crash/reboot the sweep machinery auto-relaunches interrupted runs, and resumable ones continue from checkpoint while non-resumable ones restart from scratch, so choose full training state for anything expensive.
 4. Which checkpoints to produce / retention? **Compute the footprint before answering**, and
    state it in the decision: `checkpoint size × checkpoints retained × runs in the sweep`. Full
@@ -205,9 +206,9 @@ display-only status contract makes the repository unsupported; do not upgrade it
    params only: a finished run's config **cannot be changed retroactively** (a run_id migration
    renames runs, it never refills a config), so a partial config leaves the sweep permanently
    unfilterable on exactly the params nobody thought to log — and
-   provenance is what lets you filter by tested commit, rig/GPU, and environment. Not a mode
-   decision; no owner may narrow it.
-3. Resolve metrics and their names/keys with the applicable engineering-mode owner.
+   provenance is what lets you filter by tested commit, rig/GPU, and environment. Not a
+   decision; nobody may narrow it.
+3. Decide metrics and their names/keys.
 4. Use project = research project, group = `NNN_experiment`. Under `hashed-v2` the one form is
    `wandb.init(name=run_id_label(...), tags=[run_id_name(...)], config=wandb_config(cfg))`: the
    display name is the readable label and the hash is a tag, never the WandB run id. A legacy pin
@@ -228,6 +229,6 @@ through `code/common/paths.py` `project_root()`/`project_path()`, and every trac
 
 ## 6. Wrap up
 
-- Append the `research-journal` entry (do, then report: show it after writing), then report the
-  engineering handoff fields, the elected run identity with its reasoning,
-  checkpoint/smoke/WandB decisions, and expected artifacts to the user.
+- Append the `research-journal` entry and commit. Every decision is already in
+  `program/DECISIONS.md`; tell the user in a few lines that the experiment is ready (its path, the
+  smoke result) and continue to the next step the request implies — usually `sweep-dispatch`.

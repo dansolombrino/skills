@@ -1,8 +1,7 @@
 # Scaffold templates
 
 Substitute `{{PROJECT_NAME}}` / `{{PROJECT_DESCRIPTION}}`; the description is optional and falls
-back to the project name. Everything here is shown once, in `research-project-init`'s consolidated
-approval.
+back to the project name.
 Create `.gitkeep` in each otherwise-empty taxonomy directory before the initial
 commit; the `.gitignore` exceptions below preserve placeholders in ignored trees.
 
@@ -48,8 +47,10 @@ plots show instead of raw keys.
 
 ## Tracking
 
-- **`program/00-execution-agreement.md`** — explicit engineering mode, envelope (including the
-  Leonardo account), destinations, and the approval tiers.
+- **`program/00-execution-agreement.md`** — engineering envelope (including the Leonardo
+  account) and destinations.
+- **`program/DECISIONS.md`** — the agent's decision log: one line per autonomous decision or
+  action, with its reason. Read it to know why something was done.
 - **`EXPERIMENTS.md`** — state: which runs exist (todo/inpr/done/failed), in which wave, on
   which rig and GPU.
 - **`JOURNAL.md`** — story: prose log of what was done, why, and what was learned.
@@ -91,7 +92,7 @@ the scripts tree.
 Follow this project's own files and the `research` skill directives. Never list, read, or copy
 from another project on disk to decide layout, file contents, dependencies, or defaults, and
 never treat a similar-looking project as a template or precedent. Where a convention is not
-stated, ask rather than imitate. External source code enters only through the `core` skill
+stated, take the conservative reversible choice and log it rather than imitate. External source code enters only through the `core` skill
 `integrate-reference-code`, from a reference the user identifies explicitly or places in
 `references/`.
 
@@ -99,7 +100,8 @@ stated, ask rather than imitate. External source code enters only through the `c
 
 - `EXPERIMENTS.md` — run tracking (state). Read it to know what exists/ran.
 - `JOURNAL.md` — prose history (story). Read it to know why things were done.
-- `program/00-execution-agreement.md` — authoritative manual/auto mode and approval envelope.
+- `program/00-execution-agreement.md` — authoritative engineering envelope.
+- `program/DECISIONS.md` — the agent's decision log; read it only to answer why or what.
 - `README.md` — structure + setup.
 - Deepen further by reading `config/NNN_*/` and the experiment's `.py`: `RUN_ID_PATH_LAYOUT` is
   the authoritative literal output-path pin (`hashed-v2`; legacy `segments-v2`, `segments-v1`,
@@ -109,7 +111,7 @@ stated, ask rather than imitate. External source code enters only through the `c
   under a legacy pin `RUN_ID_PARAMS` is the authoritative ordered run identity and
   `RUN_ID_SEGMENTS` the approved split into explicit params and named hash groups.
 - `run-identity` looks up a run hash (or prefix, or `k=v` query) and is the only way to evolve an
-  identity once runs exist (a run_id migration: do, then report, with a rollback manifest).
+  identity once runs exist (a run_id migration: agent-decided and logged, with a rollback manifest).
 
 ## Project-specific quirks
 
@@ -163,7 +165,6 @@ Project notes live in `AGENTS.md`. Read @AGENTS.md before doing anything.
 
 agreement_version: a1
 approved: no
-engineering_mode: auto  # or manual, only if the user asks for it
 
 ## Engineering envelope
 
@@ -176,25 +177,14 @@ engineering_mode: auto  # or manual, only if the user asks for it
 
 ## Decision ownership
 
-Approval tiers (conventions, "Approval tiers"; identical in both engineering modes):
-
-- Do, then report: wave deployment, `prepare` on a registered rig, environment provision/verify,
-  journal appends, offload and evaluation collection to the hub, run_id election and the
-  `hashed-v2` run path, plot communication and `PARAM_GLOSSARY.json` entries, run_id migrations
-  (rollback manifest first), prune of all-terminal waves, keep-or-quarantine of a superseded
-  run's checkpoint (keep on the same source revision, else quarantine), and mechanical
-  `integrate-reference-code` deviations.
-- Standing policy: the dispatch pool is every free lane on the envelope's rigs, ordered for the
-  fastest finish; every non-hub lane rig offloads to the hub (Slurm targets such as `leonardo`
-  excluded); previews are reports; `leonardo` runs with no core-hour cap.
-- Always ask: destructive operations, history rewrites, deleting material data, overwriting user
-  changes, new repositories/remotes/accounts/destinations, secrets/authentication, scope/budget/rig
-  expansion, shared-GPU exceptions, behavioral `integrate-reference-code` deviations, cancelling
-  or superseding runs outside the wave's standing authorization (another wave's runs, a
-  supersede, a running Slurm job), and
-  `provision-env`/`push-env` outside project init.
-- Mode-owned (manual asks, auto decides inside this envelope): experiment-design technical
-  choices, metrics, which plots to make.
+Autonomy (conventions, "Autonomy"): the agent decides and does everything except the **Always
+ask** list — destructive operations, history rewrites, deleting material data, overwriting user
+changes, new repositories/remotes/accounts/destinations, secrets/authentication, scope/budget/rig
+expansion, a shared-rig card beyond the owned ones, behavioral `integrate-reference-code`
+deviations, cancelling or superseding runs outside the wave's standing authorization, a run_id
+migration backfill value neither config nor code settles, and `provision-env`/`push-env` outside
+project init. Every decision is logged in `program/DECISIONS.md`, not narrated in the chat.
+`leonardo` runs with no core-hour cap unless the user asks for one.
 
 - Hard constraints:
 - Soft preferences:
@@ -203,10 +193,10 @@ Approval tiers (conventions, "Approval tiers"; identical in both engineering mod
   - Run-output path layout: new experiments use `hashed-v2` with no dialogue — the agent elects
     the identity params (every swept param plus every behavior-affecting param that differs from
     its default; top-level config keys only), records them in the tracked
-    `config/<experiment_path>/RUN_ID_VERSIONS.json`, and states
-    the reasoning in the reply and the journal. `plots/` is not run-scoped and is out of scope for
+    `config/<experiment_path>/RUN_ID_VERSIONS.json`, and logs
+    the reasoning in `program/DECISIONS.md`. `plots/` is not run-scoped and is out of scope for
     this choice. Evolving a `hashed-v2` identity after its first output is a run_id migration
-    through `run-identity` (do, then report; `migrate rollback` undoes it). A legacy `segments-v2`, `segments-v1`, `nested`,
+    through `run-identity` (agent-decided, logged; `migrate rollback` undoes it). A legacy `segments-v2`, `segments-v1`, `nested`,
     `collapsed-v1`, or `hashed-v1` pin is never offered; an experiment already pinned to one
     preserves its checked-in renderer and literal pin forever, with its segment spec, and never
     gets an in-place layout change, regrouping, or move to another layout — another layout for it
@@ -225,8 +215,8 @@ Approval tiers (conventions, "Approval tiers"; identical in both engineering mod
     that collides with a different script's output; a new or changed resolved path is resolved and
     collision-checked again, even when it conforms to the template. Rewriting a leaf whole on rerun
     is expected. After rendering, the decided text is verified inside the figure. The
-    specification, every fully resolved concrete export path, and the reasoning are stated in the
-    reply and the journal; the user may override any of it.
+    specification, every fully resolved concrete export path, and the reasoning are logged in
+    `program/DECISIONS.md`; the user may override any of it.
   - Additional project-specific choices:
 
 ## Approval
@@ -234,6 +224,16 @@ Approval tiers (conventions, "Approval tiers"; identical in both engineering mod
 - Owner:
 - Approved scope:
 - Latest material revision:
+```
+
+## program/DECISIONS.md (initial)
+
+```markdown
+# Decision log
+
+<!-- append-only; one line per autonomous decision or action (conventions, "Decision log"):
+     - <YYYY-MM-DD HH:MM> · <skill> · <what> · <why> · <where>
+     read only when needed; never pasted into the chat -->
 ```
 
 ## .env.example (committed key mirror)

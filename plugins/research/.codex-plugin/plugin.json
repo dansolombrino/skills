@@ -1,6 +1,6 @@
 {
   "name": "research",
-  "version": "11.1.0",
+  "version": "12.0.0",
   "description": "Materialize reproducible experiments across verified GPU rigs: scaffold projects, provision exact environments, deploy tested revisions, dispatch GPU waves as a self-balancing pull queue, supervise them from the hub without an open chat, keep a fleet-wide GPU lane board, and visualize results.",
   "author": {
     "name": "Dan Solombrino",
@@ -23,7 +23,7 @@
   "interface": {
     "displayName": "Research",
     "shortDescription": "Reproducible GPU experiments across verified rigs",
-    "longDescription": "Scaffold fresh Research 2.0 projects in one consolidated approval under an explicit engineering execution agreement whose approval tiers act-then-report on reversible, gated steps and always ask before irreversible ones, provision exact uv environments, give every run a versioned hash identity that can be migrated to new swept params, deploy tested revisions, dispatch GPU waves as a pull queue over rig lanes and Slurm jobs, supervise them with a hub service and an unattended agent (rebalancing, fault recovery, offload of disk-constrained rigs, evaluation collection to the hub, per-GPU status table), keep a fleet-wide board of which rig GPUs every project holds, reconcile run state, maintain a narrative journal, and create self-contained result visualizations with a hash-to-params Runs view.",
+    "longDescription": "Scaffold fresh Research 2.0 projects with at most one question, then act autonomously inside the engineering envelope, logging every decision to a project decision log and asking only before destructive, secret-moving, or envelope-expanding steps, with shared-GPU ownership enforced in code, provision exact uv environments, give every run a versioned hash identity that can be migrated to new swept params, deploy tested revisions, dispatch GPU waves as a pull queue over rig lanes and Slurm jobs, supervise them with a hub service and an unattended agent (rebalancing, fault recovery, offload of disk-constrained rigs, evaluation collection to the hub, per-GPU status table), keep a fleet-wide board of which rig GPUs every project holds, reconcile run state, maintain a narrative journal, and create self-contained result visualizations with a hash-to-params Runs view.",
     "developerName": "Dan Solombrino",
     "category": "Developer Tools",
     "capabilities": [

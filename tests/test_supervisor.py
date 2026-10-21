@@ -199,6 +199,24 @@ class SupervisorTests(unittest.TestCase):
         code, _out, err = self.cli("register", "--wave", WAVE, "--manifest", str(self.manifest(**kwargs)), "--confirm")
         self.assertEqual(code, 0, err)
 
+    def test_shared_rig_lanes_need_a_user_grant_beyond_owned_cards(self) -> None:
+        self.registry.write_text(self.registry.read_text().replace('slurm = ["cluster"]', 'slurm = ["cluster"]\nshared = ["peer"]'))
+        pool = {"hub": {"lanes": ["0"]}, "peer": {"lanes": ["0", "2"]}}
+        code, _out, err = self.cli("register", "--wave", WAVE, "--manifest", str(self.manifest(pool=pool)), "--dry-run")
+        self.assertNotEqual(code, 0)
+        self.assertIn("not ours", err)
+        path = self.manifest(pool=pool)
+        payload = json.loads(path.read_text())
+        payload["gpu_grants"] = {"peer": {"gpus": [2], "user_words": "", "date": "2026-10-21"}}
+        path.write_text(json.dumps(payload))
+        code, _out, err = self.cli("register", "--wave", WAVE, "--manifest", str(path), "--dry-run")
+        self.assertIn("verbatim", err)
+        payload["gpu_grants"]["peer"]["user_words"] = "Marco lent me gpu 2 for tonight"
+        path.write_text(json.dumps(payload))
+        code, _out, err = self.cli("register", "--wave", WAVE, "--manifest", str(path), "--confirm")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.queue()["gpu_grants"]["peer"]["gpus"], [2])
+
     def queue(self) -> dict:
         return supervisor.Wave(self.hub, WAVE).load()
 

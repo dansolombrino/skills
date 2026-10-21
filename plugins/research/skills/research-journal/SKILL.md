@@ -1,6 +1,6 @@
 ---
 name: research-journal
-description: Keep a Research 2.0 JOURNAL.md as the append-only chronological story of what was done, why, and what was learned. Use after meaningful scientific or engineering events and whenever the user asks to journal, log, or write up the work; append each entry without a prompt in either engineering mode and show it afterwards, never as factual run state.
+description: Keep a Research 2.0 JOURNAL.md as the append-only chronological story of what was done, why, and what was learned. Use after meaningful scientific or engineering events and whenever the user asks to journal, log, or write up the work; append and commit each entry without a prompt and without echoing it, never as factual run state.
 ---
 
 # research-journal
@@ -9,10 +9,11 @@ JOURNAL.md is the project's **story** — prose explaining what was done, why, a
 
 ## When
 
-- Appending is **do, then report** in both engineering modes (conventions, "Approval tiers"):
-  append a concise factual entry in the same turn as the event, without a per-entry prompt, then
-  show the entry in the reply so the user can correct it. A correction is a new entry, never an
-  edit of the old one. Trivial mechanical edits do not journal.
+- Appending is the agent's (conventions, "Autonomy"): append a concise factual entry in the same
+  turn as the event and commit it with the work it describes. Never ask before appending or
+  committing, and never paste the entry into the chat; the user reads JOURNAL.md when they want
+  to. A correction is a new entry, never an edit of the old one. Trivial mechanical edits do not
+  journal.
 - On demand, anytime the user asks.
 
 ## Format
@@ -30,11 +31,12 @@ deciding the weight-decay grid (see EXPERIMENTS.md §000).
 - Title is optional; keep entries short and honest — rationale over ceremony.
 - Reference experiments by `NNN_name` and runs by their run_id (the `rid-<32 hex>` hash under
   `hashed-v2`, with its label when it helps the reader).
-- Agent-decided choices carry their reasoning here: a run_id election names the elected params and
-  why; a plot's entry names its communication specification, every resolved export path, and why.
-- **A one-off GPU authorization belongs in the journal.** If the user granted extra cards on the shared `behemoth` for a wave ("Marco lent me gpu 3 for tonight"), the launch entry says so — the grant is per-wave and never persisted anywhere else, so the journal is its only prose record.
+- Engineering decisions and their reasoning (a run_id election, a plot's communication
+  specification and export paths) belong in `program/DECISIONS.md`, not here; the journal keeps the
+  scientific why and what was learned, and may point to the decision log.
+- **A one-off GPU authorization belongs in the journal.** If the user granted extra cards on the shared `behemoth` for a wave ("Marco lent me gpu 3 for tonight"), the launch entry says so — the grant is per-wave and never persisted as configuration, so the journal and the wave manifest's `gpu_grants` are its only records.
 - **Launch entries name the wave id**, so JOURNAL.md is the prose index into waves: given a wave id from EXPERIMENTS.md or `scripts/`, the journal says why it was dispatched.
 
 ## Enforcement backstop
 
-The project's `.githooks/pre-commit` blocks commits touching `code/ config/ scripts/ evaluations/ visualizations/` without a JOURNAL.md change. If blocked, append the entry as above, show it, then commit. Never bypass the hook (`--no-verify`) without explicit user instruction.
+The project's `.githooks/pre-commit` blocks commits touching `code/ config/ scripts/ evaluations/ visualizations/` without a JOURNAL.md change. If blocked, append the entry as above, then commit. Never bypass the hook (`--no-verify`) without explicit user instruction.

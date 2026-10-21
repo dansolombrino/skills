@@ -186,6 +186,18 @@ class BoardTests(unittest.TestCase):
 
     # ── claim / refresh / release ──
 
+    def test_shared_rig_claims_only_owned_or_granted_cards(self) -> None:
+        session = "grokking_000_grokking_20260908-101500_behemoth_gpu{}"
+        code, out, err = self.claim(**{"--rig": "behemoth", "--gpu": "0", "--tmux-session": session.format("0")})
+        self.assertEqual(code, 0, out + err)
+        code, out, err = self.claim(**{"--rig": "behemoth", "--gpu": "3", "--tmux-session": session.format("3")})
+        self.assertNotEqual(code, 0)
+        self.assertIn("not ours", out + err)
+        self.assertIsNone(self.lane("behemoth", "3"))
+        code, out, err = self.claim(**{"--rig": "behemoth", "--gpu": "3", "--tmux-session": session.format("3"), "--granted-gpus": "3"})
+        self.assertEqual(code, 0, out + err)
+
+
     def test_claim_refresh_release_round_trip(self) -> None:
         code, out, _ = self.claim()
         self.assertEqual(code, 0, out)
@@ -227,8 +239,8 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(lane["project"], "grokking")
 
     def test_claim_refuses_overlapping_gpu_sets(self) -> None:
-        self.assertEqual(self.claim(**{"--rig": "behemoth", "--gpu": "0,1"})[0], 0)
-        code, _, err = self.claim(**{"--rig": "behemoth", "--gpu": "1", "--project": "other"})
+        self.assertEqual(self.claim(**{"--rig": "behemoth", "--gpu": "0,1", "--granted-gpus": "1"})[0], 0)
+        code, _, err = self.claim(**{"--rig": "behemoth", "--gpu": "1", "--project": "other", "--granted-gpus": "1"})
         self.assertEqual(code, 3)
         self.assertIn("overlaps", err)
 

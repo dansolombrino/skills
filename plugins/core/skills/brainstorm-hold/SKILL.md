@@ -1,6 +1,6 @@
 ---
 name: brainstorm-hold
-description: Hold a discussion in brainstorm phase and produce no plan, step list, or code until the user gives an explicit greenlight. Use when the user says things like "brainstorm only", "no planning yet", "don't implement anything", "wait for my greenlight / go / ok before you plan", "let's lock the details first", or "this is a discussion phase". Exploration is negotiated, not assumed. Do not use for ordinary requests that merely mention brainstorming as background, and do not use when the user asks to plan or implement now; use intent-mirror for pure alignment checks.
+description: Hold a discussion in brainstorm phase and produce no plan, step list, or code until the user gives an explicit greenlight. Use when the user says things like "brainstorm only", "no planning yet", "don't implement anything", "wait for my greenlight / go / ok before you plan", "let's lock the details first", or "this is a discussion phase". Read-only exploration is on unless the user turns it off. Do not use for ordinary requests that merely mention brainstorming as background, and do not use when the user asks to plan or implement now; use intent-mirror for pure alignment checks.
 ---
 
 # brainstorm-hold
@@ -9,19 +9,19 @@ Discuss freely, produce no plan. Canon: [`../intent-gate/references/contract.md`
 this body summarizes it and never overrides it. `intent-mirror` and `intent-gate` share the same
 contract, so their behavior is identical wherever they overlap.
 
-This skill constrains output and action, not reasoning. Engineering-auto may not bypass this gate.
+This skill constrains output and action, not reasoning. No autonomy rule of another skill bypasses this gate.
 
-## 1. Confirm the trigger
+## 1. Start holding
 
-- First message: name the mode and ask. "I read this as a request to **hold** in brainstorm
-  phase until you greenlight the next step. Did I sniff that right?" Produce nothing else.
-- A "no" cancels the skill. Continue with the user's actual request.
+No trigger confirmation: the user asked for the hold. Open the first reply with one line
+("Holding in brainstorm until you greenlight.") and go straight into the discussion. If the user
+says that reading is wrong, drop the hold.
 
-## 2. Negotiate exploration
+## 2. Explore read-only by default
 
-- Ask: "Do you want exploration at this stage?" Never assume either answer.
-- If yes, ask what exploration may and may not consider, and stay inside that boundary.
-- Re-ask when the stage changes. Report findings as facts and questions, never as a plan.
+- Read files, search, and inspect state as the discussion needs, without asking: it has no side
+  effects. Stop or narrow only when the user says so.
+- Report findings as facts and questions, never as a plan.
 
 ## 3. Hold
 

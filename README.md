@@ -76,14 +76,14 @@ Cross-rig workflows require the bundled `rig-sync` and `environment-sync` contra
 access on every rig; the plugin stops before remote dispatch when source or runtime parity cannot
 be proven.
 
-Research 2.0 supports fresh projects only, scaffolded in one consolidated approval. Every
-scaffolded project carries an explicit engineering execution agreement with a manual/auto mode, an
-approved envelope, and three approval tiers plus mode-owned choices. The three tiers apply in both
-modes: reversible, gated steps (deploys, environment provisioning, journal appends, offload and
-evaluation collection, run_id election, plot communication) run and are reported; dispatch follows
-a standing pool policy; and destructive, secret-moving, budget-expanding, and run_id-migrating
-actions always ask. The mode-owned choices — experiment-design choices, metrics, and which plots to
-make — are the only ones that follow the mode. The engineering skills
+Research 2.0 supports fresh projects only, scaffolded with at most one question (the remote and
+the rig secrets bring-up). Every scaffolded project carries an engineering execution agreement
+with its envelope. Inside it the agent decides and acts on its own — experiment design, run_id
+election and migration, plots, deploys, environment provisioning, dispatch, journal entries,
+commits — and logs each decision to `program/DECISIONS.md`, which it reads only when needed instead
+of narrating in the chat. Only destructive, secret-moving, and envelope-expanding actions ask.
+Hard limits such as `behemoth` being gpu0-only without a per-wave grant are enforced by the
+scripts, not by prompts. The engineering skills
 read the agreement before any material action and stop when it is absent. New experiments identify
 runs by a versioned `rid-<32 hex>` hash (`hashed-v2`) that `run-identity` looks up and migrates.
 `EXPERIMENTS.md` holds run state and `JOURNAL.md` holds the narrative. Unsupported legacy layouts

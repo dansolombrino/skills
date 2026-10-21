@@ -1,6 +1,6 @@
 ---
 name: experiments-tracking
-description: Keep a Research 2.0 EXPERIMENTS.md true and derive active-run, lane, and wave ETAs from provenance-valid schema-v2 status plus artifacts, and propose pruning finished wave worktrees. Use when runs are generated, launched, checked, reported, or discussed, when the user asks about experiment status or ETA, or at session start to reconcile factual run state; do not interpret or migrate legacy tracking layouts.
+description: Keep a Research 2.0 EXPERIMENTS.md true and derive active-run, lane, and wave ETAs from provenance-valid schema-v2 status plus artifacts, and prune finished wave worktrees. Use when runs are generated, launched, checked, reported, or discussed, when the user asks about experiment status or ETA, or at session start to reconcile factual run state; do not interpret or migrate legacy tracking layouts.
 ---
 
 # experiments-tracking
@@ -9,13 +9,13 @@ EXPERIMENTS.md is the project's **state** (the story lives in JOURNAL.md). Canon
 
 Require the Research 2.0 scaffold and schema-v2 status contract (schema v3 is the same plus `rig`). If either is absent, stop as
 unsupported; do not offer migration or interpret legacy state. Factual reconciliation is automatic
-in every engineering mode and does not require a narrative or scientific decision.
+and does not require a narrative or scientific decision.
 
 ## Hard rules
 
 - **Single-writer: EXPERIMENTS.md is only ever edited on rig-4090.** On any other rig, report statuses verbally but never edit the file. While a wave is supervised, only that wave's `sweep-supervisor` agent writes its rows — a chat watching the wave never does; it pastes the supervisor's table.
 - Ground truth is NOT the md — it is the three on-disk signals (hierarchy in `conventions.md`): the per-run status first proves the current wave's Git revision/tag and environment fingerprint; after that, the **expected final artifact** is golden for completion — or, on a rig with offload, the `<artifact>.offloaded.json` receipt `rig-sync` left in its place, which names the checksum-verified hub copy — followed by `.status.json` state/timing/progress and the latest run log. A missing `.status.json`/dir means the run never started (or its outputs were deleted ⇒ it is no longer done).
-- **One (run, wave) = one table row = one line.** A run re-launched in a later wave gets a **new row**, never an in-place update — the table itself carries the execution history. One line per row keeps parallel-session git merges clean. Rows are never rewritten, with one exception: a run_id migration (`run-identity`, reported with a rollback manifest). Its `apply` only replaces each old hash with its new one in the `run_id` cells; the rest is the migration's follow-up, done by the agent through this skill from the `followups.json` that `apply` writes beside its rollback manifest: set the section preamble's `run_id version:` and params line, add the new params' columns, and fill each row's new param values and its new `label` cell.
+- **One (run, wave) = one table row = one line.** A run re-launched in a later wave gets a **new row**, never an in-place update — the table itself carries the execution history. One line per row keeps parallel-session git merges clean. Rows are never rewritten, with one exception: a run_id migration (`run-identity`, logged with a rollback manifest). Its `apply` only replaces each old hash with its new one in the `run_id` cells; the rest is the migration's follow-up, done by the agent through this skill from the `followups.json` that `apply` writes beside its rollback manifest: set the section preamble's `run_id version:` and params line, add the new params' columns, and fill each row's new param values and its new `label` cell.
 - A row's run identity is semantic: the identity params' values (the current
   `config/<experiment_path>/RUN_ID_VERSIONS.json` entry under `hashed-v2`, the ordered `RUN_ID_PARAMS` under a legacy
   `segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1` pin). Read the
@@ -127,7 +127,7 @@ their `eta` table cells: lane/wave roll-ups belong in chat reports, while the ta
 an active-run field.
 
 Under `hashed-v2`, the identity evolves after the first checkpoint, evaluation, or plot output or
-wave README/script only through a run_id migration (`run-identity`, reported with a rollback manifest), which
+wave README/script only through a run_id migration (`run-identity`, logged with a rollback manifest), which
 is also the only thing that may rewrite historical rows: its `apply` replaces old hashes with new
 ones, and its follow-up — done by the agent through this skill from `followups.json` — updates the
 section preamble (`run_id version:` and the params line), adds the new param columns, and fills
@@ -157,7 +157,7 @@ here: a lane on the board is not evidence that a run is done, failed, or even st
 - Observing progress ⇒ refresh `progress` and recompute `eta`; the supervisor agent does this at
   every tick as well as on urgent transitions.
 - Observing completion ⇒ flip to `done`/`failed` per the signals, fill `ended` + `elapsed`, clear `eta`.
-- An approved supersede ⇒ flip the replaced rows to `superseded`, clear `eta`, and name the new
+- A user-authorized supersede ⇒ flip the replaced rows to `superseded`, clear `eta`, and name the new
   wave in `notes`.
 
 ## Reconciliation (mandatory)
@@ -189,10 +189,10 @@ A wave launched before the wave-isolation contract (conventions; it has no `.wav
 worktree) is reconciled the same way, but flag it as "legacy wave, not recoverable": recovery
 refuses it.
 
-Then **prune** — never skip it, never do it silently. Run
+Then **prune** — never skip it. Run
 `rig-sync activity --machines <the project's machines>` and compare with the rows: every wave
 whose rows are all terminal (`done`/`failed`/`superseded`) but whose worktree still exists, plus
 any keyed environment no worktree uses, is a candidate. If there is any, run
 `rig-sync prune --machines <...> --waves <candidates> --dry-run`, then the same command with
-`--confirm`, and report what was removed (do, then report). A wave with failed runs is a fine
-candidate too: recovery recreates the worktree from its tag; say so in the report.
+`--confirm`, and log what was removed. A wave with failed runs is a fine candidate too: recovery
+recreates the worktree from its tag.

@@ -7,20 +7,13 @@ them. When a skill body and this file disagree, this file wins.
 These gates constrain **what is produced and when action happens**. They never constrain how the
 model reasons. Think freely; hold the output.
 
-## Trigger confirmation
+## Activation
 
-The first message after any of these skills fires does exactly one thing: it names the mode that
-fired and asks whether the user's intent was read correctly. Use this shape, adapted to the
-user's words:
-
-> I read this as a request to **<mode>** (<one-line paraphrase of what that means here>).
-> Did I sniff that right?
-
-- One confirmation per mode. If two modes fired, ask two separate questions, each awaiting its
-  own answer. Never bundle them.
-- Produce nothing else in that message: no mirror, no options, no exploration, no action.
-- A "no" cancels that mode. A "yes" activates it. An ambiguous reply is a question, not a yes:
-  ask again in fewer words.
+There is no separate trigger confirmation: the user asked for the gate, so asking whether they
+did is a wasted round trip. The first message applies every mode that fired and opens with one
+line naming them, e.g. "Mirroring before acting, and holding in brainstorm until you greenlight."
+That line is the check: if the user says the reading is wrong, drop that mode and continue with
+their actual request.
 
 ## Mirror structure
 
@@ -47,14 +40,14 @@ While a hold is active:
 - When something forbidden would help, say so in one sentence and ask whether that lifts the hold
   for that item only. Do not produce it first and ask after.
 
-## Exploration negotiation
+## Exploration
 
-Exploration means reading files, searching, or inspecting state to sharpen the discussion.
-It is never assumed on and never assumed off.
+Exploration means reading files, searching, or inspecting state to sharpen the discussion. It has
+no side effects, so it is **on by default** during a hold and needs no permission: explore what
+the discussion needs, read-only, inside the project the user is working in.
 
-- After the mode is confirmed, ask: "Do you want exploration at this stage?"
-- If yes, ask what it may and may not consider, and stay inside that boundary.
-- If the stage changes (a new topic, a partial greenlight), ask again.
+- It is off only when the user says so ("don't look at the code", "just talk"), or bounded only
+  as the user bounds it.
 - Report what exploration found as facts and questions, never as a plan.
 
 ## Greenlight
@@ -75,16 +68,17 @@ unlocked (planning only, or planning and implementation); if that is unclear, as
 
 ## Persistence and re-fire
 
-- Once `intent-mirror` is confirmed, it is a posture for the rest of the chat: every later
-  directive that would lead to action gets a fresh mirror before anything is done. This includes
-  directives issued after a greenlight.
-- Once `brainstorm-hold` is confirmed, it persists until a greenlight lifts it. A new topic does
+- Once `intent-mirror` is active, it is a posture for the rest of the chat: every later directive
+  that **changes the goal or scope** and would lead to action gets a fresh mirror before anything
+  is done, including after a greenlight. A follow-up inside the confirmed scope, a read-only
+  request, an answer to a question, or the next step of confirmed work does not re-fire it.
+- Once `brainstorm-hold` is active, it persists until a greenlight lifts it. A new topic does
   not lift it.
 - Both end only on an explicit user directive to stop, such as "stop mirroring" or "no more
   holds". Stopping is itself a directive: confirm it in one line before dropping the posture.
 
 ## Precedence
 
-These gates are always-protected. In a research project with an execution agreement, the
-`engineering_mode` value does not matter here: Engineering-auto may not bypass this gate. Any
-other skill that would act, plan, or edit defers to an active mirror or hold.
+These gates are always-protected. No autonomy rule of another skill bypasses this gate: a
+research project's execution agreement and its autonomy canon do not apply here. Any other skill
+that would act, plan, or edit defers to an active mirror or hold.

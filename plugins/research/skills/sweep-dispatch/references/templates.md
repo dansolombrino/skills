@@ -256,7 +256,8 @@ Notes:
   so the wave folder is the audit trail of why a run was allowed on a given card. The guard
   replays the grant that existed at generation time: it catches drift *after* generation
   (recovery relaunch, hand-edits, a copied script) but cannot validate the grant itself. The
-  pre-launch approval gate (`sweep-dispatch`, gate 2) remains the primary control.
+  primary control is `supervisor.py register`, which refuses a lane on a card beyond the rig's
+  `owned_gpus` unless the manifest's `gpu_grants` quotes the user's grant.
 - The `tee` target is the **mirror of this script's own path under `logs/`**, with a timestamp
   suffix (conventions): history is kept, logs are never overwritten, and a crash-recovery
   relaunch inside the same wave never clobbers the earlier attempt. Capture both `PIPESTATUS`
@@ -448,6 +449,7 @@ execution file), one JSON object:
     "leonardo": {"max_jobs": 8, "default_walltime_s": 7200}
   },
   "weights": {"rig-4090": 1.0, "behemoth": 2.0, "leonardo": 1.0},
+  "gpu_grants": {"behemoth": {"gpus": [5], "user_words": "<the user's grant, verbatim>", "date": "<YYYY-MM-DD>"}},
   "offload": ["behemoth"],
   "runs": [
     {
@@ -473,7 +475,8 @@ weight-1.0 seconds from the `experiments-tracking` hierarchy, omitted when there
 lane rig of the pool by default (Slurm targets such as `leonardo` excluded; `supervisor.py` rejects
 offload entries that are not lane rigs). `leonardo` takes no `core_hours_cap` unless the user
 asks for one. A `behemoth` lane beyond
-gpu0 appears only under a user grant for this wave. Weights are copied from conventions § Rig
+gpu0 appears only under a user grant for this wave, quoted in `gpu_grants` (omit the key
+otherwise); `register` refuses any shared-rig card outside `owned_gpus` and the grant. Weights are copied from conventions § Rig
 fleet at generation time and are only the prior: the supervisor replaces them with rates measured
 in this wave as soon as runs finish.
 
@@ -482,10 +485,10 @@ in this wave as soon as runs finish.
 There is no static assignment. The wave has one ordered queue and a **pool** of lanes; each lane
 takes the next run it is eligible for when it has room, so a fast card simply takes more runs and
 a wrong estimate corrects itself once real runtimes arrive. What dispatch decides is the pool, the
-queue order, and the estimate it shows the user.
+queue order, and the estimate it logs.
 
 1. **Pool.** Every lane the fleet board shows free on the envelope's rigs and GPUs — a standing
-   policy, reported, never asked; never infer availability from `nvidia-smi`. Low disk never
+   agent-decided, logged, never asked; never infer availability from `nvidia-smi`. Low disk never
    excludes a rig: every non-hub lane rig is under `offload` by default (Slurm targets such as
    `leonardo` excluded; `supervisor.py` rejects offload entries that are not lane rigs).
    `leonardo` joins with a job cap and no core-hour cap.
@@ -495,8 +498,8 @@ queue order, and the estimate it shows the user.
 3. **Order.** Sort runs by cost descending. Longest-first matters: a long run claimed last is what
    leaves one lane working alone at the end of the wave.
 4. **Estimate.** Simulate the feeder (each run to the eligible lane predicted free first, runtime
-   `cost / weight`) and report the predicted wave completion and each lane's share in the gate-3
-   report. A run pinned by VRAM or data to one rig is named as such.
+   `cost / weight`) and log the predicted wave completion and each lane's share; the chat's launch
+   line carries only the completion. A run pinned by VRAM or data to one rig is named as such.
 
 Worked example — 12 equal-cost runs, one hour each on `rig-4090`, across `rig-4090` gpu0 (1.0),
 `rig-3090-ti` gpu0 (0.5), and `behemoth` gpu0 (2.0). The feeder lands 3 / 2 / 7 and the wave takes

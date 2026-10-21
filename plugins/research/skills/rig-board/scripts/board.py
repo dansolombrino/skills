@@ -94,6 +94,9 @@ class Rig:
     ssh: str
     hostname: str | None
     shared: bool = False
+    # On a shared rig only these cards are ours (`machines.<rig>.owned_gpus`, default gpu0); any
+    # other card needs a per-wave user grant, and `claim` refuses it without one.
+    owned_gpus: frozenset[int] = frozenset({0})
 
 
 @dataclass(frozen=True)
@@ -165,7 +168,10 @@ def load_config(registry_path: Path) -> BoardConfig:
         if not isinstance(ssh, str) or not ssh:
             raise BoardError(f"{registry_path}: machines.{name}.ssh must be set")
         hostname = entry.get("hostname")
-        rigs[name] = Rig(name, ssh, hostname if isinstance(hostname, str) else None, name in shared)
+        owned = entry.get("owned_gpus", [0])
+        if not isinstance(owned, list) or not owned or not all(isinstance(g, int) and not isinstance(g, bool) and g >= 0 for g in owned):
+            raise BoardError(f"{registry_path}: machines.{name}.owned_gpus must be a non-empty list of GPU indices")
+        rigs[name] = Rig(name, ssh, hostname if isinstance(hostname, str) else None, name in shared, frozenset(owned))
     slurm_names = board.get("slurm", [])
     if not isinstance(slurm_names, list) or not all(isinstance(n, str) for n in slurm_names):
         raise BoardError(f"{registry_path}: board.slurm must be a list of machine names")
@@ -296,6 +302,13 @@ def claim(config: BoardConfig, args: argparse.Namespace) -> int:
     gpu = validate_gpu(args.gpu)
     if not WAVE_RE.fullmatch(args.wave):
         raise BoardError(f"wave must be YYYYMMDD-HHMMSS; got {args.wave!r}")
+    if rig.shared:
+        foreign = gpu_indices(gpu) - rig.owned_gpus - set(getattr(args, "granted_gpus", None) or ())
+        if foreign:
+            raise BoardError(
+                f"{rig.name} is shared: gpu {sorted(foreign)} is not ours (owned: {sorted(rig.owned_gpus)}); "
+                "only a user grant for this wave allows it"
+            )
     session = args.tmux_session or f"{args.project}_{args.experiment}_{args.wave}_{rig.name}_gpu{gpu}"
     parsed = parse_session_name(session)
     if parsed is None or parsed["rig"] != rig.name or parsed["gpu"] != gpu:
@@ -1838,6 +1851,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--project-root", required=True, help="absolute project root on the hub")
     p.add_argument("--runs-total", type=int, required=True)
     p.add_argument("--tmux-session", help="defaults to <project>_<experiment>_<wave>_<rig>_gpu<ids>")
+    p.add_argument("--granted-gpus", type=lambda v: sorted(gpu_indices(validate_gpu(v))), help="shared rig only: cards beyond owned_gpus the user granted for this wave, e.g. 3 or 3,4")
 
     p = sub.add_parser("refresh", help="update progress/ETA for a held lane (orchestrator tick)")
     p.add_argument("--rig", required=True)

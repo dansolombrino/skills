@@ -6,70 +6,84 @@ During initial scaffolding, place `.gitkeep` in every otherwise-empty taxonomy
 directory so Git preserves the complete tree. Remove a placeholder only after the
 directory contains another tracked file.
 
-## Research 2.0 admission and modes
+## Research 2.0 admission and autonomy
 
 Support only repositories scaffolded with the Research 2.0 surfaces in the taxonomy below. If a
 required surface is missing, or legacy status/scripts are detected, stop as unsupported. Do not
 offer compatibility, migration, or opportunistic upgrades.
 
-Read `program/00-execution-agreement.md` before a material engineering action. It must explicitly
-set `engineering_mode: manual|auto`; never infer it from anything but the agreement.
-`research-project-init` writes `auto` unless the user asks for `manual`. Integrity gates never
-become optional.
+Read `program/00-execution-agreement.md` before a material engineering action: it holds the
+engineering envelope (repo, branch, rigs/GPUs, budget, destinations). There is no manual/auto
+split; an agreement that still carries an `engineering_mode:` line is read for its envelope and the
+line is ignored. Integrity gates never become optional.
 
-### Approval tiers
+### Autonomy
 
-Three tiers apply identically in **both** engineering modes; the mode owns only the last group.
-What protects the project is Git, reversible operations, and the integrity gates, so a reversible,
-gated step does not stop for a prompt nobody reads.
+The agent acts on its own. What protects the project is Git, reversible operations, the integrity
+gates, and the invariants the scripts enforce — not prompts. Two rules decide everything:
 
-- **Do, then report.** No prompt. Act, then report in one line what was done and where:
-  - `rig-sync deploy-revision` of the tagged wave commit, and `rig-sync prepare` on a rig already
-    declared in the user registry;
-  - `environment-sync provision` and `verify`;
-  - a `research-journal` append — the entry is shown after it is written;
-  - offload to the hub: every non-hub lane rig is offload-enabled by default (Slurm targets such
-    as `leonardo` excluded; `supervisor.py` rejects offload entries that are not lane rigs), and a
-    rig's checkpoint copy is still freed only once checksum-verified on the hub;
-  - `rig-sync collect` of a wave's evaluation records to the hub (non-destructive);
-  - run_id election and the `hashed-v2` run path of a new experiment (§ run_id);
-  - plot communication: titles, their arrangement across title lines, metric explanations and
-    their placement, interaction affordances, and export paths, including every fully resolved
-    concrete path. Every check stays in force — resolved paths, collision rejection, in-figure
-    verification — and the reasoning is stated in the reply and in the journal (§ Plot
-    communication);
-  - a new or changed `PARAM_GLOSSARY.json` entry (a param's full name and explanation), written
-    from the producer's config and code and shown in the reply; the user may reword it any time;
-  - a **run_id migration** (`run-identity`): plan, backfill from config or code at the wave tag,
-    show the summary, apply. `apply` writes its rollback manifest first, so `migrate rollback`
-    undoes it. Ask only for a backfill value neither config nor code settles;
-  - `rig-sync prune` of waves whose rows are all terminal (dry run, then `--confirm`): a pruned
-    worktree is recreated from its wave tag by `deploy-revision`;
-  - the keep-or-quarantine choice for a superseded run's checkpoint: keep (resume) when the new
-    wave's source revision equals the old one's, otherwise quarantine (a rename, never a
-    deletion);
-  - a mechanical source-to-target deviation under `integrate-reference-code` (a `core` skill),
-    listed in its ledger as done.
-- **Standing policy** (`sweep-dispatch`). The pool is every free lane on the envelope's rigs as
-  `rig-board` shows them, ordered for the fastest finish; the gate previews are reports, not waits;
-  the wave's standing authorization lets `sweep-supervisor` act inside the pool. **Leonardo:**
-  core-hours are not a gate. A wave registers `leonardo` with no core-hour cap and spends from the
-  account the envelope declares; the agent reports the estimate and the account's remaining hours
-  and never asks about them. A cap exists only when the user asks for one.
-- **Always ask**, in both modes: destructive operations, history rewrites, deletion of material
-  data, overwriting user changes, new repositories/remotes/accounts/destinations,
-  secrets/authentication changes, scope/budget/rig expansion, shared-GPU exceptions (a `behemoth`
-  card beyond gpu0 above all), a behavioral source-to-target deviation governed by
-  `integrate-reference-code` (a `core` skill), cancelling or superseding runs outside the wave's
-  standing authorization (another wave's runs, a supersede, a running Slurm job), and
-  `rig-sync provision-env` or `push-env` outside the `research-project-init` bundle (they touch
-  shell startup files and move secrets). System permission prompts are independent and always
-  apply.
-- **Mode-owned.** Experiment-design technical choices, metrics, which plots to make, and any other
-  engineering choice no tier above names: manual mode proposes and waits for the user; auto mode
-  decides inside the approved engineering envelope and records its reasoning.
+- **Always ask** — the only questions the agent puts to the user, in one round, before acting:
+  destructive operations, history rewrites, deletion of material data, overwriting user changes,
+  new repositories/remotes/accounts/destinations, secrets/authentication changes, scope/budget/rig
+  expansion beyond the envelope, a shared-rig card beyond the owned ones (a `behemoth` card beyond
+  gpu0 above all), a behavioral source-to-target deviation governed by `integrate-reference-code`
+  (a `core` skill), cancelling or superseding runs outside the wave's standing authorization
+  (another wave's runs, a supersede, a running Slurm job), and `rig-sync provision-env` or
+  `push-env` outside the `research-project-init` bundle (they touch shell startup files and move
+  secrets), and a run_id migration backfill value that neither config nor code settles. System
+  permission prompts are independent and always apply.
+- **Everything else, the agent decides and does** — experiment structure and naming, technical
+  choices, metrics, which plots to make and how they communicate, run_id election and migrations,
+  deploys, environment provisioning, offload, collect, prune of all-terminal waves, keep-or-
+  quarantine of a superseded checkpoint, glossary entries, journal entries, mechanical
+  reference-code deviations, the dispatch pool, commits, and pushes to the envelope's own remote
+  and branch (never a force-push), and amending the execution agreement inside its envelope.
+  Every check those steps carry stays in force; only the wait is gone.
 
-A report is not a request: say what was done and carry on, never wait for an acknowledgement.
+**Do the obvious next step.** When the next step follows from the user's request or the protocol —
+a status check, a pull, a prune of a finished wave, an EXPERIMENTS.md row, the journal entry, the
+commit — do it; never end a turn offering a menu of such steps. When a turn has an **Always ask**
+question, ask only that and keep acting on everything else; never bundle a decidable item into the
+question so that it looks blocking. A blanket grant from the user ("do everything", "max
+freedom") widens nothing on the **Always ask** list unless it names the item, and is never needed
+for the rest.
+
+**A missing or ambiguous directive is a decision, not a question.** Pick the most conservative
+reversible option consistent with the directives and this project's own files, log it with the
+reason, and carry on. Ask only when every option falls under **Always ask**.
+
+**Never a wait on a report.** No preview, plan, dry run, or summary waits for an acknowledgement,
+and none is printed for its own sake (§ Decision log).
+
+### Invariants the scripts enforce
+
+These hold whatever the agent decides, because code refuses to break them:
+
+- a shared rig (`board.shared` in the registry) exposes only its `owned_gpus` (default `[0]`):
+  `supervisor.py register` refuses a pool lane on any other card unless the manifest carries
+  `gpu_grants.<rig>` quoting the user's grant for that wave verbatim, and `board.py claim` refuses
+  the card without `--granted-gpus`;
+- run_id collisions, duplicates, and config drift at an existing path (`check_run_id_plan`,
+  `guard_run_config`);
+- the tested-revision and environment-parity gates (`rig-sync`, `environment-sync`);
+- `prune` refuses active or unfinished supervised waves; `steal` refuses any process it cannot
+  prove is this wave's own; a migration writes its rollback manifest before it changes anything.
+
+### Decision log
+
+Every autonomous decision and action is appended to `program/DECISIONS.md` (tracked,
+append-only; created on first use), one line each:
+
+```
+- <YYYY-MM-DD HH:MM> · <skill> · <what was decided or done> · <why> · <where: paths, rigs, wave>
+```
+
+Write it in the same turn as the action. It is the record, so the chat is not: **read it only when
+it is needed** — the user asks why or what, or a later decision depends on an earlier one — and
+never paste it into the chat. The chat carries only what the user needs now: outcomes (done,
+running with its ETA, failed and what is being done about it) and **Always ask** questions. A gate
+that passed is one log line, not a chat line; a gate that fails is a chat line. JOURNAL.md stays
+the scientific story; a journal entry is written, not echoed.
 
 ## Directives are closed
 
@@ -80,9 +94,8 @@ A report is not a request: say what was done and carry on, never wait for an ack
   sibling projects, prior research checkouts, home-directory clones — to infer conventions, file
   contents, defaults, or how something was done last time. An existing project found on disk is
   not a template, a precedent, or an example, however similar it looks.
-- **When a directive is missing or ambiguous, stop and ask the user.** Never close the gap by
-  imitation and never silently default. A convention the skill does not state is a question for
-  the user, not something to go discover.
+- **Where a directive is silent, decide** (§ Autonomy): the conservative reversible choice,
+  logged. Never close the gap by imitating another project.
 - **Never carry secrets or credentials across projects.** Do not copy or commit a token from
   another project's `.env` or from any other machine-local secret source.
 
@@ -121,7 +134,7 @@ named by a directive rather than discovered by looking around:
 ├── visualizations/  # plotting code (argparse python), sibling of code/
 ├── shitpads/        # temp space; gitignored, dir tracked, rig-local, never synced
 ├── references/      # papers/codebases to reference; gitignored, dir tracked, rig-synced
-├── program/         # tracked engineering execution agreement
+├── program/         # tracked engineering execution agreement + DECISIONS.md (agent decision log)
 ├── .env             # secrets + machine-varying paths ONLY (gitignored)
 ├── .env.example     # committed mirror of .env keys with placeholders
 ├── .python-version  # exact Python patch used on every rig
@@ -223,9 +236,9 @@ The per-experiment set of config params that uniquely identifies a run. New expe
 `hashed-v2` layout. An experiment already pinned to an older layout keeps it with its own rules
 (§ Legacy pins below).
 
-- **Election is agent-decided in both engineering modes** (do, then report). The identity is every
+- **Election is agent-decided.** The identity is every
   param the sweep grid varies plus every behavior-affecting param whose value differs from the
-  config default. State the elected params and the reasoning in the reply and in the journal.
+  config default. Log the elected params and the reasoning (§ Decision log).
   There is no rendering dialogue, byte report, or segment spec: the path is one fixed-width hash
   directory, so nothing about it needs a choice. `run-identity` owns the election rules, lookup,
   and migration.
@@ -355,8 +368,7 @@ included — is ever offered to a new experiment; the helper keeps rendering eac
   string, with its own `.run_id.json` and `by_hash` map, which hard-fails when one hash maps to two
   param sets) stay valid only for experiments that already recorded them.
 - **Legacy segments rendering dialogue.** Every election under a legacy segments pin ran the
-  dialogue below with the user, in both engineering modes and even when the all-explicit path fit;
-  neither engineering mode may decide any step alone. A re-election is possible only before the
+  dialogue below with the user, even when the all-explicit path fit. A re-election is possible only before the
   experiment's first output, and a fresh election then uses `hashed-v2`, so the dialogue is never
   started for new work; it is kept because it defines what an existing `RUN_ID_SEGMENTS` record
   means. `plots/` is not run-scoped and is out of scope here.
@@ -393,8 +405,8 @@ included — is ever offered to a new experiment; the helper keeps rendering eac
 
 ### Plot communication
 
-Plot communication is **agent-decided in both engineering modes** (do, then report); which plots to
-make stays mode-owned. Before every creation or modification of code under `visualizations/`, read
+Plot communication and which plots to make are **agent-decided**; every quality check below stays
+in force. Before every creation or modification of code under `visualizations/`, read
 the producer's identity (`load_run_id_spec` under `hashed-v2`, `RUN_ID_PARAMS` under a legacy pin)
 and metric definitions, then decide one exact communication specification for every plot the code
 produces:
@@ -416,16 +428,16 @@ controls; under `hashed-v2` the label beside each hash uses the same full names.
 tracked `config/<experiment_path>/PARAM_GLOSSARY.json` (`{param: {name, explanation}}`), read with
 `load_param_glossary` and embedded in the file. A selectable param with no entry stops the render.
 Write each new or changed entry's exact name and explanation, grounded in the producer's config
-and code, and show it in the reply (do, then report); an entry is reused by every later plot, and
+and code, and log it; an entry is reused by every later plot, and
 the user may reword it at any time. Axis and metric text stay agent-decided as above.
 
 If runtime values prevent a concrete path before the code edit, decide the complete path template
 and identify every placeholder explicitly. Before rendering, resolve every concrete export path,
 including its leaf filename, and reject any destination that collides with a different script's
 output. A template never stands in for a concrete destination: a new or changed resolved path is
-resolved and collision-checked again, even when it conforms to the template. State the
+resolved and collision-checked again, even when it conforms to the template. Record the
 specification, every fully resolved concrete export path, and the reasoning behind each choice in
-the reply, and record them in the journal entry for the plot.
+the decision log; the chat gets the plot's link.
 
 Omit aggregated identity params and describe aggregation semantically only when useful. When no
 identity param is fixed, use a semantic title with no fabricated identity part and state that fact.
@@ -448,7 +460,7 @@ checkout cannot be identified or reached.
 Do not invoke `sweep-dispatch`, `rig-sync`, or
 `experiments-tracking` for plotting. Do not create orchestration control state, mint a wave id,
 generate a launch script, dispatch work, start tmux, or add/update `EXPERIMENTS.md` rows. The
-plot-communication checks and the applicable engineering-mode decisions remain in force; this
+plot-communication checks remain in force; this
 fast path only removes experiment-launch machinery from plotting.
 
 ### run_id schema evolution
@@ -463,11 +475,11 @@ done".
 
 - **`hashed-v2`, before any checkpoint, evaluation, or plot output or wave README/script exists** —
   rewrite the current `RUN_ID_VERSIONS.json` entry and the EXPERIMENTS.md section header before
-  the first launch (agent-decided, reported).
+  the first launch (agent-decided, logged).
 - **`hashed-v2`, after any one of those surfaces exists** — never edit a version in place. Append
   the next identity version and move every existing run to its new hash with a **run_id
-  migration** through `run-identity` (`migrate plan`, then `migrate apply` with the plan summary
-  reported — do, then report; `migrate rollback` undoes it). The plan refuses while a wave of the experiment is live,
+  migration** through `run-identity` (`migrate plan`, then `migrate apply`, agent-decided and
+  logged; `migrate rollback` undoes it). The plan refuses while a wave of the experiment is live,
   while a rig that ran it is unreachable, or while `rigsync collect --check` reports rig records
   the hub lacks; it backfills each new param for old runs from their `.run_config.json`, or from
   the code at their wave tag with its source cited, asks the user only for a value it cannot
@@ -594,9 +606,9 @@ contract can still be monitored and reconciled, but not recovered.
 
 Two runs of one identity must never be live in two waves at once: they would share status and
 artifact paths. Dispatch refuses such an overlap; the user may instead **supersede** the old
-placement (its queued or running work is cancelled only with the user's approval in every mode,
-and its rows become `superseded`). A finished wave's worktree and any environment no remaining
-worktree uses are **pruned** by the skills after a dry run, and reported; a pruned
+placement (its queued or running work is cancelled only with the user's approval, and its rows
+become `superseded`). A finished wave's worktree and any environment no remaining
+worktree uses are **pruned** by the skills after a dry run, and logged; a pruned
 wave remains recoverable, because its worktree is recreated from its tag.
 
 ### Tested Git revision gate
@@ -633,7 +645,7 @@ Every wave also carries one immutable user-space environment identity:
   `uv sync --frozen --exact --no-install-project`. `env_key` hashes the revision's `uv.lock`,
   `.python-version`, and uv pin, so waves with identical inputs share an environment. A new key
   can always be built; an existing key is never re-synced while an active wave uses it.
-- `[environment].name` (asked of the user once, in `research-project-init`'s consolidated approval) names the hub **development** environment, which
+- `[environment].name` (`.venv` unless the user names another) names the hub **development** environment, which
   the user owns and no wave uses. The pre-dispatch smoke runs in the keyed environment of the
   staged lock, which is the same key the committed wave gets.
 - The fingerprint hashes the lock, exact interpreter, and canonical installed package
@@ -694,14 +706,16 @@ question.
 
 A grant is **per-wave and never persisted**: no `.env` var, no config file. It covers the one
 dispatch it was given for; the next wave defaults back to GPU 0 and must be re-granted. Its
-only record is the `# GPU auth:` header baked into that wave's scripts (`sweep-dispatch`
-templates), which the scripts also enforce at runtime.
+records are the manifest's `gpu_grants.<rig>` (the user's words verbatim, which
+`supervisor.py register` and `board.py claim` require before any card beyond `owned_gpus`) and the
+`# GPU auth:` header baked into that wave's scripts (`sweep-dispatch` templates), which the
+scripts also enforce at runtime.
 
 The weight is **per GPU**, so a rig's capacity in the assignment math is
 `weight × (number of free GPUs)`. Never hardcode the server's card count — it can change, and
 the number of GPUs actually free varies per dispatch: **read the fleet board (`rig-board`)
 and take every lane it shows free on the envelope's rigs** before building a pool
-(`sweep-dispatch`, pre-launch gates; a standing policy, reported rather than asked). The board is the only cross-project view: a lane
+(`sweep-dispatch`, pre-launch gates; agent-decided, logged). The board is the only cross-project view: a lane
 held by another project is not free capacity, and a foreign card on a shared rig is never ours. For `behemoth`
 that math defaults to `2.0 × 1` (gpu0), and only a grant for this wave widens it.
 
@@ -886,4 +900,6 @@ is missing, stop rather than promise supervision nobody will deliver.
   run's `started`/`ended`/`elapsed` — reference runtimes for estimating future temporal
   budgets). JOURNAL.md = **story** (prose: what, why, what was learned; append-only, never
   rewritten — except that a run_id migration replaces old run hashes with their new ones).
+  program/DECISIONS.md = **decision log** (§ Decision log: one line per autonomous decision or
+  action, read only when needed, never echoed).
 - New env var read by code → `.env.example` updated in the SAME turn.
