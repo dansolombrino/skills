@@ -17,7 +17,8 @@ slurm = ["leonardo"]
 cycle_every = 60             # seconds between service passes (probe, feed, recover, offload, table); >= 10
 tick_every = 120             # idle seconds between one agent tick's end and the next; events wake it at once
 agent_timeout = 900          # a tick that runs longer is stopped; the next one starts fresh
-notify_command = ["notify-send", "sweep-supervisor", "{text}"]   # optional; run for every `ask`
+followup_timeout = 10800     # a follow-up (post-wave plots, fix-and-redispatch) that runs longer is stopped
+notify_command = ["curl", "-s", "-d", "{text}", "https://ntfy.sh/<private topic>"]   # optional; see Notices
 
 [supervisor.agent]
 model = "<model alias or id>"
@@ -62,6 +63,26 @@ tick uses: reading and editing inside the project, this plugin's scripts, `ssh` 
 rigs, `tmux`, `git`, and `date`. Prefer the narrowest allowlist the host supports over a blanket
 bypass; a denied tool call fails that step of the tick, which the tick reports with `decide`.
 
+## Notices
+
+`notify_command` is an argv list run with `{text}` substituted, for every `ask`, every follow-up
+report, a finished wave, failed runs, a rig down, a lane that cannot start, a cluster submission
+failure, and a certificate about to expire or expired. It is what lets the user stay away from
+chats: point it at a phone. `ntfy` needs only the app and an unguessable topic name (anyone who
+knows the topic reads it, so keep it private); any command that takes the text as an argument
+works (`notify-send` for a desktop, a mail or chat CLI). Without it, notices exist only in the
+printout and `followups`.
+
+## Certificates
+
+A rig whose SSH access is a short-lived certificate declares it in its registry entry, and the
+supervisor warns an hour before it expires and when it does:
+
+```toml
+[machines.leonardo]
+ssh_cert = "~/.ssh/id_leonardo-cert.pub"
+```
+
 ## Service
 
 ```bash
@@ -72,9 +93,11 @@ loginctl enable-linger "$USER"
 systemctl --user status sweep-supervisor.service --no-pager
 ```
 
-Point the unit at a **stable** copy of `supervisor.py` (the installed skill path) and re-point it
-after a plugin release that moves it; `rig-sync`, `rig-board`, and `environment-sync` must sit next
-to it, as installed. The unit's environment needs the agent executable on `PATH` and the same SSH
+Point the unit at the installed skill path. From a versioned install
+(`.../research/<X.Y.Z>/skills/...`) the service moves itself onto a newer installed version
+between cycles, once that copy's `check` passes, so a release never needs the unit re-pointed or
+restarted; a unit pointing at a development checkout never moves. `rig-sync`, `rig-board`, and
+`environment-sync` must sit next to it, as installed. The unit's environment needs the agent executable on `PATH` and the same SSH
 agent or keys an interactive shell uses. `python3 supervisor.py check` must pass as the service
 user before the first wave; `sweep-dispatch` refuses to launch otherwise.
 
@@ -90,6 +113,7 @@ user before the first wave; `sweep-dispatch` refuses to launch otherwise.
 | `…/agent-logs/` | one log per tick |
 | `<rig repo_path>/.waves/_state/<wave_id>/lanes/gpu<ids>/{queue,running,finished}` | a lane's buffer; `drain` ends the lane, `../offload` makes exit 88 wait |
 | `<board root>/supervisor/<project>__<wave_id>.json` | pointer that makes the service supervise the wave |
+| `<board root>/supervisor/followups/<id>.json` | one follow-up: kind, brief, state, log path, report |
 
 `.waves/` is already ignored by every supported project, and `_state` can never be a wave id, so
 no project needs a change. `finish --confirm` removes the pointer when a wave is terminal

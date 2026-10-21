@@ -39,8 +39,11 @@ gates, and the invariants the scripts enforce — not prompts. Two rules decide 
   quarantine of a superseded checkpoint, glossary entries, journal entries, mechanical
   reference-code deviations, the dispatch pool, commits, and pushes to the envelope's own remote
   and branch (never a force-push), amending the execution agreement inside its envelope, starting
-  a dispatched wave's chat printout, and moving the project's existing secrets to a declared rig
-  the safe way (§ Secrets).
+  a dispatched wave's chat printout, moving the project's existing secrets to a declared rig
+  the safe way (§ Secrets), and what a finished or failing wave leads to: plotting and journaling
+  its results, and fixing a deterministic engineering error then dispatching the runs it broke
+  again inside the envelope (at most two automatic rounds in a chain; `sweep-supervisor`
+  § Follow-ups).
   Every check those steps carry stays in force; only the wait is gone.
 
 **Do the obvious next step.** When the next step follows from the user's request or the protocol —
@@ -732,9 +735,10 @@ scripts also enforce at runtime.
 The weight is **per GPU**, so a rig's capacity in the assignment math is
 `weight × (number of free GPUs)`. Never hardcode the server's card count — it can change, and
 the number of GPUs actually free varies per dispatch: **read the fleet board (`rig-board`)
-and take every lane it shows free on the envelope's rigs** before building a pool
-(`sweep-dispatch`, pre-launch gates; agent-decided, logged). The board is the only cross-project view: a lane
-held by another project is not free capacity, and a foreign card on a shared rig is never ours. For `behemoth`
+before building a pool, and take every lane of ours on the envelope's rigs** (`sweep-dispatch`,
+pre-launch gates; agent-decided, logged). The board is the only cross-project view: a lane held
+by another project is not free capacity now, so it joins the pool waiting and starts when
+released; a foreign card on a shared rig is never ours. For `behemoth`
 that math defaults to `2.0 × 1` (gpu0), and only a grant for this wave widens it.
 
 Those weights are **fixed nominal throughput priors**, not measurements, and they have two
@@ -803,9 +807,10 @@ same relative path on the hub, never deleting on either side and never touching 
 asking. A `.run_id.json` or `.run_config.json` that differs between rig and hub is a hard error a
 person settles. `rigsync collect --check` lists every rig run record the hub lacks or holds
 differently; the dispatch run_id gate and a run_id migration both require it to pass (the hub is
-**reconciled**). It needs every rig of the experiment's earlier waves reachable; when one is not
-(for example an expired `leonardo` certificate), restore access (renew the certificate) and rerun.
-There is no bypass.
+**reconciled**). A finished wave whose final collect from a rig succeeded needs nothing more from
+that rig — its records no longer change — so an unreachable rig blocks only a wave still live or
+not fully collected; then restore access (renew the certificate) and rerun. There is no other
+bypass.
 
 Passwordless ssh between all rigs. Git/GitHub distributes launch source; selected artifact
 movement is **`rig-sync`'s job**. Run its bundled doctor's checks before dispatch; if they fail,
@@ -885,6 +890,10 @@ unattended agent** on a fixed tick and on every failure for what needs judgment.
 require that service and a declared agent profile (model and effort, never defaulted); if either
 is missing, stop rather than promise supervision nobody will deliver.
 
+- **No chat is needed.** The service pushes notices to the user (a finished wave, failures, a rig
+  down, an expiring certificate, every question and follow-up report), prunes a finished wave,
+  and runs its follow-ups: the plots and journal entry when it finishes, and fix-and-redispatch of
+  a deterministic engineering error. A chat is only a window onto the same state.
 - **Nothing blocks while a wave is non-terminal.** The supervisor agent asks through its
   non-blocking `ask`, states what stays in force meanwhile, and carries on; a chat never ends its
   turn waiting on the user while runs are in flight. Silence is never consent.

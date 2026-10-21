@@ -451,6 +451,7 @@ execution file), one JSON object:
   "weights": {"rig-4090": 1.0, "behemoth": 2.0, "leonardo": 1.0},
   "gpu_grants": {"behemoth": {"gpus": [5], "user_words": "<the user's grant, verbatim>", "date": "<YYYY-MM-DD>"}},
   "offload": ["behemoth"],
+  "fix_depth": 0,
   "runs": [
     {
       "id": "<run_id_name: the rid-<32 hex> hash under hashed-v2>",
@@ -478,7 +479,9 @@ asks for one. A `behemoth` lane beyond
 gpu0 appears only under a user grant for this wave, quoted in `gpu_grants` (omit the key
 otherwise); `register` refuses any shared-rig card outside `owned_gpus` and the grant. Weights are copied from conventions § Rig
 fleet at generation time and are only the prior: the supervisor replaces them with rates measured
-in this wave as soon as runs finish.
+in this wave as soon as runs finish. `fix_depth` is 0 for a wave the user asked for and the parent's
+plus one for a wave an unattended `fix` follow-up dispatched (`sweep-supervisor` § Follow-ups); the
+supervisor refuses a third automatic fix round.
 
 ## Pool and initial estimate
 
@@ -487,8 +490,10 @@ takes the next run it is eligible for when it has room, so a fast card simply ta
 a wrong estimate corrects itself once real runtimes arrive. What dispatch decides is the pool, the
 queue order, and the estimate it logs.
 
-1. **Pool.** Every lane the fleet board shows free on the envelope's rigs and GPUs — a standing
-   agent-decided, logged, never asked; never infer availability from `nvidia-smi`. Low disk never
+1. **Pool.** Every lane of the envelope's rigs and GPUs that is ours — free on the fleet board or
+   held by another wave or project, which the lane simply waits for (`waiting for board`) and
+   starts on when the holder releases it. Agent-decided, logged, never asked; never infer
+   availability from `nvidia-smi`, and never put a foreign card in the pool. Low disk never
    excludes a rig: every non-hub lane rig is under `offload` by default (Slurm targets such as
    `leonardo` excluded; `supervisor.py` rejects offload entries that are not lane rigs).
    `leonardo` joins with a job cap and no core-hour cap.

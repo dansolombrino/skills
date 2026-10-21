@@ -175,7 +175,9 @@ without asking; `--dry-run` prints the plan.
   run are collected at once.
 - A differing hub copy is replaced only by a newer rig copy of a run the hub does not yet record as
   finished; `.status.json` never turns a finished hub record back into an unfinished one. A
-  finished hub copy that differs is a `[conflict]`: reported, kept.
+  finished hub copy that differs is a `[conflict]`: reported, kept. The one exception is a rerun:
+  when the hub records a `failed` attempt and the rig holds a finished attempt of the same run that
+  started later, the rerun's files replace the failed try's.
 - A `.run_id.json` / `.run_config.json` that differs between rig and hub is a hard error: nothing
   of that run is copied, the command exits non-zero, and a person settles it.
 - Every copied file is sha256-verified against the rig.
@@ -185,7 +187,9 @@ without asking; `--dry-run` prints the plan.
 `rigsync collect --check [--wave <wave_id>]` changes nothing and exits non-zero, listing every rig
 run record (`.run_id.json`, `.run_config.json`) that is missing or different on the hub; without
 `--wave` it checks every wave registered on the hub. This is the "reconciled" precondition the
-dispatch gate and `runid migrate plan` (`run-identity`) require.
+dispatch gate and `runid migrate plan` (`run-identity`) require. A rig it cannot reach passes for a
+finished wave whose final collect from that rig succeeded (`finished_at` and `collect_last` in the
+wave's queue): nothing writes those records any more.
 
 `offload` copies evaluations by these same rules before freeing checkpoints.
 

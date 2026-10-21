@@ -70,7 +70,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "12.1.0")
+        self.assertEqual(manifest["version"], "13.0.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -2520,7 +2520,8 @@ class ApprovalTierContractTests(unittest.TestCase):
         templates = compact_text(SKILLS / "sweep-dispatch/references/templates.md")
         self.assertIn("Dispatch is **agent-decided**", dispatch)
         self.assertIn("logging each gate's preview to `program/DECISIONS.md` instead of printing it", dispatch)
-        self.assertIn("The pool is **every lane the board shows free on the envelope's rigs and GPUs**", dispatch)
+        self.assertIn("The pool is **every lane of the envelope's rigs and GPUs that is ours**, free or held", dispatch)
+        self.assertIn("A held lane stays in the pool as `waiting for board`", dispatch)
         self.assertIn("never ask which rigs are free", dispatch)
         self.assertIn("every non-hub lane rig in the pool is listed under `offload` by default (Slurm targets such as `leonardo` excluded", dispatch)
         self.assertIn("Log — never print or wait on — the pool", dispatch)
@@ -2534,7 +2535,7 @@ class ApprovalTierContractTests(unittest.TestCase):
             dispatch,
         )
         self.assertIn("Only when the user asks for it, with an explicit user authorization", dispatch)
-        self.assertIn("Every lane the fleet board shows free on the envelope's rigs and GPUs", templates)
+        self.assertIn("Every lane of the envelope's rigs and GPUs that is ours", templates)
         self.assertIn('"gpu_grants": {"behemoth"', templates)
         self.assertIn("`offload` lists every non-hub lane rig of the pool by default", templates)
         self.assertNotIn("non-hub pool rig", templates)

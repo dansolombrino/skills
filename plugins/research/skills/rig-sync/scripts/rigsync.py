@@ -2034,7 +2034,9 @@ def hub_machine(config: Config) -> Machine:
 # - every other evaluation file is collected once it is OFFLOAD_MIN_AGE_S old, or at once when
 #   the run is finished; a differing hub copy is replaced only when the rig's is newer and the
 #   hub's record of the run is not finished (the hub copy is an earlier snapshot). A finished
-#   hub copy that differs is a conflict: reported, kept.
+#   hub copy that differs is a conflict: reported, kept -- except that a hub record of a *failed*
+#   attempt is an earlier state when the rig holds a finished later attempt of the same run (its
+#   status started after the hub's): a rerun's results replace the failed try's.
 #
 # Checkpoints are never collected; `offload` owns them.
 
@@ -2049,6 +2051,20 @@ def _json_object(path: Path) -> dict:
     except (OSError, ValueError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _later_attempt(rig_status: dict, hub_status: dict) -> bool:
+    """The rig's finished record is a rerun of the hub's failed one: it started strictly later."""
+    if hub_status.get("state") != "failed" or rig_status.get("state") not in FINAL_STATES:
+        return False
+    try:
+        rig_start = datetime.fromisoformat(str(rig_status.get("started")))
+        hub_start = datetime.fromisoformat(str(hub_status.get("started")))
+    except ValueError:
+        return False
+    if (rig_start.tzinfo is None) != (hub_start.tzinfo is None):
+        return False
+    return rig_start > hub_start
 
 
 def plan_collect(config: Config, machine: Machine, runs: list[dict], inventory: dict[str, dict], rig_now: float) -> dict:
@@ -2067,8 +2083,10 @@ def plan_collect(config: Config, machine: Machine, runs: list[dict], inventory: 
         if entry is None:
             continue
         eval_dir = PurePosixPath(entry["eval_dir"])
-        rig_final = (found.get("status") or {}).get("state") in FINAL_STATES
-        hub_final = _json_object(config.root / entry["status_path"]).get("state") in FINAL_STATES
+        rig_status = found.get("status") or {}
+        hub_status = _json_object(config.root / entry["status_path"])
+        rig_final = rig_status.get("state") in FINAL_STATES
+        hub_final = hub_status.get("state") in FINAL_STATES and not _later_attempt(rig_status, hub_status)
         files = []
         for file in found["files"]:
             if file["kind"] != "E":
@@ -2203,6 +2221,20 @@ def collect(config: Config, machines: list[Machine] | None, wave: str, dry_run: 
         raise RigSyncError(f"collect left {len(errors)} problem(s) for a person to settle:\n" + "\n".join(errors))
 
 
+def final_collect(queue: dict, rig: str) -> str | None:
+    """When a finished wave's last collect from `rig` succeeded at or after the wave finished, its time."""
+    finished = queue.get("finished_at")
+    last = (queue.get("collect_last") or {}).get(rig) or {}
+    if not finished or not last.get("ok"):
+        return None
+    try:
+        if datetime.fromisoformat(str(last.get("at"))) < datetime.fromisoformat(str(finished)):
+            return None
+    except (TypeError, ValueError):
+        return None
+    return str(last["at"])
+
+
 def collect_check(config: Config, machines: list[Machine] | None, waves: list[str]) -> None:
     """Fail, listing each one, while any rig holds a run record the hub lacks or holds differently."""
     hub_machine(config)
@@ -2217,6 +2249,11 @@ def collect_check(config: Config, machines: list[Machine] | None, waves: list[st
             try:
                 _rig_now, found = rig_inventory(machine, runs, "E", "collect --check")
             except RigSyncError as exc:
+                collected = final_collect(queue, machine.name)
+                if collected:
+                    # nothing writes a finished wave's records any more, and they all reached the hub then
+                    print(f"OK {machine.name} wave {wave}: unreachable, but the wave's final collect from it succeeded at {collected}")
+                    continue
                 print(f"FAIL {machine.name} wave {wave}: cannot list its run records: {exc}")
                 problems += 1
                 continue

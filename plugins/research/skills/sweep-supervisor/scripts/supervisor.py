@@ -62,6 +62,10 @@ BUFFER_DEPTH = 2  # the run in flight plus one waiting: shallow, so late data ca
 DEFAULT_CYCLE_EVERY_S = 60
 DEFAULT_TICK_EVERY_S = 120
 DEFAULT_AGENT_TIMEOUT_S = 900
+DEFAULT_FOLLOWUP_TIMEOUT_S = 3 * 3600
+MAX_FIX_DEPTH = 2  # automatic fix-and-redispatch rounds in one chain before a person looks
+CERT_WARN_S = 3600  # an SSH certificate this close to expiry is announced once
+FOLLOWUP_KINDS = ("analyze", "fix")
 MIN_CYCLE_EVERY_S = 10
 DOWN_AFTER_FAILURES = 3
 HEARTBEAT_STALE_S = 180
@@ -93,9 +97,12 @@ URGENT_EVENTS = frozenset(
         "wave-terminal",
         "offload-failed",
         "collect-failed",
-        "claim-refused",
+        "submit-failed",
     }
 )
+# What reaches the user's phone (`notify_command`) without any chat open. `ask` always does too.
+NOTIFY_EVENTS = frozenset({"wave-terminal", "rig-down", "recovery-blocked", "cert-expiring", "cert-expired", "submit-failed"})
+VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 
 def now() -> datetime:
@@ -134,6 +141,8 @@ class Settings:
     agent_timeout: int
     agent: AgentProfile | None
     notify_command: tuple[str, ...]
+    followup_timeout: int = DEFAULT_FOLLOWUP_TIMEOUT_S
+    ssh_certs: tuple[tuple[str, Path], ...] = ()  # (rig, certificate) pairs from `[machines.<rig>] ssh_cert`
 
 
 def _string_list(value: object, where: str) -> tuple[str, ...]:
@@ -177,7 +186,10 @@ def load_settings(registry_path: Path) -> Settings:
     cycle_every = table.get("cycle_every", DEFAULT_CYCLE_EVERY_S)
     tick_every = table.get("tick_every", DEFAULT_TICK_EVERY_S)
     agent_timeout = table.get("agent_timeout", DEFAULT_AGENT_TIMEOUT_S)
-    for name, value in (("cycle_every", cycle_every), ("tick_every", tick_every), ("agent_timeout", agent_timeout)):
+    followup_timeout = table.get("followup_timeout", DEFAULT_FOLLOWUP_TIMEOUT_S)
+    for name, value in (
+        ("cycle_every", cycle_every), ("tick_every", tick_every), ("agent_timeout", agent_timeout), ("followup_timeout", followup_timeout),
+    ):
         if not isinstance(value, int) or isinstance(value, bool) or value < MIN_CYCLE_EVERY_S:
             raise SupervisorError(f"{registry_path}: supervisor.{name} must be an integer >= {MIN_CYCLE_EVERY_S}")
     agent = None
@@ -204,7 +216,17 @@ def load_settings(registry_path: Path) -> Settings:
         agent = AgentProfile(command, model, effort)
     notify = table.get("notify_command")
     notify_command = _string_list(notify, f"{registry_path}: supervisor.notify_command") if notify is not None else ()
-    return Settings(registry_path, cycle_every, tick_every, agent_timeout, agent, notify_command)
+    if notify_command and not any("{text}" in part for part in notify_command):
+        raise SupervisorError(f"{registry_path}: supervisor.notify_command must contain a {{text}} placeholder")
+    certs = []
+    machines = data.get("machines", {})
+    for rig, entry in (machines.items() if isinstance(machines, dict) else ()):
+        cert = entry.get("ssh_cert") if isinstance(entry, dict) else None
+        if cert is not None:
+            if not isinstance(cert, str) or not cert:
+                raise SupervisorError(f"{registry_path}: machines.{rig}.ssh_cert must be a path")
+            certs.append((rig, Path(cert).expanduser()))
+    return Settings(registry_path, cycle_every, tick_every, agent_timeout, agent, notify_command, followup_timeout, tuple(certs))
 
 
 def require_agent(settings: Settings) -> AgentProfile:
@@ -452,6 +474,9 @@ def build_queue(manifest: dict, project_root: Path, config, settings: Settings, 
     offload = manifest.get("offload", [])
     if not isinstance(offload, list) or any(rig not in pool or pool[rig]["kind"] != "lanes" for rig in offload):
         raise SupervisorError("manifest: `offload` must list pool rigs that run lanes")
+    fix_depth = manifest.get("fix_depth", 0)
+    if not isinstance(fix_depth, int) or isinstance(fix_depth, bool) or fix_depth < 0:
+        raise SupervisorError("manifest: `fix_depth` must be a non-negative integer (automatic fix rounds behind this wave)")
     runs_in = _require(manifest, "runs", list, where)
     if not runs_in:
         raise SupervisorError("manifest: `runs` is empty")
@@ -517,6 +542,7 @@ def build_queue(manifest: dict, project_root: Path, config, settings: Settings, 
         "blocked_lanes": {},
         "waiting_lanes": {},
         "next_seq": 1,
+        "fix_depth": fix_depth,
         "runs": runs,
         "finished_at": None,
     }
@@ -781,6 +807,8 @@ def lane_vram(board_config, rig: str, gpu: str) -> int | None:
 def simulate(queue: dict, lane_free: dict[tuple[str, str], float | None], vram: dict[tuple[str, str], int | None]) -> tuple[float | None, str]:
     """Wave completion in seconds from now if the feeder keeps doing what it does; None with the blocker."""
     free = dict(lane_free)
+    if not free and not any(pool["kind"] == "slurm" for pool in queue["pool"].values()):
+        return None, "every lane is waiting for the fleet board"
     if any(value is None for value in free.values()):
         blocked = [f"{rig} gpu{gpu}" for (rig, gpu), value in free.items() if value is None]
         return None, "lane ETA unavailable: " + ", ".join(sorted(blocked))
@@ -803,6 +831,21 @@ def simulate(queue: dict, lane_free: dict[tuple[str, str], float | None], vram: 
 
 
 # ───────────────────────────── one cycle ─────────────────────────────
+
+
+def cert_expiry(path: Path) -> datetime | None:
+    """When an OpenSSH certificate stops being valid, or None when it is unreadable or never expires."""
+    try:
+        result = subprocess.run(["ssh-keygen", "-L", "-f", str(path)], capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = re.search(r"Valid: from \S+ to (\S+)", result.stdout)
+    if result.returncode != 0 or not match:
+        return None
+    try:
+        return datetime.fromisoformat(match.group(1)).astimezone()  # ssh-keygen prints local time
+    except ValueError:
+        return None
 
 
 def run_rigsync(wave: Wave, settings: Settings, *argv: str) -> subprocess.CompletedProcess:
@@ -1105,7 +1148,7 @@ class Cycle:
             adopted = out.startswith("ALREADY-QUEUED;")
             job_id = out.split(";")[1] if adopted else out.split(";")[0]
             if result.returncode != 0 or not job_id.isdigit():
-                self.event("claim-refused", rig=rig, run=run["id"], problem=(result.stderr or result.stdout).strip()[-300:])
+                self.event("submit-failed", rig=rig, run=run["id"], problem=(result.stderr or result.stdout).strip()[-300:])
                 break
             run.update(state="assigned", lane={"rig": rig, "gpu": "1"}, entry=None, job_id=int(job_id), walltime_s=walltime,
                        attempts=run["attempts"] + 1, budget_h=run.get("budget_h", 0.0) + cost_h, budget_rig=rig)
@@ -1197,6 +1240,32 @@ class Cycle:
             self.event("collect-failed", rig=rig, problem=outcome["problem"])
         return outcome["ok"]
 
+    # -- certificates -----------------------------------------------------
+
+    def watch_certs(self, queue: dict, runtime: dict) -> None:
+        """A cluster login certificate expires on a clock. Say so an hour before and when it does,
+        once per certificate; renewing it is the user's 2FA, so this is a notice, never a question,
+        and the service resumes by itself once the rig answers again."""
+        certs = runtime.setdefault("certs", {})
+        for rig, path in self.settings.ssh_certs:
+            if rig not in queue["pool"]:
+                continue
+            expires = cert_expiry(path)
+            if expires is None:
+                certs.pop(rig, None)
+                continue
+            record = certs.setdefault(rig, {})
+            if record.get("expires_at") != iso(expires):
+                record.clear()  # a renewed certificate starts its own warnings
+                record["expires_at"] = iso(expires)
+            left = (expires - self.at).total_seconds()
+            if left <= 0 and not record.get("expired_sent"):
+                record["expired_sent"] = True
+                self.event("cert-expired", rig=rig, expired_at=record["expires_at"], cert=str(path))
+            elif 0 < left <= CERT_WARN_S and not record.get("expiring_sent"):
+                record["expiring_sent"] = True
+                self.event("cert-expiring", rig=rig, expires_at=record["expires_at"], cert=str(path))
+
     # -- the pass ---------------------------------------------------------
 
     def run(self) -> dict:
@@ -1204,6 +1273,7 @@ class Cycle:
         with WaveLock(wave):
             queue = wave.load()
             runtime = wave.runtime()
+            self.watch_certs(queue, runtime)
             rigs_runtime = runtime.setdefault("rigs", {})
             views: dict[str, dict | None] = {}
             for rig, pool in queue["pool"].items():
@@ -1330,7 +1400,8 @@ def build_snapshot(queue: dict, runtime: dict, wave: Wave, vram: dict, at: datet
                 state = "starting"
             else:
                 state = "idle"
-            lane_free[(rig, gpu)] = None if down or blocked or state == "waiting for board" else free
+            if state != "waiting for board":
+                lane_free[(rig, gpu)] = None if down or blocked else free
             observed = (active or {}).get("observed") or {}
             heartbeat = parse_iso(observed.get("heartbeat"))
             rows.append(
@@ -1370,6 +1441,7 @@ def build_snapshot(queue: dict, runtime: dict, wave: Wave, vram: dict, at: datet
             rig: {"kind": pool["kind"], "done": sum(r["state"] == "done" and (r.get("lane") or {}).get("rig") == rig for r in queue["runs"])}
             for rig, pool in sorted(queue["pool"].items())
         },
+        "certs": runtime.get("certs", {}),
         "failed": [{"run": r["id"], "note": r.get("note")} for r in queue["runs"] if r["state"] == "failed"],
         "excluded": [{"run": r["id"], "note": r.get("note")} for r in queue["runs"] if r["state"] == "excluded"],
         "questions": questions,
@@ -1451,6 +1523,20 @@ def short(text: str | None, width: int = 44) -> str:
 TROUBLE_STATES = ("stale", "blocked", "rig down", "waiting for board")
 
 
+def cert_warnings(snapshot: dict, at: datetime) -> list[str]:
+    lines = []
+    for rig, record in sorted((snapshot.get("certs") or {}).items()):
+        expires = parse_iso(record.get("expires_at"))
+        if expires is None:
+            continue
+        left = (expires - at).total_seconds()
+        if left <= 0:
+            lines.append(f"{rig}: SSH certificate expired {clock(record['expires_at'], at)} — renew it with your 2FA login; the supervisor resumes by itself")
+        elif left <= CERT_WARN_S:
+            lines.append(f"{rig}: SSH certificate expires {clock(record['expires_at'], at)} (in {humanize(left)}) — renew it with your 2FA login")
+    return lines
+
+
 def render_brief(snapshot: dict) -> str:
     """The chat printout: the wave ETA first, one line per rig only when there are several, and a
     warning line only for what needs a look. The per-GPU table stays in `table --full` and table.md."""
@@ -1498,6 +1584,7 @@ def render_brief(snapshot: dict) -> str:
         names = ", ".join(f"`{item['run']}`" for item in snapshot["failed"][:3])
         more = f" and {len(snapshot['failed']) - 3} more" if len(snapshot["failed"]) > 3 else ""
         warnings.append(f"failed: {names}{more}")
+    warnings += cert_warnings(snapshot, at)
     for q in snapshot["questions"]:
         warnings.append(f"needs you [{q['id']}] {q['text']} — meanwhile: {q.get('meanwhile') or 'status quo'}")
     if warnings:
@@ -1546,6 +1633,7 @@ def render_table(snapshot: dict, fmt: str) -> str:
         lines.append("  ".join(name.ljust(widths[i]) for i, name in enumerate(TABLE_COLUMNS)))
         lines.extend("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)) for row in rows)
     problems = [f"{row['rig']} gpu{row['gpu']}: {row['problem']}" for row in snapshot["lanes"] if row.get("problem")]
+    problems += cert_warnings(snapshot, at)
     if problems:
         lines += ["", "**Problems**"] + [f"- {text}" for text in problems]
     if snapshot["failed"]:
@@ -1639,7 +1727,229 @@ def notify(settings: Settings, text: str) -> None:
     if not settings.notify_command:
         return
     with contextlib.suppress(OSError, subprocess.SubprocessError):
-        subprocess.run([part.format(text=text) for part in settings.notify_command], timeout=30, check=False, capture_output=True)
+        subprocess.run([part.replace("{text}", text) for part in settings.notify_command], timeout=30, check=False, capture_output=True)
+
+
+def event_notice(wave: Wave, record: dict) -> str | None:
+    """One line for the user's phone, or None when the event is not worth one. Certificate notices
+    name no wave, so two waves on one cluster send one notice."""
+    event, at = record.get("event"), now()
+    where = f"{wave.project_root.name} wave {wave.wave_id}"
+    if event == "wave-terminal":
+        missed = record.get("collect_failed") or []
+        return f"{where} finished: {record.get('done')} done, {record.get('failed')} failed" + (
+            f"; evaluations not collected from {', '.join(missed)}" if missed else "")
+    if event == "rig-down":
+        return f"{where}: {record.get('rig')} unreachable since {clock(record.get('since'), at)}"
+    if event == "recovery-blocked":
+        return f"{where}: {record.get('rig')} gpu{record.get('gpu')} cannot start: {short(record.get('problem'), 160)}"
+    if event == "submit-failed":
+        return f"{where}: submission to {record.get('rig')} failed: {short(record.get('problem'), 160)}"
+    if event == "cert-expiring":
+        return f"{record.get('rig')}: SSH certificate expires {clock(record.get('expires_at'), at)} — renew it with your 2FA login"
+    if event == "cert-expired":
+        return f"{record.get('rig')}: SSH certificate expired {clock(record.get('expired_at'), at)} — renew it with your 2FA login; supervision resumes by itself"
+    return None
+
+
+def notify_events(wave: Wave, settings: Settings, events: list[dict], sent: dict[str, float]) -> None:
+    """Push what a person should know without any chat open; identical notices within an hour are sent once."""
+    failed = [record for record in events if record.get("event") in ("run-failed", "job-failed")]
+    notices = [text for record in events if record.get("event") in NOTIFY_EVENTS and (text := event_notice(wave, record))]
+    if failed:
+        notices.append(f"{wave.project_root.name} wave {wave.wave_id}: {len(failed)} run(s) failed; the supervisor is on it")
+    clock_now = time.time()
+    for text in notices:
+        if clock_now - sent.get(text, 0.0) < 3600:
+            continue
+        sent[text] = clock_now
+        notify(settings, text)
+
+
+# ───────────────────────────── follow-ups ─────────────────────────────
+#
+# Work a wave leads to that is too long for a tick and needs no person: re-rendering the
+# experiment's plots and journaling the results when a wave finishes (`analyze`), and fixing a
+# deterministic engineering error then dispatching the runs it broke (`fix`). Each is one fresh
+# headless agent run by the service, one at a time per project, recorded in the board's index so
+# it survives the wave being finished and the service restarting.
+
+
+def followup_dir(board_config) -> Path:
+    return index_dir(board_config) / "followups"
+
+
+def followup_records(board_config) -> list[tuple[Path, dict]]:
+    directory = followup_dir(board_config)
+    if not directory.is_dir():
+        return []
+    return [(path, record) for path in sorted(directory.glob("*.json")) if (record := board.read_json(path))]
+
+
+def find_followup(board_config, identifier: str) -> tuple[Path, dict]:
+    path = followup_dir(board_config) / f"{identifier}.json"
+    record = board.read_json(path)
+    if not record:
+        raise SupervisorError(f"no follow-up {identifier!r}")
+    return path, record
+
+
+def enqueue_followup(board_config, wave: Wave, queue: dict, kind: str, text: str) -> dict:
+    if kind not in FOLLOWUP_KINDS:
+        raise SupervisorError(f"follow-up kind must be one of {', '.join(FOLLOWUP_KINDS)}")
+    depth = int(queue.get("fix_depth", 0))
+    if kind == "fix" and depth >= MAX_FIX_DEPTH:
+        raise SupervisorError(
+            f"wave {wave.wave_id} already comes from {depth} automatic fix round(s); the next fix goes to the user with `ask`"
+        )
+    at = now()
+    stem = f"{at.strftime('%Y%m%d-%H%M%S')}__{queue['project']}__{wave.wave_id}__{kind}"
+    identifier, n = stem, 1
+    while (followup_dir(board_config) / f"{identifier}.json").exists():
+        n += 1
+        identifier = f"{stem}-{n}"
+    record = {
+        "id": identifier, "kind": kind, "text": " ".join(text.split()), "status": "pending",
+        "project": queue["project"], "project_root": str(wave.project_root), "wave_id": wave.wave_id,
+        "experiment": queue["experiment"], "fix_depth": depth,
+        "created_at": iso(at), "started_at": None, "ended_at": None, "outcome": None, "log": None, "report": None,
+    }
+    board.write_json(followup_dir(board_config) / f"{identifier}.json", record)
+    wave.log("followup-queued", id=identifier, kind=kind, text=record["text"])
+    return record
+
+
+def followup_prompt(record: dict) -> str:
+    wave_id, experiment, ident = record["wave_id"], record["experiment"], record["id"]
+    report = (
+        f"Finish with `python3 <the sweep-supervisor skill's scripts/supervisor.py> --root . followup-report --id {ident} "
+        "--text \"<one line on the outcome, then every plot or wave it produced, each plot as its public URL>\"`. "
+    )
+    unattended = (
+        "You are unattended and nobody can answer: never ask a blocking question; for a decision on the Always ask list use "
+        f"the supervisor's `ask --wave {wave_id}` and carry on with everything else. Log every decision to program/DECISIONS.md. "
+    )
+    if record["kind"] == "analyze":
+        return (
+            f"Use the visualizations and research-journal skills for the research project in the current directory. "
+            f"Unattended follow-up {ident}: wave {wave_id} of experiment {experiment} has finished ({record['text']}). "
+            f"Re-render every existing plotter under visualizations/{experiment}/ (sub-experiments included) so its plots "
+            "include this wave's runs. When the experiment has no plotter yet, create the smallest set of plots that answers "
+            "the question its EXPERIMENTS.md section and JOURNAL.md say it tests, under the complete plot contract "
+            "(titles, axis and metric text, glossary, verification). Then append the research-journal entry stating what "
+            "the numbers show, without claims beyond them, and commit. " + unattended + report
+        )
+    return (
+        f"Use the sweep-dispatch skill (with experiment-design and run-identity as it requires) for the research project "
+        f"in the current directory. Unattended follow-up {ident} for wave {wave_id} of experiment {experiment}: the "
+        f"supervisor diagnosed a deterministic engineering error: {record['text']} "
+        "Fix it on the hub's main checkout so the code does what the experiment already intends; never change what the "
+        "experiment measures, a behavior-affecting default, or the scientific contract. Re-run the experiment's smoke, "
+        "commit with the journal entry, and dispatch a follow-up wave of exactly the runs this error broke (failed, dropped, "
+        f"or not yet started that would hit it) inside the same envelope, with `fix_depth` = {record['fix_depth'] + 1} in "
+        "its supervisor manifest. When the only fix would change the science or anything on the Always ask list, dispatch "
+        f"nothing: `ask --wave {wave_id}` with the diagnosis and the proposed patch. " + unattended + report
+    )
+
+
+def run_followup(path: Path, settings: Settings) -> None:
+    """One follow-up, start to end, in a fresh headless agent; never raises."""
+    record = board.read_json(path) or {}
+    try:
+        profile = require_agent(settings)
+        wave = Wave(Path(record["project_root"]), record["wave_id"])
+    except (SupervisorError, KeyError) as exc:
+        record.update(status="failed", outcome=f"cannot start: {exc}", ended_at=iso(now()))
+        board.write_json(path, record)
+        return
+    started = now()
+    wave.agent_logs.mkdir(parents=True, exist_ok=True)
+    log_path = wave.agent_logs / f"followup-{record['kind']}-{started.strftime('%Y%m%d-%H%M%S')}.log"
+    record.update(status="running", started_at=iso(started), log=str(log_path))
+    board.write_json(path, record)
+    command = [part.format(prompt=followup_prompt(record), model=profile.model, effort=profile.effort) for part in profile.command]
+    environment = {**os.environ, "SWEEP_SUPERVISOR_MODEL": profile.model, "SWEEP_SUPERVISOR_EFFORT": profile.effort}
+    with log_path.open("w") as log:
+        log.write(f"# {iso(started)} follow-up {record['id']}\n# {shlex.join(command[:-1])} <prompt>\n")
+        log.flush()
+        try:
+            result = subprocess.run(command, cwd=wave.project_root, stdout=log, stderr=subprocess.STDOUT,
+                                    timeout=settings.followup_timeout, env=environment, check=False)
+            outcome = f"exit {result.returncode}"
+        except subprocess.TimeoutExpired:
+            outcome = f"timed out after {settings.followup_timeout}s"
+        except OSError as exc:
+            outcome = f"could not start: {exc}"
+    record = board.read_json(path) or record  # the agent's report landed here meanwhile
+    record.update(status="done" if outcome == "exit 0" else "failed", outcome=outcome, ended_at=iso(now()))
+    board.write_json(path, record)
+    with contextlib.suppress(OSError):
+        wave.log("followup-ended", id=record["id"], kind=record["kind"], outcome=outcome)
+    if record["status"] != "done" or not record.get("report"):
+        notify(settings, f"{record['project']} wave {record['wave_id']}: follow-up {record['kind']} {outcome} without a report; log {log_path}")
+
+
+def start_followups(board_config, settings: Settings, threads: dict[str, threading.Thread]) -> None:
+    """Start every pending follow-up whose project has none running: two agents never commit in one checkout at once."""
+    for path, record in followup_records(board_config):
+        if record.get("status") != "pending":
+            continue
+        key = str(record.get("project_root"))
+        if key in threads and threads[key].is_alive():
+            continue
+        thread = threading.Thread(target=run_followup, args=(path, settings), daemon=True)
+        threads[key] = thread
+        thread.start()
+
+
+def requeue_interrupted_followups(board_config) -> None:
+    """A follow-up still `running` when the service starts was cut off by the restart: run it again."""
+    for path, record in followup_records(board_config):
+        if record.get("status") == "running":
+            record.update(status="pending", outcome="interrupted by a service restart; requeued")
+            board.write_json(path, record)
+
+
+def newer_installed_copy(script: Path) -> Path | None:
+    """This same script in a newer installed version of the plugin, when running from a versioned
+    install (`.../research/<X.Y.Z>/skills/...`). A release thereby reaches the running service
+    without anyone re-pointing it."""
+    script = script.resolve()
+    if len(script.parents) < 5 or not VERSION_RE.fullmatch(script.parents[3].name):
+        return None
+    version_dir = script.parents[3]
+    relative = script.relative_to(version_dir)
+
+    def version(name: str) -> tuple[int, ...]:
+        return tuple(int(part) for part in name.split("."))
+
+    best: tuple[tuple[int, ...], Path] | None = None
+    for sibling in version_dir.parent.iterdir():
+        candidate = sibling / relative
+        if VERSION_RE.fullmatch(sibling.name) and version(sibling.name) > version(version_dir.name) and candidate.is_file():
+            if best is None or version(sibling.name) > best[0]:
+                best = (version(sibling.name), candidate)
+    return best[1] if best else None
+
+
+_REJECTED_COPIES: set[Path] = set()
+
+
+def maybe_self_update(settings: Settings, busy: bool) -> None:
+    """Re-exec onto a newer installed copy between cycles, once its own `check` passes; never while an
+    agent this process started is still running (its lock would be dropped). A copy that fails its
+    check is not retried until the service restarts."""
+    candidate = newer_installed_copy(Path(__file__))
+    if candidate is None or busy or candidate in _REJECTED_COPIES:
+        return
+    probe = subprocess.run([sys.executable, str(candidate), "--registry", str(settings.registry_path), "check"],
+                           capture_output=True, text=True, check=False)
+    if probe.returncode != 0:
+        _REJECTED_COPIES.add(candidate)
+        print(f"[serve] newer copy {candidate} fails its check; staying on {Path(__file__).resolve()}", file=sys.stderr)
+        return
+    print(f"[serve] updating to {candidate}", flush=True)
+    os.execv(sys.executable, [sys.executable, str(candidate), "--registry", str(settings.registry_path), "serve"])
 
 
 # ───────────────────────────── service ─────────────────────────────
@@ -1655,22 +1965,29 @@ def cycle_wave(wave: Wave, board_config, settings: Settings) -> dict:
 
 def serve(board_config, settings: Settings) -> int:
     require_agent(settings)
-    print(f"[serve] cycle every {settings.cycle_every}s, agent tick every {settings.tick_every}s")
+    print(f"[serve] {Path(__file__).resolve()}: cycle every {settings.cycle_every}s, agent tick every {settings.tick_every}s", flush=True)
     wakers: dict[str, threading.Thread] = {}
+    followups: dict[str, threading.Thread] = {}
+    sent: dict[str, float] = {}
+    requeue_interrupted_followups(board_config)
     try:
         while True:
+            busy = any(thread.is_alive() for thread in (*wakers.values(), *followups.values()))
+            maybe_self_update(settings, busy)
             for wave in active_waves(board_config):
                 try:
                     outcome = cycle_wave(wave, board_config, settings)
                 except (SupervisorError, rigsync.RigSyncError, board.BoardError, OSError) as exc:
                     print(f"[serve] wave {wave.wave_id}: cycle failed: {exc}", file=sys.stderr)
                     continue
+                notify_events(wave, settings, outcome["events"], sent)
                 reason = wake_due(wave, settings)
                 running = wakers.get(wave.wave_id)
                 if reason and not (running and running.is_alive()):
                     thread = threading.Thread(target=wake, args=(wave, settings, reason), daemon=True)
                     wakers[wave.wave_id] = thread
                     thread.start()
+            start_followups(board_config, settings, followups)
             time.sleep(settings.cycle_every)
     except KeyboardInterrupt:
         return 0
@@ -1752,12 +2069,43 @@ def data_command(wave: Wave, args: argparse.Namespace) -> int:
     return 0
 
 
-def lane_command(wave: Wave, args: argparse.Namespace) -> int:
+def add_lane(queue: dict, board_config, rig: str, gpu: str, user_words: str | None) -> None:
+    """Admit one more GPU set of a pool rig. A shared rig's card beyond what we own needs the user's
+    grant, quoted verbatim, exactly as at registration; nothing else about the pool changes."""
+    pool = queue["pool"][rig]
+    if pool["kind"] != "lanes":
+        raise SupervisorError(f"{rig} runs cluster jobs, not lanes")
+    if not GPU_SET_RE.fullmatch(gpu):
+        raise SupervisorError(f"--gpu must be a GPU set such as \"0\" or \"0,1\"; got {gpu!r}")
+    wanted = board.gpu_indices(gpu)
+    taken = set().union(*(board.gpu_indices(lane) for lane in pool["lanes"]))
+    if wanted & taken:
+        raise SupervisorError(f"{rig} gpu {sorted(wanted & taken)} is already a lane of this wave")
+    shared = board_config.rigs.get(rig)
+    if shared is not None and shared.shared:
+        grant = queue.setdefault("gpu_grants", {}).get(rig)
+        foreign = wanted - shared.owned_gpus - set((grant or {}).get("gpus", ()))
+        if foreign:
+            if not user_words or not user_words.strip():
+                raise SupervisorError(
+                    f"{rig} is shared and gpu {sorted(foreign)} is not ours (owned: {sorted(shared.owned_gpus)}); "
+                    "only the user's grant for this wave, quoted with --user-words, adds it"
+                )
+            words = user_words.strip() if grant is None else f"{grant['user_words']} | {user_words.strip()}"
+            queue["gpu_grants"][rig] = {
+                "gpus": sorted(set((grant or {}).get("gpus", ())) | foreign), "user_words": words, "date": now().date().isoformat(),
+            }
+    pool["lanes"].append(gpu)
+
+
+def lane_command(wave: Wave, board_config, args: argparse.Namespace) -> int:
     with WaveLock(wave):
         queue = wave.load()
         require_pool_rigs(queue, [args.rig])
         key = f"{args.rig}:{args.gpu}"
-        if args.action == "unblock":
+        if args.action == "add":
+            add_lane(queue, board_config, args.rig, args.gpu, args.user_words)
+        elif args.action == "unblock":
             queue["blocked_lanes"].pop(key, None)
         elif args.action == "offload-on":
             queue["offload"] = sorted(set(queue["offload"]) | {args.rig})
@@ -1869,6 +2217,20 @@ def decide(wave: Wave, settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def prune_wave(wave: Wave, settings: Settings, queue: dict, config) -> None:
+    """Remove the finished wave's worktrees and unused environments, machine by machine, so one
+    unreachable rig never keeps the others' disk; what is left is pruned by a later reconciliation."""
+    machines = set(queue["pool"]) & set(config.machines)
+    with contextlib.suppress(rigsync.RigSyncError):
+        machines.add(rigsync.hub_machine(config).name)
+    for rig in sorted(machines):
+        result = run_rigsync(wave, settings, "prune", "--machines", rig, "--waves", wave.wave_id, "--confirm")
+        if result.returncode == 0:
+            wave.log("prune", rig=rig)
+        else:
+            wave.log("prune-failed", rig=rig, problem=(result.stderr.strip() or result.stdout.strip())[-300:])
+
+
 def finish(wave: Wave, board_config, settings: Settings, args: argparse.Namespace) -> int:
     rigsync.require_confirmation(args.dry_run, args.confirm)
     queue = wave.load()
@@ -1903,6 +2265,14 @@ def finish(wave: Wave, board_config, settings: Settings, args: argparse.Namespac
             with contextlib.suppress(board.BoardError), contextlib.redirect_stdout(io.StringIO()):
                 board.release(board_config, argparse.Namespace(rig=rig, gpu=gpu, reason=f"wave {wave.wave_id} finished"))
     index_path(board_config, queue["project"], wave.wave_id).unlink(missing_ok=True)
+    if not live:
+        # a finished wave needs nobody: its disk is freed and its results plotted and journaled unattended
+        prune_wave(wave, settings, queue, config)
+        done = sum(run["state"] == "done" for run in queue["runs"])
+        failed = sum(run["state"] == "failed" for run in queue["runs"])
+        if done and not args.no_analysis:
+            record = enqueue_followup(board_config, wave, queue, "analyze", f"{done} done, {failed} failed")
+            print(f"[finish] queued follow-up {record['id']}: plots and journal for this wave's results")
     return 0
 
 
@@ -1951,9 +2321,10 @@ def build_parser() -> argparse.ArgumentParser:
     data_p.add_argument("--rig", required=True)
     data_p.add_argument("--tag", required=True)
     lane_p = wave_parser("lane")
-    lane_p.add_argument("action", choices=("unblock", "offload-on", "offload-off"))
+    lane_p.add_argument("action", choices=("add", "unblock", "offload-on", "offload-off"))
     lane_p.add_argument("--rig", required=True)
     lane_p.add_argument("--gpu", default="0")
+    lane_p.add_argument("--user-words", help="add: the user's grant for a shared rig's card beyond ours, verbatim")
     lane_p.add_argument("--reason", required=True)
     pool_p = wave_parser("pool")
     pool_p.add_argument("--rig", required=True)
@@ -1973,10 +2344,18 @@ def build_parser() -> argparse.ArgumentParser:
     answer_p.add_argument("--text", required=True)
     decide_p = wave_parser("decide")
     decide_p.add_argument("text")
+    followup_p = wave_parser("followup", help="queue unattended work this wave leads to: analyze its results, or fix and redispatch")
+    followup_p.add_argument("--kind", choices=FOLLOWUP_KINDS, required=True)
+    followup_p.add_argument("--text", required=True, help="analyze: what finished; fix: the diagnosis with its evidence")
+    report_p = sub.add_parser("followup-report", help="a follow-up agent's closing line, pushed to the user")
+    report_p.add_argument("--id", required=True)
+    report_p.add_argument("--text", required=True)
+    sub.add_parser("followups", help="every follow-up and its state")
     wake_p = wave_parser("wake")
     wake_p.add_argument("--reason", default="manual")
     finish_p = wave_parser("finish")
     finish_p.add_argument("--abandon", action="store_true")
+    finish_p.add_argument("--no-analysis", action="store_true", help="do not queue the results follow-up")
     confirmable(finish_p)
     return parser
 
@@ -1998,6 +2377,18 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "waves":
             for wave in active_waves(board_config):
                 print(f"{wave.wave_id}\t{wave.project_root}")
+            return 0
+        if args.command == "followups":
+            for _path, record in followup_records(board_config):
+                report = (record.get("report") or record.get("outcome") or "").splitlines()[:1]
+                print(f"{record['id']}\t{record['status']}\t{report[0] if report else ''}")
+            return 0
+        if args.command == "followup-report":
+            path, record = find_followup(board_config, args.id)
+            record["report"] = args.text
+            board.write_json(path, record)
+            notify(settings, f"{record['project']} wave {record['wave_id']} {record['kind']}: {args.text}")
+            print(f"[followup-report] {args.id}: recorded")
             return 0
         wave = Wave(args.root, args.wave)
         if args.command == "register":
@@ -2029,7 +2420,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "data":
             return data_command(wave, args)
         if args.command == "lane":
-            return lane_command(wave, args)
+            return lane_command(wave, board_config, args)
+        if args.command == "followup":
+            record = enqueue_followup(board_config, wave, wave.load(), args.kind, args.text)
+            print(f"[followup] queued {record['id']}; the service starts it on its next cycle")
+            return 0
         if args.command == "pool":
             return pool_command(wave, args)
         if args.command == "steal":

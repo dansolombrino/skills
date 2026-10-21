@@ -248,3 +248,7 @@ a hydra config nor identity: editing it never changes a run_id. Shape:
   generate launch scripts, dispatch work, start tmux, or add/update `EXPERIMENTS.md` rows.
 - Every plotting-code edit and render ⇒ a `program/DECISIONS.md` line with the specification and
   resolved paths, and a `research-journal` entry when the plot reveals something.
+- **After every wave, unattended.** `sweep-supervisor`'s `analyze` follow-up applies this skill
+  when a wave finishes: it re-renders the experiment's plotters, or creates the first ones, with
+  every rule above in force — titles, axis and metric text, glossary, verification — and hands the
+  `public:` URLs to `followup-report` instead of a chat.

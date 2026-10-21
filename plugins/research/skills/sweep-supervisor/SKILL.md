@@ -1,6 +1,6 @@
 ---
 name: sweep-supervisor
-description: Supervise a dispatched Research 2.0 wave from the hub without depending on any open chat - a hub service feeds each GPU lane from one pull queue so load balances itself, relaunches lanes after a rig fault, offloads disk-constrained rigs, collects evaluations to the hub, keeps the fleet board current, renders a short ETA printout (per-GPU table on request), and wakes a fresh unattended agent every two minutes and on every failure to judge what rules cannot (diagnose failures, move or steal runs across GPUs and rigs, fetch datasets, fix walltimes, ask the user without blocking). Use when a wave is running or about to be launched, when the user asks for status, ETA, periodic updates or their interval, to monitor or babysit a sweep, to rebalance GPUs, to recover after a crash or reboot, to answer a supervisor question, or when woken as the unattended supervisor agent for a tick. Do not use to design, generate, or authorize a wave (sweep-dispatch), or for fleet-wide GPU occupancy across projects (rig-board).
+description: Supervise a dispatched Research 2.0 wave from the hub with no chat needed - a hub service feeds each GPU lane from one pull queue, relaunches lanes after a rig fault, offloads and collects, keeps the fleet board current, renders a short ETA printout, pushes notices to the user's phone, and wakes a fresh unattended agent every two minutes and on every failure to judge what rules cannot (diagnose, move runs, fetch data, ask without blocking); it then runs the follow-ups a wave leads to (plots and journal when it finishes, fix-and-redispatch of a deterministic engineering error). Use when a wave is running or about to be launched, when the user asks for status, ETA, periodic updates or their interval, to monitor or babysit a sweep, to rebalance GPUs, to recover after a crash or reboot, to answer a supervisor question, or when woken as the unattended supervisor agent for a tick. Do not use to design, generate, or authorize a wave (sweep-dispatch), or for fleet-wide GPU occupancy across projects (rig-board).
 ---
 
 # sweep-supervisor
@@ -26,7 +26,10 @@ python3 "$SUPERVISOR" --root <project root> table --wave <wave_id>          # th
 python3 "$SUPERVISOR" --root <project root> table --wave <wave_id> --full   # the per-GPU table
 python3 "$SUPERVISOR" --root <project root> ledger --wave <wave_id>         # what happened since the last tick
 python3 "$SUPERVISOR" --root <project root> answer --wave <wave_id> --id q1 --text "<the user's answer>"
+python3 "$SUPERVISOR" --root <project root> lane add --wave <wave_id> --rig <rig> --gpu <ids> --reason "<why>"
+python3 "$SUPERVISOR" --root <project root> followup --wave <wave_id> --kind fix --text "<diagnosis with evidence>"
 python3 "$SUPERVISOR" waves                                   # every wave the service is supervising
+python3 "$SUPERVISOR" followups                               # every follow-up, its state and report
 ```
 
 ## Who does what
@@ -39,7 +42,8 @@ python3 "$SUPERVISOR" waves                                   # every wave the s
 | disk | `rig-sync offload` pass on offload rigs (every non-hub lane rig by default; Slurm targets such as `leonardo` excluded, and `supervisor.py` rejects offload entries that are not lane rigs) | turn offload on or off for a rig | — |
 | evaluations | `rig-sync collect` from every pool rig to the hub | settle a `collect-failed` identity mismatch with the user | — |
 | tracking | fleet board claim/refresh/release, snapshot, printout and table | EXPERIMENTS.md (single writer during a wave), `decide` log, journal | paste the printout |
-| the user | — | `ask` without blocking | relay `answer` |
+| after the wave | `finish`: prune every machine, queue the `analyze` follow-up; run follow-ups one per project | queue a `fix` follow-up for a deterministic engineering error | — |
+| the user | push notices (`notify_command`): wave finished, failures, rig down, blocked lane, certificate expiring | `ask` without blocking | relay `answer` (optional) |
 
 The queue is ordered once by dispatch. A lane holds at most one run in flight plus one buffered,
 so a fast card simply takes more runs: a wrong initial estimate corrects itself, and an unstarted
@@ -88,10 +92,13 @@ wave, resume its printout and re-arm the wake-up if this chat has none.
    `table --full` (also `.waves/_state/<wave_id>/table.md`); post it only when the user asks.
 4. A `⚠ needs you [<id>]` line is a supervisor question. When the user answers in chat, record it with
    `answer`; the service wakes the agent on it. Until then the stated status quo holds.
-5. When the printout says `finished`, post it, run the prune (`rig-sync prune --dry-run`, then
-   `--confirm`; logged), and stop the schedule.
-6. A direct request ("move X to behemoth", "stop using the 3080") goes through the same commands
-   the agent uses (`queue`, `lane`, `steal`), with `--reason "user: ..."`. A change of a cluster's
+5. When the printout says `finished`, post it and stop the schedule. `finish` already pruned the
+   wave and queued its `analyze` follow-up, whose report (plot links included) reaches the user as
+   a notice; `followups` shows it too.
+6. A direct request ("move X to behemoth", "stop using the 3080", "add gpu 3, Marco lent it")
+   goes through the same commands the agent uses (`queue`, `lane`, `lane add`, `steal`), with
+   `--reason "user: ..."`; a shared rig's card beyond ours takes the user's words with
+   `--user-words`. A change of a cluster's
    tracked core-hour cap goes through `pool --rig <cluster> --core-hours-cap <h> --reason "..."`
    (ledger event `pool-cap`; a raised cap resumes submission), only when the user asks for one.
 
@@ -102,14 +109,56 @@ The unattended agent's model and reasoning effort are declared once, in the regi
 every `decide` line and the table header name them. If a chat ever starts a helper agent for
 supervision work, request that same declared profile rather than the host's default.
 
+## Without a chat
+
+A wave needs no chat from dispatch to its plotted results. What used to bring the user back:
+
+- **Notices, not questions.** With `notify_command` declared ([references/setup.md](references/setup.md)),
+  the service pushes one line for a finished wave, failed runs, a rig down, a lane that cannot
+  start, a cluster submission failure, every `ask`, and every follow-up report — identical notices
+  at most once an hour, across waves.
+- **Certificates.** A rig's `ssh_cert` (a cluster login certificate, such as Leonardo's 12-hour
+  one) is watched: a notice an hour before it expires and one when it does, and a `⚠` line in the
+  printout. Renewing it is the user's 2FA, so it is never an `ask`, and nothing waits on an answer:
+  the service resumes the rig the cycle it answers again. Jobs on the cluster keep running meanwhile.
+- **Releases.** Running from a versioned plugin install, the service re-executes itself onto a newer
+  installed version between cycles once that copy's `check` passes and no agent it started is
+  running, so a release never leaves it on old code.
+- **Held GPUs.** A pool lane held by another wave or project waits (`waiting for board`) and starts
+  when released; it never makes the wave ETA unavailable while another lane can run.
+
+## Follow-ups
+
+Work a wave leads to that needs no person but is too long for a tick runs as a **follow-up**: one
+fresh headless agent with the same profile, started by the service, one at a time per project,
+with `followup_timeout` (default three hours). Records live under `<board root>/supervisor/followups/`,
+so they outlive the wave, and one interrupted by a service restart runs again.
+
+- **`analyze`** — queued by `finish` for every wave that ends with at least one `done` run (`--no-analysis`
+  skips it). It re-renders every plotter of the experiment (or creates the smallest set that answers
+  the experiment's question) under the complete `visualizations` contract, appends the
+  `research-journal` entry, commits, and reports the plot URLs.
+- **`fix`** — queued by the unattended agent (`followup --kind fix --text "<diagnosis>"`) for a
+  deterministic engineering error: a traceback, a wrong path, a generator or wave-script bug. The
+  follow-up fixes the code on the hub's main checkout without changing what the experiment
+  measures, reruns the smoke, commits, and dispatches a wave of exactly the runs the error broke,
+  inside the same envelope, carrying `fix_depth` + 1. The supervisor refuses a third automatic
+  round in one chain; a fix that would change the science or anything on the **Always ask** list
+  becomes an `ask` instead.
+
+Each follow-up ends with `followup-report --id <id> --text "<outcome and links>"`, which is
+recorded and pushed to the user; a follow-up that fails or ends without a report is pushed with
+its log path.
+
 ## Authority
 
 Standing, per wave, granted at the dispatch gate and recorded in the wave README: inside the
 wave's **pool** (its rigs, GPU sets, cluster caps) the supervisor may start, stop, move, requeue,
 and steal this wave's own runs, resubmit this wave's own jobs and cancel the ones the cluster has
 not started yet (a `PENDING` job pulled to an idle lane) by id, fetch data into
-declared caches, let `rig-sync offload` free verified checkpoints, and `rig-sync collect`
-evaluation records to the hub — without asking. A user-granted `behemoth` card is part of the pool
+declared caches, let `rig-sync offload` free verified checkpoints, `rig-sync collect`
+evaluation records to the hub, add a lane on one of our cards of a pool rig inside the envelope
+(`lane add`), and queue the wave's `fix` and `analyze` follow-ups — without asking. A user-granted `behemoth` card is part of the pool
 for the whole wave. **Leonardo:** core-hours are not a gate; the wave runs with no core-hour cap
 unless the user set one, and a `budget-cap` event (only possible then) is reported, not asked.
 

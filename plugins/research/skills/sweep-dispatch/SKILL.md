@@ -27,9 +27,10 @@ config param added/changed since this experiment's last runs, must be in the ide
 `config/<experiment_path>/RUN_ID_VERSIONS.json` entry under `hashed-v2`; `RUN_ID_PARAMS` under a
 legacy pin). The check is mechanical: first require `rigsync collect --check --wave <id>` to pass
 for every earlier wave of the experiment (the hub must hold every rig's run records, or a
-comparison against it proves nothing). It needs every rig of those waves reachable; when one is
-not (for example an expired `leonardo` certificate), restore access (renew the certificate) and
-rerun — there is no bypass; then `check_run_id_plan` (gate 1c) compares every planned run's resolved config with the
+comparison against it proves nothing). A rig whose finished wave's final collect succeeded is
+not contacted again; otherwise it must be reachable, and when it is not (for example an expired
+`leonardo` certificate), restore access (renew the certificate) and rerun — there is no other
+bypass; then `check_run_id_plan` (gate 1c) compares every planned run's resolved config with the
 `.run_config.json` already at its path. Identical passes (resume/retry); any difference **halts**
 before anything is generated and names the differing keys — otherwise new runs collide with old
 artifacts: overwritten, or silently skipped as "done". Under `hashed-v2`, the route is the next
@@ -109,10 +110,13 @@ before launch and say exactly what is missing: a wave nobody supervises is not l
 chat promises updates it cannot deliver.
 2. **Resolve usable rigs and GPUs.** First read the fleet board: `rig-board` `status --reconcile`
 shows every lane held by any project on the hub, foreign cards, and unreachable rigs. Held and
-foreign lanes are not free capacity. The pool is **every lane the board shows free on the
-envelope's rigs and GPUs**: take it and log it, never ask which rigs are free. Held lanes stay out
-and are logged with their holder and ETA; when no envelope lane is free, say so in the chat and do
-not widen the pool, which always asks. Never infer availability from `nvidia-smi`. On `behemoth`,
+foreign lanes are not free capacity now. The pool is **every lane of the envelope's rigs and GPUs
+that is ours**, free or held: take it and log it, never ask which rigs are free. A held lane stays in
+the pool as `waiting for board` — the supervisor claims it the cycle its holder releases it, so a
+wave dispatched while every GPU is busy simply starts when one frees up, and nobody has to come
+back and relaunch it. Log each held lane with its holder and ETA; the launch line says how many
+lanes are waiting. Widening beyond the envelope always asks. Never infer availability from
+`nvidia-smi`. On `behemoth`,
 gpu0 is the only default. Any additional named card requires an explicit per-wave user grant, is
 never persisted, and goes into the manifest as `gpu_grants.behemoth` with the user's words
 verbatim — `register` refuses the lane without it. For
@@ -135,8 +139,8 @@ Log — never print or wait on — the pool (rig, GPU set, per lane), the queue 
 wave completion and each lane's expected share, runs pinned to a rig by VRAM or data, offload
 rigs, exact smoke command, staged files, branch/remote, environment key and fingerprint,
 provisioning dry run, commit/tag/push, worktree deployment scope, and any supersede. The chat
-gets one line at launch: wave id, run count, lanes per rig, simulated completion, update interval
-in minutes (the user's number, else 1).
+gets one line at launch: wave id, run count, lanes per rig (and how many wait for the board),
+simulated completion, update interval in minutes (the user's number, else 1).
 `leonardo` is outside the balancing: its queue wait is not predictable, so dispatch sets its job
 cap (no core-hour cap unless the user asks for one), each run it takes becomes one job, and its
 ETA is reported as scheduler estimate plus run estimate. Log for it the account,
@@ -302,19 +306,18 @@ destructive). Show the exact list in that one question.
 
 A terminal wave's worktree, and any keyed environment no remaining worktree uses, is disk that
 nothing needs — but a failed run may still be recovered, and recovery recreates what was pruned.
-So pruning is **done by this skill and logged**, never skipped: when the final summary of a wave
-is posted, run
-`rig-sync prune --machines <wave's machines plus the hub> --waves <wave_id> --dry-run`, then the
-same command with `--confirm`, and log what was removed. `prune` refuses active or
-dirty worktrees by itself; still list only waves whose rows are all terminal.
+`sweep-supervisor finish` prunes the wave on every machine of its pool plus the hub, one machine at
+a time, the moment the wave closes; no chat has to be open. A machine it could not reach keeps its
+worktree until the next `experiments-tracking` reconciliation prunes it (`rig-sync prune
+--dry-run`, then `--confirm`, logged). `prune` refuses active or dirty worktrees by itself.
 
 ## Status and ETA updates
 
-The periodic table, the urgent reports, the final summary, board refresh and release, and the
+The periodic table, the urgent reports, the final summary, board refresh and release, the
 once-per-wave `write_run_id_map(<evaluations experiment dir>, layout=RUN_ID_PATH_LAYOUT)` rebuild
 (`spec_root=` the tracked `config/<experiment_path>` under `hashed-v2`)
-(never per run) belong to `sweep-supervisor`. When its final table is posted, run the prune
-(§ Pruning finished waves).
+(never per run), the prune, and the post-wave plots and journal entry (`sweep-supervisor`
+§ Follow-ups) belong to `sweep-supervisor`.
 
 ## Tracking side-effects (same turn)
 

@@ -90,6 +90,14 @@ runs by a versioned `rid-<32 hex>` hash (`hashed-v2`) that `run-identity` looks 
 `EXPERIMENTS.md` holds run state and `JOURNAL.md` holds the narrative. Unsupported legacy layouts
 stop without migration.
 
+A dispatched wave needs no chat. The hub's `sweep-supervisor` service feeds and recovers it, waits
+for GPUs another wave holds instead of leaving them out, pushes notices to a phone through
+`notify_command` (finished, failures, rig down, a Leonardo certificate about to expire), and when
+the wave finishes prunes it and runs an unattended follow-up that renders its plots under the full
+plot contract and journals the results. A deterministic engineering error found mid-wave is fixed
+and its runs dispatched again by a follow-up too (at most two automatic rounds). Running from the
+installed plugin, the service moves itself onto each new release.
+
 Scaffolded projects get `AGENTS.md` as the canonical project doc plus a thin `CLAUDE.md` that
 points at it, so one set of notes serves both hosts.
 

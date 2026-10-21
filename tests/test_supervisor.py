@@ -117,7 +117,8 @@ class SupervisorTests(unittest.TestCase):
         self.rigsync_calls.append(argv)
         if self.rigsync_failures:
             return subprocess.CompletedProcess(argv, 2, "", f"rigsync: {self.rigsync_failures.pop(0)}")
-        return subprocess.CompletedProcess(argv, 0, f"[{argv[0]}-summary] {argv[argv.index('--machine') + 1]}: copied 0 (0 kB)\n", "")
+        flag = "--machine" if "--machine" in argv else "--machines"
+        return subprocess.CompletedProcess(argv, 0, f"[{argv[0]}-summary] {argv[argv.index(flag) + 1]}: copied 0 (0 kB)\n", "")
 
     def collected(self) -> list[str]:
         return [argv[argv.index("--machine") + 1] for argv in self.rigsync_calls if argv[0] == "collect"]
@@ -619,6 +620,157 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(self.cli("finish", "--wave", WAVE, "--confirm")[0], 2)
         self.assertEqual(self.cli("finish", "--wave", WAVE, "--abandon", "--confirm")[0], 0)
         self.assertEqual(self.cli("waves")[1], "")
+
+    # ── closing the loop without a chat ──
+
+    def terminal_wave(self) -> None:
+        self.register(runs=2, pool={"peer": {"lanes": ["0"]}})
+        for _ in range(3):
+            self.cli("cycle", "--wave", WAVE)
+            for run in self.queue()["runs"]:
+                if run["state"] in ("assigned", "running"):
+                    self.finish_entry(self.peer, run["entry"], 0, run["artifact"])
+        self.cli("cycle", "--wave", WAVE)
+        self.assertTrue(self.queue()["finished_at"])
+
+    def followups(self) -> list[dict]:
+        return [record for _path, record in supervisor.followup_records(board.load_config(self.registry))]
+
+    def test_finishing_a_wave_prunes_every_machine_and_queues_its_analysis(self) -> None:
+        self.terminal_wave()
+        self.rigsync_calls.clear()
+        code, out, err = self.cli("finish", "--wave", WAVE, "--confirm")
+        self.assertEqual(code, 0, err)
+        pruned = sorted(argv[argv.index("--machines") + 1] for argv in self.rigsync_calls if argv[0] == "prune")
+        self.assertEqual(pruned, ["hub", "peer"], "each machine on its own, the hub included")
+        [record] = self.followups()
+        self.assertEqual((record["kind"], record["status"], record["wave_id"]), ("analyze", "pending", WAVE))
+        self.assertIn("2 done, 0 failed", record["text"])
+        self.assertIn("queued follow-up", out)
+
+    def test_an_abandoned_wave_is_neither_pruned_nor_analyzed(self) -> None:
+        self.register()
+        self.rigsync_calls.clear()
+        self.assertEqual(self.cli("finish", "--wave", WAVE, "--abandon", "--confirm")[0], 0)
+        self.assertFalse([argv for argv in self.rigsync_calls if argv[0] == "prune"])
+        self.assertEqual(self.followups(), [])
+
+    def test_fix_followups_stop_after_two_automatic_rounds(self) -> None:
+        path = self.manifest()
+        payload = json.loads(path.read_text())
+        payload["fix_depth"] = 2
+        path.write_text(json.dumps(payload))
+        self.assertEqual(self.cli("register", "--wave", WAVE, "--manifest", str(path), "--confirm")[0], 0)
+        code, _out, err = self.cli("followup", "--wave", WAVE, "--kind", "fix", "--text", "probe.py clobbers metrics.json")
+        self.assertEqual(code, 2)
+        self.assertIn("goes to the user", err)
+        self.assertEqual(self.cli("followup", "--wave", WAVE, "--kind", "analyze", "--text", "partial look")[0], 0)
+
+    def test_a_fix_followup_carries_the_next_depth_into_its_prompt(self) -> None:
+        self.register()
+        self.assertEqual(self.cli("followup", "--wave", WAVE, "--kind", "fix", "--text", "hydra over-quotes optim.betas")[0], 0)
+        [record] = self.followups()
+        prompt = supervisor.followup_prompt(record)
+        self.assertIn("`fix_depth` = 1", prompt)
+        self.assertIn("hydra over-quotes optim.betas", prompt)
+        self.assertIn("never change what the experiment measures", prompt)
+
+    def test_the_service_runs_followups_one_per_project_and_keeps_the_report(self) -> None:
+        self.register()
+        board_config = board.load_config(self.registry)
+        settings = supervisor.load_settings(self.registry)
+        queue = self.queue()
+        wave = supervisor.Wave(self.hub, WAVE)
+        first = supervisor.enqueue_followup(board_config, wave, queue, "analyze", "5 done, 0 failed")
+        second = supervisor.enqueue_followup(board_config, wave, queue, "fix", "a bug")
+        self.assertNotEqual(first["id"], second["id"])
+        self.assertEqual(self.cli("followup-report", "--id", first["id"], "--text", "loss falls with lr; http://x/p.html")[0], 0)
+        threads: dict = {}
+        supervisor.start_followups(board_config, settings, threads)
+        [thread] = threads.values()
+        thread.join(30)
+        records = {r["id"]: r for r in self.followups()}
+        self.assertEqual(records[first["id"]]["status"], "done")
+        self.assertEqual(records[first["id"]]["report"], "loss falls with lr; http://x/p.html")
+        self.assertEqual(records[second["id"]]["status"], "pending", "one follow-up at a time per project")
+        self.assertIn("Unattended follow-up", Path(records[first["id"]]["log"]).read_text())
+
+    def test_an_interrupted_followup_runs_again(self) -> None:
+        self.register()
+        board_config = board.load_config(self.registry)
+        record = supervisor.enqueue_followup(board_config, supervisor.Wave(self.hub, WAVE), self.queue(), "analyze", "x")
+        path, _ = supervisor.find_followup(board_config, record["id"])
+        board.write_json(path, {**record, "status": "running"})
+        supervisor.requeue_interrupted_followups(board_config)
+        self.assertEqual(board.read_json(path)["status"], "pending")
+
+    def test_lane_add_admits_an_owned_card_and_a_shared_one_only_with_the_users_words(self) -> None:
+        self.registry.write_text(self.registry.read_text().replace('slurm = ["cluster"]', 'slurm = ["cluster"]\nshared = ["peer"]'))
+        self.register()
+        code, _out, err = self.cli("lane", "add", "--wave", WAVE, "--rig", "peer", "--gpu", "3", "--reason", "free on the board")
+        self.assertEqual(code, 2)
+        self.assertIn("not ours", err)
+        code, _out, err = self.cli("lane", "add", "--wave", WAVE, "--rig", "hub", "--gpu", "1", "--reason", "free on the board")
+        self.assertEqual(code, 0, err)
+        code, _out, err = self.cli("lane", "add", "--wave", WAVE, "--rig", "peer", "--gpu", "3", "--reason", "user: add gpu3",
+                                   "--user-words", "Marco lent me gpu 3 until Friday")
+        self.assertEqual(code, 0, err)
+        queue = self.queue()
+        self.assertEqual(queue["pool"]["hub"]["lanes"], ["0", "1"])
+        self.assertEqual(queue["gpu_grants"]["peer"]["gpus"], [3])
+        self.assertEqual(queue["gpu_grants"]["peer"]["user_words"], "Marco lent me gpu 3 until Friday")
+        self.assertEqual(self.cli("lane", "add", "--wave", WAVE, "--rig", "hub", "--gpu", "0,1", "--reason", "x")[0], 2)
+
+    def test_a_lane_waiting_for_the_board_never_hides_the_wave_eta(self) -> None:
+        self.hold_for_another_wave("peer")
+        self.register()
+        self.cli("cycle", "--wave", WAVE)
+        snapshot = board.read_json(supervisor.Wave(self.hub, WAVE).snapshot_path)
+        self.assertIsNotNone(snapshot["wave_eta"], snapshot["wave_eta_basis"])
+        events = [r["event"] for r in supervisor.Wave(self.hub, WAVE).ledger()]
+        self.assertNotIn("claim-refused", [e for e in events if e in supervisor.URGENT_EVENTS], "waiting needs no agent")
+
+    def test_a_certificate_is_announced_before_and_when_it_expires_never_asked(self) -> None:
+        self.registry.write_text(self.registry.read_text().replace('gpus = "job"', 'gpus = "job"\nssh_cert = "~/.ssh/id_cluster-cert.pub"'))
+        pool = {"hub": {"lanes": ["0"]}, "cluster": {"max_jobs": 1, "default_walltime_s": 3600}}
+        self.register(pool=pool)
+        soon = supervisor.now() + supervisor.timedelta(minutes=30)
+        with mock.patch.object(supervisor, "cert_expiry", return_value=soon):
+            self.cli("cycle", "--wave", WAVE)
+            self.cli("cycle", "--wave", WAVE)
+        events = [r["event"] for r in supervisor.Wave(self.hub, WAVE).ledger()]
+        self.assertEqual(events.count("cert-expiring"), 1)
+        brief = self.cli("table", "--wave", WAVE)[1]
+        self.assertIn("cluster: SSH certificate expires", brief)
+        past = supervisor.now() - supervisor.timedelta(minutes=1)
+        with mock.patch.object(supervisor, "cert_expiry", return_value=past):
+            self.cli("cycle", "--wave", WAVE)
+        events = [r["event"] for r in supervisor.Wave(self.hub, WAVE).ledger()]
+        self.assertEqual(events.count("cert-expired"), 1)
+        self.assertFalse({"cert-expiring", "cert-expired"} & supervisor.URGENT_EVENTS, "a renewal is a notice, never an agent wake-up")
+        self.assertIn("resumes by itself", self.cli("table", "--wave", WAVE)[1])
+
+    def test_notices_reach_the_phone_once_even_from_two_waves(self) -> None:
+        sink = self.base / "notices"
+        self.registry.write_text(self.registry.read_text().replace(
+            "cycle_every = 60", f'cycle_every = 60\nnotify_command = ["sh", "-c", "echo \\"$0\\" >> {sink}", "{{text}}"]'))
+        settings = supervisor.load_settings(self.registry)
+        sent: dict = {}
+        expiring = {"event": "cert-expiring", "rig": "cluster", "expires_at": supervisor.iso(supervisor.now())}
+        for wave_id in (WAVE, "20260921-093001"):
+            supervisor.notify_events(supervisor.Wave(self.hub, wave_id), settings, [expiring, {"event": "run-failed"}], sent)
+        lines = sink.read_text().splitlines()
+        self.assertEqual(sum("SSH certificate" in line for line in lines), 1)
+        self.assertEqual(sum("1 run(s) failed" in line for line in lines), 2, "per wave")
+
+    def test_the_service_follows_a_newer_installed_release(self) -> None:
+        root = self.base / "cache" / "research"
+        relative = Path("skills/sweep-supervisor/scripts/supervisor.py")
+        for version in ("9.5.0", "12.1.0", "13.0.0", "not-a-version"):
+            write(root / version / relative, "")
+        self.assertEqual(supervisor.newer_installed_copy(root / "12.1.0" / relative), root / "13.0.0" / relative)
+        self.assertIsNone(supervisor.newer_installed_copy(root / "13.0.0" / relative))
+        self.assertIsNone(supervisor.newer_installed_copy(SCRIPT), "a development checkout never moves")
 
 
 FAKE_SSH = """#!/bin/sh

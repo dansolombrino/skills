@@ -27,7 +27,7 @@ a code problem.
 |---|---|
 | out of memory on a small card | `queue constrain --min-vram-mib <n>` for that run **and every queued run of the same shape**, then `queue requeue` |
 | missing dataset or weights on that rig | verify the hub copy, `rig-sync sync-cache --var <declared cache> --subpath <rel> --to <rig>` (or the project's own fetch inside the declared cache), verify size or checksum on the rig, `data mark-ready --rig <rig> --tag <tag>`, `queue requeue`. A dataset that cannot fit leaves that rig ineligible for those runs only |
-| deterministic code error | do **not** requeue. `queue drop` the queued runs that would hit the same line only when the evidence is the same traceback; otherwise leave them. Report |
+| deterministic engineering error (a traceback in the experiment code, a wrong path, a wave-script or generator bug) | do **not** requeue. `queue drop` the queued runs that would hit the same line only when the evidence is the same traceback. Then `followup --kind fix --text "<the error, file:line, the evidence, the runs it breaks>"`: the service fixes it and dispatches those runs again, unattended. Only when the fix would change what the experiment measures, or `followup` refuses (two automatic rounds already), `ask` with the diagnosis and the proposed patch |
 | flaky or machine-caused failure | `queue requeue`, once; a second identical failure is a code error |
 | stale heartbeat, rig up, session alive | a hang: report it with evidence; steal only when the process is provably idle (no GPU utilisation, log silent past several heartbeats) |
 | lane `blocked` (revision or environment verification failed) | re-run `rig-sync deploy-revision` / `environment-sync provision` for that wave inside the envelope, then `lane unblock`; if it still fails, leave it blocked and report |
@@ -35,8 +35,9 @@ a code problem.
 | cluster `job-timeout` | the service already resized it from measured progress; confirm the number is sane, else `queue constrain --walltime-s`. A run that restarts from scratch and cannot fit 24 h goes to the user |
 | `budget-cap` reached (only when the user set a cap) | `decide` reporting it; the cluster takes no new jobs until the user raises the cap with `pool --rig leonardo --core-hours-cap <n> --reason "user: ..."`; the lanes keep running |
 | `collect-failed` | read the problem. A transient ssh failure needs nothing: the next cycle retries. An identity mismatch (`.run_id.json`/`.run_config.json` differ between rig and hub) → `ask`, and never overwrite either copy |
-| `claim-refused` (lane `waiting for board`) | nothing to undo: the service already kept the lane out and retries every cycle. Report who holds the card; if the hold looks stale, `rig-board status --reconcile` evidence goes to the user, never a forced release |
-| a card in the envelope became free on the fleet board | run the full `rig-sync` and `environment-sync` gates for it; admitting a lane that was not in the pool is a pool change: `ask` |
+| `claim-refused` (lane `waiting for board`) | nothing to do: the lane is in the pool and starts the cycle its holder releases it. If the hold looks stale, `rig-board status --reconcile` evidence goes to the user, never a forced release |
+| one of our cards on a pool rig, inside the envelope, is free and not in the pool | `lane add --rig <rig> --gpu <ids> --reason "<why>"`; the service runs the revision and environment gates before it starts the lane. A shared rig's card beyond ours needs the user's grant: `ask` |
+| `rig-down` while the printout shows the rig's SSH certificate expired | nothing to ask: the user already got the notice, and the service resumes the rig when it answers. `decide` what keeps running meanwhile |
 
 ### Tail stealing
 
@@ -79,7 +80,8 @@ map once per machine whose evaluations tree received runs
 (`write_run_id_map(<evaluations experiment dir>, layout=RUN_ID_PATH_LAYOUT)`, plus
 `spec_root=<root>/.waves/<wave_id>/config/<experiment_path>` under `hashed-v2` — that machine's
 wave worktree, which carries the tracked identity files the wave ran with — never per run), add
-a closing `decide` with counts and open problems, then `SUP finish --confirm`. Pruning is done by the
-chat agent once `finished` is posted (`sweep-dispatch`, § Pruning finished waves); never prune from a tick.
+a closing `decide` with counts and open problems, then `SUP finish --confirm`. `finish` prunes the
+wave on every machine and queues its `analyze` follow-up (plots and the journal entry); never prune
+or plot from a tick yourself.
 
 Exit when done. The next tick starts from the files, not from your memory.

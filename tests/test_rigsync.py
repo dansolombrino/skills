@@ -1763,6 +1763,48 @@ class OffloadTests(unittest.TestCase):
             rigsync.collect_check(self.config, None, [WAVE])
         self.assertIn("differs on the hub: evaluations/000_exp/model=done/.run_config.json", out.getvalue())
 
+    def test_a_finished_rerun_replaces_the_hub_record_of_a_failed_attempt(self) -> None:
+        import json as _json, os as _os, time as _time
+
+        run = self.add_run("model=rerun", "done")
+        self.register([run])
+        older = _time.time() - 5000
+        hub_status = self.hub_root / run["status_path"]
+        write(hub_status, _json.dumps({"state": "failed", "wave_id": WAVE, "started": "2026-10-19T23:33:00+02:00"}))
+        hub_metrics = self.hub_root / run["eval_dir"] / "metrics.jsonl"
+        write(hub_metrics, "first attempt")
+        for path in (hub_status, hub_metrics):
+            _os.utime(path, (older, older))
+        rig_status = self.rig_root / run["status_path"]
+        rig_status.write_text(_json.dumps({"state": "done", "wave_id": WAVE, "started": "2026-10-20T01:00:00+02:00"}))
+        write(self.rig_root / run["eval_dir"] / "metrics.jsonl", "rerun")
+        out = self.collect()
+        self.assertNotIn("[conflict]", out)
+        self.assertEqual(_json.loads(hub_status.read_text())["state"], "done")
+        self.assertEqual(hub_metrics.read_text(), "rerun")
+        # an earlier attempt never replaces a later one, and a finished hub record of a done run stays
+        rig_status.write_text(_json.dumps({"state": "failed", "wave_id": WAVE, "started": "2026-10-19T20:00:00+02:00"}))
+        write(self.rig_root / run["eval_dir"] / "metrics.jsonl", "even older")
+        self.assertIn("[conflict]", self.collect())
+        self.assertEqual(hub_metrics.read_text(), "rerun")
+
+    def test_collect_check_trusts_a_finished_waves_final_collect_from_an_unreachable_rig(self) -> None:
+        import json as _json
+
+        done = self.add_run("model=done", "done")
+        self.add_records(done)
+        queue_path = self.hub_root / ".waves" / "_state" / WAVE / "queue.json"
+        write(queue_path, _json.dumps({"runs": [done], "finished_at": "2026-10-20T10:00:00+02:00",
+                                       "collect_last": {"rig": {"ok": True, "at": "2026-10-20T10:00:00+02:00"}}}))
+        unreachable = mock.patch.object(rigsync, "rig_inventory", side_effect=rigsync.RigSyncError("Permission denied (publickey)"))
+        with unreachable:
+            self.assertIn("unreachable, but the wave's final collect from it succeeded", self.check())
+        write(queue_path, _json.dumps({"runs": [done], "collect_last": {"rig": {"ok": True, "at": "2026-10-20T10:00:00+02:00"}}}))
+        out = io.StringIO()
+        with unreachable, redirect_stdout(out), self.assertRaises(rigsync.RigSyncError):
+            rigsync.collect_check(self.config, None, [WAVE])
+        self.assertIn("cannot list its run records", out.getvalue(), "a live wave still needs the rig")
+
     def test_collect_dry_run_changes_nothing_and_the_hub_is_a_no_op(self) -> None:
         done = self.add_run("model=done", "done")
         self.add_records(done)
