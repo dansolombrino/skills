@@ -526,6 +526,13 @@ class SupervisorTests(unittest.TestCase):
         events = [record["event"] for record in supervisor.Wave(self.hub, WAVE).ledger()]
         self.assertIn("pool-cap", events)
 
+    def test_a_cluster_without_a_core_hour_cap_submits_up_to_its_job_cap(self) -> None:
+        pool = {"cluster": {"max_jobs": 2, "default_walltime_s": 3600}}
+        self.register(runs=2, pool=pool)
+        self.cli("cycle", "--wave", WAVE)
+        self.assertFalse(self.queue().get("budget_notified"))
+        self.assertEqual(len([r for r in self.queue()["runs"] if r["job_id"]]), 2)
+
     def test_a_timed_out_job_is_resized_from_what_it_measured(self) -> None:
         pool = {"cluster": {"max_jobs": 1, "core_hours_cap": 1000, "default_walltime_s": 3600}}
         self.register(runs=1, pool=pool)

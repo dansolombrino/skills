@@ -396,13 +396,14 @@ def build_queue(manifest: dict, project_root: Path, config, settings: Settings) 
             raise SupervisorError(f"manifest: weights.{rig} must be a positive number")
         if machine.gpus_in_job:
             max_jobs = _require(entry, "max_jobs", int, f"manifest: pool.{rig}")
+            # no core_hours_cap means no cap: the cluster spends from its account until the job cap
             cap = entry.get("core_hours_cap")
-            if max_jobs < 1 or not isinstance(cap, (int, float)) or isinstance(cap, bool) or cap <= 0:
-                raise SupervisorError(f"manifest: pool.{rig} needs max_jobs >= 1 and a positive core_hours_cap")
+            if max_jobs < 1 or (cap is not None and (not isinstance(cap, (int, float)) or isinstance(cap, bool) or cap <= 0)):
+                raise SupervisorError(f"manifest: pool.{rig} needs max_jobs >= 1 and, if set, a positive core_hours_cap")
             pool[rig] = {
                 "kind": "slurm",
                 "max_jobs": max_jobs,
-                "core_hours_cap": float(cap),
+                "core_hours_cap": None if cap is None else float(cap),
                 "cores_per_job": int(entry.get("cores_per_job", 8)),
                 "default_walltime_s": int(_require(entry, "default_walltime_s", int, f"manifest: pool.{rig}")),
             }
@@ -1048,7 +1049,7 @@ class Cycle:
                 continue
             walltime = self.walltime(queue, run, rig)
             cost_h = walltime / 3600 * pool["cores_per_job"]
-            if spent + cost_h > pool["core_hours_cap"]:
+            if pool["core_hours_cap"] is not None and spent + cost_h > pool["core_hours_cap"]:
                 if not queue.get("budget_notified"):
                     queue["budget_notified"] = True
                     self.event("budget-cap", rig=rig, spent_h=round(spent, 1), cap_h=pool["core_hours_cap"])
@@ -1743,7 +1744,7 @@ def pool_command(wave: Wave, args: argparse.Namespace) -> int:
             raise SupervisorError(f"{args.rig} is not a cluster pool entry; it has no core-hour cap")
         old = pool["core_hours_cap"]
         pool["core_hours_cap"] = float(args.core_hours_cap)
-        if pool["core_hours_cap"] > old:
+        if old is None or pool["core_hours_cap"] > old:
             queue.pop("budget_notified", None)
         wave.save(queue)
         wave.log("pool-cap", rig=args.rig, old_h=old, new_h=pool["core_hours_cap"], reason=args.reason)

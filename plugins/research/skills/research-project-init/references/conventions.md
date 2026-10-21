@@ -52,14 +52,10 @@ gated step does not stop for a prompt nobody reads.
     listed in its ledger as done.
 - **Standing policy** (`sweep-dispatch`). The pool is every free lane on the envelope's rigs as
   `rig-board` shows them, ordered for the fastest finish; the gate previews are reports, not waits;
-  the wave's standing authorization lets `sweep-supervisor` act inside the pool. **Leonardo:** the
-  execution agreement's **Leonardo core-hour ceiling** (on the account the envelope declares) is the
-  bound. Setting or raising a wave's core-hour cap up to that ceiling — at `register`, or later with
-  `pool --rig leonardo --core-hours-cap <n>` — is a standing-policy action: do it, then report.
-  Exceeding the ceiling always asks. A `budget-cap` event from the supervisor is handled the same
-  way: raise the cap up to the ceiling and report; at the ceiling, ask. The scripts never read the
-  ceiling (it lives in the agreement's prose), so the agent checks cap ≤ ceiling itself before every
-  `register` or `pool` call that sets a cap.
+  the wave's standing authorization lets `sweep-supervisor` act inside the pool. **Leonardo:**
+  core-hours are not a gate. A wave registers `leonardo` with no core-hour cap and spends from the
+  account the envelope declares; the agent reports the estimate and the account's remaining hours
+  and never asks about them. A cap exists only when the user asks for one.
 - **Always ask**, in both modes: destructive operations, history rewrites, deletion of material
   data, overwriting user changes, new repositories/remotes/accounts/destinations,
   secrets/authentication changes, scope/budget/rig expansion, shared-GPU exceptions (a `behemoth`

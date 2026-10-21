@@ -49,7 +49,7 @@ plots show instead of raw keys.
 ## Tracking
 
 - **`program/00-execution-agreement.md`** — explicit engineering mode, envelope (including the
-  Leonardo core-hour ceiling), destinations, and the approval tiers.
+  Leonardo account), destinations, and the approval tiers.
 - **`EXPERIMENTS.md`** — state: which runs exist (todo/inpr/done/failed), in which wave, on
   which rig and GPU.
 - **`JOURNAL.md`** — story: prose log of what was done, why, and what was learned.
@@ -171,10 +171,7 @@ engineering_mode: auto  # or manual, only if the user asks for it
 - Repository / branch / approved remotes:
 - Rigs / GPUs:
 - Compute / time / monetary ceilings:
-- Leonardo account and core-hour ceiling: <account; ceiling in core-hours, or "not used">
-  (the bound: setting or raising a wave's core-hour cap up to it — at register, or later with
-  `pool --rig leonardo --core-hours-cap <n>`, also on a `budget-cap` event — is done and reported;
-  exceeding it always asks; the scripts never read it, so the agent checks cap ≤ ceiling first)
+- Leonardo account: <account, or "not used"> (no core-hour cap unless the user asks for one)
 - Approved tracking and publication destinations:
 
 ## Decision ownership
@@ -189,13 +186,12 @@ Approval tiers (conventions, "Approval tiers"; identical in both engineering mod
   `integrate-reference-code` deviations.
 - Standing policy: the dispatch pool is every free lane on the envelope's rigs, ordered for the
   fastest finish; every non-hub lane rig offloads to the hub (Slurm targets such as `leonardo`
-  excluded); previews are reports; `leonardo` wave caps are set or raised up to the core-hour
-  ceiling without asking.
+  excluded); previews are reports; `leonardo` runs with no core-hour cap.
 - Always ask: destructive operations, history rewrites, deleting material data, overwriting user
   changes, new repositories/remotes/accounts/destinations, secrets/authentication, scope/budget/rig
   expansion, shared-GPU exceptions, behavioral `integrate-reference-code` deviations, cancelling
   or superseding runs outside the wave's standing authorization (another wave's runs, a
-  supersede, a running Slurm job), exceeding the Leonardo core-hour ceiling, and
+  supersede, a running Slurm job), and
   `provision-env`/`push-env` outside project init.
 - Mode-owned (manual asks, auto decides inside this envelope): experiment-design technical
   choices, metrics, which plots to make.

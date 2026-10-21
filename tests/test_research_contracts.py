@@ -2487,10 +2487,9 @@ class ApprovalTierContractTests(unittest.TestCase):
         self.assertIn("every free lane on the envelope's rigs as `rig-board` shows them", standing)
         self.assertIn("ordered for the fastest finish", standing)
         self.assertIn("the gate previews are reports, not waits", standing)
-        self.assertIn("**Leonardo core-hour ceiling**", standing)
-        self.assertIn("Exceeding the ceiling always asks", standing)
-        self.assertIn("up to that ceiling", standing)
-        self.assertIn("checks cap ≤ ceiling itself", standing)
+        self.assertIn("core-hours are not a gate", standing)
+        self.assertIn("never asks about them", standing)
+        self.assertNotIn("ceiling", standing)
         always = tiers["**Always ask**"]
         for action in (
             "in both modes",
@@ -2552,8 +2551,7 @@ class ApprovalTierContractTests(unittest.TestCase):
         # irreversible actions still ask in every mode
         self.assertIn(
             "cancelling or superseding runs outside the wave's standing authorization (another wave's runs, "
-            "a supersede, a running Slurm job), exceeding the Leonardo core-hour ceiling, and envelope "
-            "expansion always ask",
+            "a supersede, a running Slurm job), and envelope expansion always ask",
             dispatch,
         )
         self.assertIn("with an explicit user authorization per action in every engineering mode", dispatch)
@@ -2563,34 +2561,25 @@ class ApprovalTierContractTests(unittest.TestCase):
         self.assertNotIn("non-hub pool rig", templates)
         self.assertNotIn("non-hub pool rig", dispatch)
 
-    def test_leonardo_core_hour_ceiling_is_an_envelope_field(self) -> None:
+    def test_leonardo_core_hours_are_reported_never_gated(self) -> None:
         agreement = markdown_template_block("program/00-execution-agreement.md (initial)")
-        self.assertIn("- Leonardo account and core-hour ceiling:", agreement)
-        self.assertIn("exceeding it always asks", " ".join(agreement.split()))
-        self.assertIn("`pool --rig leonardo --core-hours-cap <n>`", agreement)
+        self.assertIn("- Leonardo account:", agreement)
+        self.assertIn("no core-hour cap unless the user asks for one", agreement)
         self.assertLess(len(agreement.splitlines()), 200)
         dispatch = compact_text(SKILLS / "sweep-dispatch/SKILL.md")
         slurm = compact_text(SKILLS / "sweep-dispatch/references/cineca-slurm.md")
         tick = compact_text(SKILLS / "sweep-supervisor/references/tick.md")
-        init = compact_text(SKILLS / "research-project-init/SKILL.md")
-        self.assertIn("the project account declared in the envelope and its **Leonardo core-hour ceiling**", dispatch)
-        self.assertIn("A wave whose estimate exceeds the ceiling (or the account's remaining hours) asks before dispatch; one inside it does not", dispatch)
-        self.assertIn("never above the execution agreement's **Leonardo core-hour ceiling**", slurm)
-        self.assertIn("is a standing-policy action — do it, then report", slurm)
-        self.assertIn("an account the envelope does not declare asks first", slurm)
-        # one Leonardo rule: caps up to the ceiling are standing policy, exceeding it asks, and the
-        # agent (not the scripts) checks cap <= ceiling
-        conventions = compact_text(SKILLS / "research-project-init/references/conventions.md")
         supervisor = compact_text(SKILLS / "sweep-supervisor/SKILL.md")
-        for text in (conventions, supervisor, slurm, dispatch):
-            self.assertIn("pool --rig leonardo --core-hours-cap <n>", text)
-        for text in (conventions, supervisor, slurm):
-            self.assertIn("ceiling", text)
-            self.assertRegex(text, r"(scripts never read the ceiling|The scripts never read the ceiling)")
-        self.assertIn("`budget-cap` reached | read the execution agreement's Leonardo core-hour ceiling", tick)
-        self.assertIn("`pool --rig leonardo --core-hours-cap <n> --reason", tick)
-        self.assertIn("At the ceiling: `ask`", tick)
-        self.assertIn("**Leonardo core-hour ceiling**", init)
+        conventions = compact_text(SKILLS / "research-project-init/references/conventions.md")
+        init = compact_text(SKILLS / "research-project-init/SKILL.md")
+        self.assertIn("never ask about core-hours", dispatch)
+        self.assertIn("no core-hour cap unless the user asks for one", dispatch)
+        self.assertIn("never ask about them", slurm)
+        self.assertIn("An account the envelope does not declare asks first", slurm)
+        self.assertIn("core-hours are not a gate", supervisor)
+        self.assertIn("`budget-cap` reached (only when the user set a cap)", tick)
+        for text in (dispatch, slurm, tick, supervisor, conventions, init, agreement):
+            self.assertNotIn("core-hour ceiling", text)
 
     def test_project_init_asks_one_consolidated_approval(self) -> None:
         init = compact_text(SKILLS / "research-project-init/SKILL.md")

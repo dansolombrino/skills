@@ -445,7 +445,7 @@ execution file), one JSON object:
   "pool": {
     "rig-4090": {"lanes": ["0"]},
     "behemoth": {"lanes": ["0", "5"]},
-    "leonardo": {"max_jobs": 8, "core_hours_cap": 400, "default_walltime_s": 7200}
+    "leonardo": {"max_jobs": 8, "default_walltime_s": 7200}
   },
   "weights": {"rig-4090": 1.0, "behemoth": 2.0, "leonardo": 1.0},
   "offload": ["behemoth"],
@@ -471,10 +471,8 @@ execution file), one JSON object:
 weight-1.0 seconds from the `experiments-tracking` hierarchy, omitted when there is no basis.
 `min_vram_mib` and `needs` come from the experiment's design record. `offload` lists every non-hub
 lane rig of the pool by default (Slurm targets such as `leonardo` excluded; `supervisor.py` rejects
-offload entries that are not lane rigs). The `leonardo` `core_hours_cap` never exceeds the
-execution agreement's Leonardo core-hour ceiling: setting it up to the ceiling here, or raising it
-later with `pool --rig leonardo --core-hours-cap <n>`, is standing policy (done, then reported);
-the scripts never read the ceiling, so the agent checks cap ≤ ceiling before `register`. A `behemoth` lane beyond
+offload entries that are not lane rigs). `leonardo` takes no `core_hours_cap` unless the user
+asks for one. A `behemoth` lane beyond
 gpu0 appears only under a user grant for this wave. Weights are copied from conventions § Rig
 fleet at generation time and are only the prior: the supervisor replaces them with rates measured
 in this wave as soon as runs finish.
@@ -490,8 +488,7 @@ queue order, and the estimate it shows the user.
    policy, reported, never asked; never infer availability from `nvidia-smi`. Low disk never
    excludes a rig: every non-hub lane rig is under `offload` by default (Slurm targets such as
    `leonardo` excluded; `supervisor.py` rejects offload entries that are not lane rigs).
-   `leonardo` joins with a job cap and a core-hour cap up to the execution agreement's Leonardo
-   core-hour ceiling (set without asking; exceeding the ceiling asks).
+   `leonardo` joins with a job cap and no core-hour cap.
 2. **Cost.** Estimate every run's cost in rig-independent units with the `experiments-tracking`
    hierarchy (`cost = elapsed_s × weight`, preferring same-rig history). With no history at all,
    omit `cost_s` — say so, and treat the first estimate as provisional.

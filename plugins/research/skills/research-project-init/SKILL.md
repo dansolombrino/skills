@@ -51,8 +51,7 @@ values, and material the user supplies explicitly. See "Directives are closed" i
    project's values.
 5. Write `engineering_mode: auto` unless the user asks for `manual`. Capture the
    engineering repo/rig/GPU/budget envelope, approved destinations, and — when `leonardo` is in
-   the rig set — its account and the **Leonardo core-hour ceiling** (conventions, "Approval
-   tiers").
+   the rig set — its account.
 
 ## Consolidated approval
 

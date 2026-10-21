@@ -91,9 +91,7 @@ re-arm the wake-up if this chat has none.
 6. A direct request ("move X to behemoth", "stop using the 3080") goes through the same commands
    the agent uses (`queue`, `lane`, `steal`), with `--reason "user: ..."`. A change of a cluster's
    tracked core-hour cap goes through `pool --rig <cluster> --core-hours-cap <h> --reason "..."`
-   (ledger event `pool-cap`; a raised cap resumes submission). Up to the execution agreement's
-   Leonardo core-hour ceiling it is a standing-policy action (do it, then report); above the
-   ceiling it needs the user's approval first.
+   (ledger event `pool-cap`; a raised cap resumes submission), only when the user asks for one.
 
 ## Agent profile
 
@@ -110,18 +108,13 @@ and steal this wave's own runs, resubmit this wave's own jobs and cancel the one
 not started yet (a `PENDING` job pulled to an idle lane) by id, fetch data into
 declared caches, let `rig-sync offload` free verified checkpoints, and `rig-sync collect`
 evaluation records to the hub — without asking. A user-granted `behemoth` card is part of the pool
-for the whole wave. **Leonardo:** the execution agreement's Leonardo core-hour ceiling is the
-bound. Setting or raising the wave's core-hour cap up to it — at `register`, or later with
-`pool --rig leonardo --core-hours-cap <n>` — is a standing-policy action: do it, then report. On a
-`budget-cap` event the agent raises the cap up to the ceiling and reports; at the ceiling it asks,
-because exceeding the ceiling always asks. The scripts never read the ceiling (it lives in the
-agreement's prose), so the agent checks cap ≤ ceiling itself before every `register` or `pool`.
+for the whole wave. **Leonardo:** core-hours are not a gate; the wave runs with no core-hour cap
+unless the user set one, and a `budget-cap` event (only possible then) is reported, not asked.
 
 Always the user's, asked with `ask` while the status quo holds: any rig, card, or budget outside
 the pool; a `behemoth` card without a grant for this wave; anything belonging to another project
 or another user; deleting anything `offload` and `prune` do not cover; cancelling or superseding
 runs outside this standing authorization (another wave's runs, a supersede, a running Slurm job);
-raising a `leonardo` cap past the ceiling;
 a run_id migration (`run-identity`); and settling an identity mismatch `collect` reports between a
 rig and the hub.
 

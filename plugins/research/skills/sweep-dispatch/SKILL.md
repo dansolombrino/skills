@@ -12,11 +12,11 @@ feed, rebalance, recover, offload, and report it; this skill never polls a rig. 
 Read `program/00-execution-agreement.md` first and require the Research 2.0 surfaces. Stop on a
 legacy layout; do not offer migration or recover it as-is. Dispatch is a **standing policy** in
 both engineering modes (conventions, "Approval tiers"): inside the approved repo, branch, rigs/GPUs,
-compute/budget, Leonardo core-hour ceiling, and destination envelope, build the pool, deploy, and
+compute/budget, and destination envelope, build the pool, deploy, and
 launch, and report each gate's preview instead of waiting on it. Shared `behemoth` cards beyond
 gpu0, new destinations, destructive actions, cancelling or superseding runs outside the wave's
-standing authorization (another wave's runs, a supersede, a running Slurm job), exceeding
-the Leonardo core-hour ceiling, and envelope expansion always ask, in every mode.
+standing authorization (another wave's runs, a supersede, a running Slurm job), and envelope
+expansion always ask, in every mode.
 
 Vocabulary (canon): a **wave** is one dispatch decision, identified by `YYYYMMDD-HHMMSS`; its **pool** is the set of lanes and cluster caps it may use; a **lane** is one GPU set on one rig; a **slice** is whatever part of the wave a rig ends up running. Lanes run in parallel, runs within a lane run sequentially, and a run belongs to the lane that claims it from the wave's queue — never to a lane chosen in advance. A **run** is one experiment execution; a **job** is one Slurm allocation on `leonardo`, which hosts exactly one run — the cluster has jobs, not lanes. Use both words strictly and never call a job a run or a lane.
 
@@ -117,10 +117,8 @@ infer availability from `nvidia-smi`. On `behemoth`, gpu0 is the only default. A
 named card requires an explicit per-wave user grant regardless of mode and is never persisted. For
 `leonardo`, first pass the certificate precondition in `references/cineca-slurm.md` (print the
 login commands and wait when it fails), then require the project account declared in the envelope
-and its **Leonardo core-hour ceiling**, and check the account's remaining budget with `saldo -b`;
-every job is one GPU, 8 cores, 128 GB unless the user states that a run needs more. A wave whose
-estimate exceeds the ceiling (or the account's remaining hours) asks before dispatch; one inside it
-does not.
+and check its remaining budget with `saldo -b` (report it; never ask about core-hours);
+every job is one GPU, 8 cores, 128 GB unless the user states that a run needs more.
 3. **Build and authorize the pool.** There is no static assignment: the wave is one ordered
 queue, and every lane in the pool takes the next run it is eligible for when it has room, so a
 fast card takes more runs and a wrong estimate corrects itself as real runtimes arrive. The
@@ -138,17 +136,13 @@ data, offload rigs, exact smoke command, staged files, journal entry, branch/rem
 key and fingerprint, provisioning dry run, commit/tag/push, worktree deployment scope, and any
 supersede, and the chat update interval in minutes (the user's number, else 1).
 `leonardo` is outside the balancing: its queue wait is not predictable, so dispatch sets its job
-cap and a core-hour cap, each run it takes becomes one job, and its ETA is reported as scheduler
-estimate plus run estimate. The execution agreement's Leonardo core-hour ceiling is the bound:
-setting the cap up to it at `register` (or raising it later with `pool --rig leonardo
---core-hours-cap <n>`) is standing policy — do it, then report; exceeding it always asks. The
-scripts never read the ceiling, so check cap ≤ ceiling before `register`. Report for it the
-account, partition/QOS, resource line, walltime basis, and the budget estimate
-(`runs × walltime_h × 8` core-hours per job) against the ceiling. State the
+cap (no core-hour cap unless the user asks for one), each run it takes becomes one job, and its
+ETA is reported as scheduler estimate plus run estimate. Report for it the account,
+partition/QOS, resource line, walltime basis, and the budget estimate (`runs × walltime_h × 8`
+core-hours per job) beside the account's remaining hours. State the
 **standing authorization** this approval grants for the life of the wave: inside the pool,
 `sweep-supervisor` may start, move, requeue, and steal this wave's own runs, resubmit its own
-jobs and cancel its own jobs the cluster has not started yet, raise the wave's `leonardo` cap up to
-the ceiling, fetch data into declared caches, and free checksum-verified checkpoints on offload
+jobs and cancel its own jobs the cluster has not started yet, fetch data into declared caches, and free checksum-verified checkpoints on offload
 rigs, without asking again; everything outside the pool comes back to the user. In both modes
 this preview is a report: record that every item is within the envelope and carry on. Anything
 outside it — a rig, card, or budget beyond the envelope — is an always-ask question. Restate any

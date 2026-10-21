@@ -17,10 +17,9 @@ stale — partitions, QOS limits, and cleanup policies change without notice.
   several and the user says so for that wave.
 - A **slice** on `leonardo` is the set of jobs a wave ends up submitting there. There are no lanes
   and no tmux sessions: Slurm is the queue, and every job is independent. In the wave's pool the
-  cluster is one entry with a **job cap** and a **core-hour cap** (never above the execution
-  agreement's **Leonardo core-hour ceiling**); `sweep-supervisor` keeps at
-  most that many of this wave's jobs submitted, taking runs from the **tail** of the wave's queue
-  while the rig lanes take from its head, and never commits more core-hours than the cap.
+  cluster is one entry with a **job cap** (and a core-hour cap only when the user asks for one);
+  `sweep-supervisor` keeps at most that many of this wave's jobs submitted, taking runs from the
+  **tail** of the wave's queue while the rig lanes take from its head.
 
 ## Driver host and access
 
@@ -246,17 +245,12 @@ ssh -o BatchMode=yes -o ConnectTimeout=20 leonardo "cd <repo_path on leonardo> &
   `research-project-init`. The EXPERIMENTS.md row for the run carries `rig=leonardo`, `gpu=1`, and
   the job id in `notes`.
 - Before the first submission of a wave, run `saldo -b` and refuse any account whose consumed
-  hours are at or above its total or whose end date has passed; report the remaining hours, the
-  wave's estimate, and the envelope's Leonardo core-hour ceiling in the gate-3 report. The
-  execution agreement's Leonardo core-hour ceiling is the bound: setting the wave's core-hour cap
-  at `register` up to it, or raising it later with `pool --rig leonardo --core-hours-cap <n>` up to
-  it, is a standing-policy action — do it, then report. A wave whose estimate exceeds the ceiling,
-  a cap above it, or an account the envelope does not declare asks first. The scripts never read
-  the ceiling (it is agreement prose), so the agent checks cap ≤ ceiling before `register`/`pool`.
-- The supervisor keeps up to the pool's job cap submitted and tops it up as jobs end; at the
-  core-hour cap it stops submitting and raises a `budget-cap` event. The agent then raises the cap
-  up to the ceiling and reports; at the ceiling it asks the user without blocking (exceeding the
-  ceiling is a budget expansion, which always asks). A job still `PENDING` costs nothing, so
+  hours are at or above its total or whose end date has passed; report the remaining hours and the
+  wave's estimate in the gate-3 report, and never ask about them. An account the envelope does not
+  declare asks first.
+- The supervisor keeps up to the pool's job cap submitted and tops it up as jobs end. Only when
+  the user set a core-hour cap does it stop at that cap and raise a `budget-cap` event, which the
+  agent reports. A job still `PENDING` costs nothing, so
   when a rig lane goes idle with nothing left in the queue the supervisor `scancel`s one pending
   job **by id** and gives that run to the lane.
 
