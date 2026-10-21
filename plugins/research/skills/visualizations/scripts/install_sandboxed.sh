@@ -30,6 +30,7 @@ echo "== code (root-owned copy)"
 install -d -m 0755 "$LIB" "$LIB/scripts" "$LIB/assets"
 install -m 0644 "$SKILL/scripts/plot_server.py" "$LIB/scripts/plot_server.py"
 install -m 0644 "$SKILL/assets/plot-browser.html" "$LIB/assets/plot-browser.html"
+install -m 0644 "$SKILL/assets/plot-shell.js" "$LIB/assets/plot-shell.js"
 
 echo "== config"
 install -d -m 0750 -o root -g plotserver "$ETC"

@@ -421,6 +421,15 @@ class LiveServerTest(Fixture):
         with mock.patch.object(plot_server, "BROWSER_PATH", plot_server.BROWSER_PATH.with_name("missing.html")):
             self.assertIn(b"000_x/plot_loss/loss.html", self.get(base + "/")[1])
 
+    def test_plot_shell_is_served_for_the_browser_to_inject(self) -> None:
+        base = self.start()
+        code, body, headers = self.get(base + "/plot-shell.js")
+        self.assertEqual(code, 200)
+        self.assertEqual(body, plot_server.SHELL_PATH.read_bytes())
+        self.assertTrue(headers["Content-Type"].startswith("text/javascript"))
+        with mock.patch.object(plot_server, "SHELL_PATH", plot_server.SHELL_PATH.with_name("missing.js")):
+            self.assertEqual(self.get(base + "/plot-shell.js")[0], 404)
+
     def runs_url(self, base: str, experiment: str = "000_x", file: str = "MAP", project: Path | None = None) -> str:
         query = urllib.parse.urlencode({"project": (project or self.project).as_posix(), "experiment": experiment, "file": file})
         return f"{base}/api/runs?{query}"

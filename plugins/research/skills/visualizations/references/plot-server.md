@@ -38,7 +38,15 @@ a systemd user service, on the machine where plots are rendered (`rig-4090`).
   out. The address bar carries `#p=<project>&f=<plot>`, so a copied link reopens the same view. A green dot marks plots new or re-rendered since this
   browser last opened them, the list rescans every 30 s, and an open plot that gets re-rendered
   offers a reload. Keys: `/` filter, `↑`/`↓` or `j`/`k` previous/next plot, `Esc` clear, `r` reload,
-  `d` download, `b` show/hide the list.
+  `d` download, `b` show/hide the list, `f` focus (the plot alone fills the window; `f` or `Esc`
+  leaves).
+- Every plot shows the reader toolbar of `assets/plot-shell.js` (hide/show the run selection,
+  zoom, pan, hover, legend, log y, fit, PNG/SVG, fullscreen; `?` inside a plot lists its keys). A
+  plot rendered before the toolbar existed gets the server's copy, served at `/plot-shell.js`,
+  injected into the frame after the `<base>`; the file on disk and the browser's own download stay
+  untouched, but the plot's own download buttons then save it with the toolbar inside. Keys the
+  browser owns (`j`/`k`, arrows, `r`, `d`, `b`, `/`, `f`, `Esc`) still work while the plot has
+  the keyboard: the toolbar passes them up.
   On a narrow screen the list slides in from the menu button. View preferences stay in the browser.
 - The header's **Plots / Runs** toggle switches to the Runs view: hash ↔ params for one experiment.
   - Pick an experiment: any folder under `evaluations/`, nested ones included, that holds a
@@ -78,6 +86,8 @@ a systemd user service, on the machine where plots are rendered (`rig-4090`).
   under `config/`), with the same ETag, 304 and gzip handling as plots. Any other
   name, experiment or project answers 404. Both endpoints need the token off this machine, like
   every other path.
+- `/plot-shell.js` serves `assets/plot-shell.js` for the browser to inject; it needs the token off
+  this machine like every other path.
 - `/healthz` answers `ok` without a token.
 - Responses carry `Cache-Control: no-cache` plus an `ETag` (answered with 304 when unchanged), so
   reloading after a rerender shows the new file and an unchanged one is not sent again.
@@ -163,7 +173,8 @@ restarts the server only when the list changed. A new project's plots, and a new
 replaced by a rename gets a new inode, which the next sync detects and re-binds with a restart;
 `sudo systemctl start plot-server-sync.service` publishes them at once.
 
-Re-run the install script after a release that changes `plot_server.py` or `plot-browser.html`:
+Re-run the install script after a release that changes `plot_server.py`, `plot-browser.html` or
+`plot-shell.js`:
 the service runs its root-owned copy, not the skill checkout. Useful commands:
 
 ```bash

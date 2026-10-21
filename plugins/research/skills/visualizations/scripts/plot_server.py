@@ -75,6 +75,7 @@ COOKIE_NAME = "plot_server_token"
 GZIP_MIN_BYTES = 64 * 1024
 GZIP_TYPES = ("text/", "application/json", "application/javascript", "image/svg+xml")
 BROWSER_PATH = Path(__file__).resolve().parents[1] / "assets" / "plot-browser.html"
+SHELL_PATH = BROWSER_PATH.with_name("plot-shell.js")  # injected by the browser into older plots
 DENIED = b"plot-server: access token required. Open any page once as ?token=<token>; a cookie then remembers it.\n"
 
 
@@ -528,6 +529,14 @@ def make_handler(config: PlotsConfig, catalog: Catalog | None = None, access_log
                     set_cookie = f"{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000"
             if url.path in ("/", "/index.html"):
                 self._send(200, "text/html; charset=utf-8", browser_page(config, catalog.projects()), set_cookie, head)
+                return
+            if url.path == "/plot-shell.js":
+                try:
+                    body = SHELL_PATH.read_bytes()
+                except OSError:
+                    self._send(404, "text/plain; charset=utf-8", b"not found\n", set_cookie, head)
+                    return
+                self._send(200, "text/javascript; charset=utf-8", body, set_cookie, head)
                 return
             if url.path == "/plain":
                 self._send(200, "text/html; charset=utf-8", index_page(config, catalog.projects()), set_cookie, head)
