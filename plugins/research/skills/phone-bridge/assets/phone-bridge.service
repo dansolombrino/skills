@@ -1,0 +1,12 @@
+[Unit]
+Description=phone-bridge: Telegram notices and SSH certificate renewal from the phone
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 __BRIDGE_PY__ serve
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

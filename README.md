@@ -96,7 +96,9 @@ for GPUs another wave holds instead of leaving them out, pushes notices to a pho
 the wave finishes prunes it and runs an unattended follow-up that renders its plots under the full
 plot contract and journals the results. A deterministic engineering error found mid-wave is fixed
 and its runs dispatched again by a follow-up too (at most two automatic rounds). Running from the
-installed plugin, the service moves itself onto each new release.
+installed plugin, the service moves itself onto each new release. `phone-bridge` is the Telegram
+bot those notices go to; it also renews the Leonardo SSH certificate from the phone (you do the 2FA
+login, then paste back the address the browser could not open; certificates last 48 h).
 
 Scaffolded projects get `AGENTS.md` as the canonical project doc plus a thin `CLAUDE.md` that
 points at it, so one set of notes serves both hosts.

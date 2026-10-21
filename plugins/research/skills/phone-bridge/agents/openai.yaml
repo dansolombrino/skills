@@ -1,0 +1,4 @@
+interface:
+  display_name: "Phone Bridge"
+  short_description: "Telegram notices and phone-side SSH cert renewal"
+  default_prompt: "Use $phone-bridge to set up or check the hub's Telegram bot, push a notice to the user's phone, wire it as the $sweep-supervisor notify_command, or renew a cluster's short-lived SSH certificate (such as Leonardo's) from the phone."

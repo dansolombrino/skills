@@ -69,7 +69,9 @@ bypass; a denied tool call fails that step of the tick, which the tick reports w
 report, a finished wave, failed runs, a rig down, a lane that cannot start, a cluster submission
 failure, and a certificate about to expire or expired. It is what lets the user stay away from
 chats: point it at a phone. `ntfy` needs only the app and an unguessable topic name (anyone who
-knows the topic reads it, so keep it private); any command that takes the text as an argument
+knows the topic reads it, so keep it private); the `phone-bridge` skill's Telegram bot
+(`["python3", "<phone-bridge>/scripts/bridge.py", "send", "{text}"]`) also renews a cluster's SSH
+certificate from the phone; any command that takes the text as an argument
 works (`notify-send` for a desktop, a mail or chat CLI). Without it, notices exist only in the
 printout and `followups`.
 
