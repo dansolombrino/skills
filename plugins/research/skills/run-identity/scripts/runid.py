@@ -870,7 +870,7 @@ def print_plan_summary(plan: dict, out: Path) -> None:
     for note in plan["notes"]:
         print(f"  note: {note}")
     print(f"plan written: {out}")
-    print("Show this summary to the user; apply only after their explicit approval:")
+    print("Report this summary to the user, then apply (do, then report; rollback undoes it):")
     print(f"  runid.py --project {plan['project']} --experiment {plan['experiment']} migrate apply --plan {out} --confirm")
 
 
@@ -978,7 +978,7 @@ def followups(plan: dict) -> dict:
 
 def apply_migration(ctx: Context, args: argparse.Namespace) -> int:
     if args.dry_run == args.confirm:
-        raise RunIdError("pass exactly one of --dry-run or --confirm (apply only after the user approved the plan)")
+        raise RunIdError("pass exactly one of --dry-run or --confirm (apply after reporting the plan summary)")
     plan = load_plan(ctx, Path(args.plan))
     versions = load_versions(ctx.spec_root)
     history = load_history(ctx.spec_root)

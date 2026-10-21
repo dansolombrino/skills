@@ -104,8 +104,8 @@ Any change that adds/removes/renames a behavior-affecting config param (integrat
    - **`hashed-v2`** — never edit a version in place. Propose the next identity version and a
      **run_id migration** through `run-identity`: its plan backfills the new params for old runs
      (from `.run_config.json`, or from the code at their wave tag with the source cited), refuses
-     a collision, and lists every rename and rewrite. The migration **always asks**: apply it only
-     after the user approves the plan. It renames the old runs to their new hashes everywhere,
+     a collision, and lists every rename and rewrite. The migration is **do, then report**: apply
+     it and report the plan summary; `migrate rollback` undoes it. It renames the old runs to their new hashes everywhere,
      WandB runs included; the experiment stays one experiment.
    - **Legacy pins** — `RUN_ID_PARAMS` and `RUN_ID_SEGMENTS` are immutable under every legacy
      layout (`segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, `hashed-v1`). Never change the

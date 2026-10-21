@@ -28,8 +28,9 @@ identically in both engineering modes:
 - **Do, then report** (dry run, then `--confirm`, then one line): `deploy-revision` of the tagged
   wave commit, `prepare` on a rig already declared in the user registry, `offload` (on by default
   for every non-hub lane rig; Slurm targets such as `leonardo` excluded, and `supervisor.py`
-  rejects offload entries that are not lane rigs), and `collect`.
-- **Always ask**: `prune`, `provision-env` and `push-env` outside `research-project-init`'s
+  rejects offload entries that are not lane rigs), `collect`, and `prune` of waves whose rows are
+  all terminal.
+- **Always ask**: `provision-env` and `push-env` outside `research-project-init`'s
   consolidated approval, new destinations, `--overwrite`, and any destructive recovery.
 - Every other write (`pull`, `push`, `sync-cache`, `restore` outside a supervised wave) is
   mode-owned: manual mode shows the dry run and waits; auto mode confirms only the named source,
@@ -45,8 +46,8 @@ identically in both engineering modes:
   source, destination, and selector. Deploying the tagged wave commit as worktrees on the
   envelope's rigs is do-then-report.
 - Never force-push, reset, stash, clean, merge, add `--delete`, delete remote files, or infer an
-  SSH alias/path. This skill performs exactly two deletions. `prune` (below) runs only with
-  explicit user approval of its dry run in every engineering mode. `offload` (below) removes a
+  SSH alias/path. This skill performs exactly two deletions. `prune` (below) runs only after its
+  dry run, and only on waves whose rows are all terminal. `offload` (below) removes a
   rig's copy of a checkpoint only under its fixed predicate, and is on by default for every non-hub
   lane rig of a wave's pool (Slurm targets such as `leonardo` excluded; `supervisor.py` rejects
   offload entries that are not lane rigs) rather than authorized per pass — the data still exists, checksum-verified,
@@ -140,7 +141,7 @@ under `?`.
 cannot attribute to a wave, a dirty worktree, and a wave the hub's supervisor still has registered
 without `finished_at` (`sweep-supervisor finish` first), and leaves unrecognized `.envs/` entries alone.
 It is proposed by `sweep-dispatch` when a wave ends and by `experiments-tracking` reconciliation,
-and runs with `--confirm` only after the user approves the dry run. A pruned wave stays
+and runs with `--confirm` right after its dry run (do, then report). A pruned wave stays
 recoverable: `deploy-revision` recreates its worktree from the tag. `push-source` never establishes Research 2.0 launch consistency and must not
 be used by dispatch.
 

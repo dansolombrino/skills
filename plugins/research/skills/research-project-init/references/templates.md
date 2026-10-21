@@ -109,7 +109,7 @@ stated, ask rather than imitate. External source code enters only through the `c
   under a legacy pin `RUN_ID_PARAMS` is the authoritative ordered run identity and
   `RUN_ID_SEGMENTS` the approved split into explicit params and named hash groups.
 - `run-identity` looks up a run hash (or prefix, or `k=v` query) and is the only way to evolve an
-  identity once runs exist (a run_id migration, which always asks).
+  identity once runs exist (a run_id migration: do, then report, with a rollback manifest).
 
 ## Project-specific quirks
 
@@ -163,7 +163,7 @@ Project notes live in `AGENTS.md`. Read @AGENTS.md before doing anything.
 
 agreement_version: a1
 approved: no
-engineering_mode: <manual|auto — required>
+engineering_mode: auto  # or manual, only if the user asks for it
 
 ## Engineering envelope
 
@@ -183,17 +183,20 @@ Approval tiers (conventions, "Approval tiers"; identical in both engineering mod
 
 - Do, then report: wave deployment, `prepare` on a registered rig, environment provision/verify,
   journal appends, offload and evaluation collection to the hub, run_id election and the
-  `hashed-v2` run path, and plot communication.
+  `hashed-v2` run path, plot communication and `PARAM_GLOSSARY.json` entries, run_id migrations
+  (rollback manifest first), prune of all-terminal waves, keep-or-quarantine of a superseded
+  run's checkpoint (keep on the same source revision, else quarantine), and mechanical
+  `integrate-reference-code` deviations.
 - Standing policy: the dispatch pool is every free lane on the envelope's rigs, ordered for the
   fastest finish; every non-hub lane rig offloads to the hub (Slurm targets such as `leonardo`
   excluded); previews are reports; `leonardo` wave caps are set or raised up to the core-hour
   ceiling without asking.
 - Always ask: destructive operations, history rewrites, deleting material data, overwriting user
   changes, new repositories/remotes/accounts/destinations, secrets/authentication, scope/budget/rig
-  expansion, shared-GPU exceptions, `integrate-reference-code` deviations, cancelling or
-  superseding runs outside the wave's standing authorization (another wave's runs, a supersede, a
-  running Slurm job), exceeding the Leonardo core-hour ceiling, prune, `provision-env`/`push-env` outside project init, run_id migrations, and new or changed `PARAM_GLOSSARY.json`
-  entries (param full names and explanations, approved once and then reused).
+  expansion, shared-GPU exceptions, behavioral `integrate-reference-code` deviations, cancelling
+  or superseding runs outside the wave's standing authorization (another wave's runs, a
+  supersede, a running Slurm job), exceeding the Leonardo core-hour ceiling, and
+  `provision-env`/`push-env` outside project init.
 - Mode-owned (manual asks, auto decides inside this envelope): experiment-design technical
   choices, metrics, which plots to make.
 
@@ -207,7 +210,7 @@ Approval tiers (conventions, "Approval tiers"; identical in both engineering mod
     `config/<experiment_path>/RUN_ID_VERSIONS.json`, and states
     the reasoning in the reply and the journal. `plots/` is not run-scoped and is out of scope for
     this choice. Evolving a `hashed-v2` identity after its first output is a run_id migration
-    through `run-identity`, which always asks. A legacy `segments-v2`, `segments-v1`, `nested`,
+    through `run-identity` (do, then report; `migrate rollback` undoes it). A legacy `segments-v2`, `segments-v1`, `nested`,
     `collapsed-v1`, or `hashed-v1` pin is never offered; an experiment already pinned to one
     preserves its checked-in renderer and literal pin forever, with its segment spec, and never
     gets an in-place layout change, regrouping, or move to another layout — another layout for it
@@ -220,7 +223,7 @@ Approval tiers (conventions, "Approval tiers"; identical in both engineering mod
     file, so no plot path carries run_id segments and plot communication never touches
     RUN_ID_PATH_LAYOUT. The title states every selected identity param by its full name, and the
     selector shows each selectable param by its full name with an (i) hover explanation; both come
-    from the user-approved `config/<experiment_path>/PARAM_GLOSSARY.json`. If runtime values require
+    from the tracked `config/<experiment_path>/PARAM_GLOSSARY.json`. If runtime values require
     a path template, it names its leaf-filename template and every placeholder. Before rendering,
     resolve every concrete export path, including its leaf filename, and reject any destination
     that collides with a different script's output; a new or changed resolved path is resolved and
@@ -474,9 +477,9 @@ ports, users, or keys here. Nothing derives `repo_path`, so declare every rig th
 dispatch to now: adding one later is a hand edit that no gate asks for. Run `rig-sync check-paths`
 before any remote step — it is the only check that catches a path off the rig's large volume before
 something has been cloned into it. Add `[environment]` from
-`environment-sync` with `manager = "uv"`, the user-chosen single-directory
-`name = "{{ENVIRONMENT_NAME}}"`, and the approved tokenized GPU smoke command. Ask for this name
-before creating the environment; suggest `.venv` only as an option and never infer a default. Run
+`environment-sync` with `manager = "uv"`, the single-directory
+`name = "{{ENVIRONMENT_NAME}}"` (`.venv` unless the user named another), and the approved
+tokenized GPU smoke command. Run
 both skills' doctor checks before remote dispatch.
 
 ## Python environment
@@ -1076,17 +1079,17 @@ def resolve_run_id_hash(spec_root: Path, run_hash: str) -> str:
 def load_param_glossary(spec_root: Path, params) -> dict[str, dict[str, str]]:
     """``{param: {"name", "explanation"}}`` for every param in ``params``.
 
-    ``spec_root`` is ``source_path("config/<exp>")``. The user approves every
-    entry; plots show ``name`` instead of the raw key and ``explanation`` as its
+    ``spec_root`` is ``source_path("config/<exp>")``. The agent writes every
+    entry from the producer's config and code and reports it; plots show ``name`` instead of the raw key and ``explanation`` as its
     hover text. Hard-fails on a missing or malformed file, an entry without a
     non-empty name and explanation, or any of ``params`` lacking an entry (all
-    named at once, so one proposal covers them).
+    named at once, so one write covers them).
     """
     path = Path(spec_root) / PARAM_GLOSSARY_NAME
     if not path.is_file():
         raise FileNotFoundError(
-            f"{path} is missing: propose a full name and explanation for {list(params)} "
-            "and write it once the user approves"
+            f"{path} is missing: write a full name and explanation for {list(params)} "
+            "from the producer's config and code, and report them"
         )
     try:
         payload = json.loads(path.read_text())
@@ -1103,8 +1106,8 @@ def load_param_glossary(spec_root: Path, params) -> dict[str, dict[str, str]]:
     missing = [p for p in params if p not in payload]
     if missing:
         raise ValueError(
-            f"{path} has no entry for {missing}: propose a full name and explanation for each "
-            "and add them once the user approves"
+            f"{path} has no entry for {missing}: write a full name and explanation for each "
+            "from the producer's config and code, and report them"
         )
     return {p: {"name": payload[p]["name"], "explanation": payload[p]["explanation"]} for p in params}
 

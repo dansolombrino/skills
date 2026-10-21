@@ -13,7 +13,9 @@ required surface is missing, or legacy status/scripts are detected, stop as unsu
 offer compatibility, migration, or opportunistic upgrades.
 
 Read `program/00-execution-agreement.md` before a material engineering action. It must explicitly
-set `engineering_mode: manual|auto`; never infer it. Integrity gates never become optional.
+set `engineering_mode: manual|auto`; never infer it from anything but the agreement.
+`research-project-init` writes `auto` unless the user asks for `manual`. Integrity gates never
+become optional.
 
 ### Approval tiers
 
@@ -35,8 +37,19 @@ gated step does not stop for a prompt nobody reads.
     their placement, interaction affordances, and export paths, including every fully resolved
     concrete path. Every check stays in force — resolved paths, collision rejection, in-figure
     verification — and the reasoning is stated in the reply and in the journal (§ Plot
-    communication). Param full names and explanations (`PARAM_GLOSSARY.json`) are excluded: they
-    always ask.
+    communication);
+  - a new or changed `PARAM_GLOSSARY.json` entry (a param's full name and explanation), written
+    from the producer's config and code and shown in the reply; the user may reword it any time;
+  - a **run_id migration** (`run-identity`): plan, backfill from config or code at the wave tag,
+    show the summary, apply. `apply` writes its rollback manifest first, so `migrate rollback`
+    undoes it. Ask only for a backfill value neither config nor code settles;
+  - `rig-sync prune` of waves whose rows are all terminal (dry run, then `--confirm`): a pruned
+    worktree is recreated from its wave tag by `deploy-revision`;
+  - the keep-or-quarantine choice for a superseded run's checkpoint: keep (resume) when the new
+    wave's source revision equals the old one's, otherwise quarantine (a rename, never a
+    deletion);
+  - a mechanical source-to-target deviation under `integrate-reference-code` (a `core` skill),
+    listed in its ledger as done.
 - **Standing policy** (`sweep-dispatch`). The pool is every free lane on the envelope's rigs as
   `rig-board` shows them, ordered for the fastest finish; the gate previews are reports, not waits;
   the wave's standing authorization lets `sweep-supervisor` act inside the pool. **Leonardo:** the
@@ -50,14 +63,12 @@ gated step does not stop for a prompt nobody reads.
 - **Always ask**, in both modes: destructive operations, history rewrites, deletion of material
   data, overwriting user changes, new repositories/remotes/accounts/destinations,
   secrets/authentication changes, scope/budget/rig expansion, shared-GPU exceptions (a `behemoth`
-  card beyond gpu0 above all), a source-to-target deviation governed by `integrate-reference-code`
-  (a `core` skill), cancelling or superseding runs outside the wave's standing authorization
-  (another wave's runs, a supersede, a running Slurm job), `rig-sync prune`, `rig-sync provision-env` or
-  `push-env` outside the `research-project-init` bundle (they touch shell startup files and move
-  secrets), a **run_id migration** (`run-identity`), and a new or changed **`PARAM_GLOSSARY.json`
-  entry** (a param's full name and explanation, approved once and then reused; § Plot
-  communication). System permission prompts are independent
-  and always apply.
+  card beyond gpu0 above all), a behavioral source-to-target deviation governed by
+  `integrate-reference-code` (a `core` skill), cancelling or superseding runs outside the wave's
+  standing authorization (another wave's runs, a supersede, a running Slurm job), and
+  `rig-sync provision-env` or `push-env` outside the `research-project-init` bundle (they touch
+  shell startup files and move secrets). System permission prompts are independent and always
+  apply.
 - **Mode-owned.** Experiment-design technical choices, metrics, which plots to make, and any other
   engineering choice no tier above names: manual mode proposes and waits for the user; auto mode
   decides inside the approved engineering envelope and records its reasoning.
@@ -403,14 +414,14 @@ produces:
 - the interaction affordances the figure's shape earns; and
 - every complete project-relative export path rooted at `plots/` and ending in its leaf filename.
 
-**Param full names are the one exception, and always ask.** Every run_id param the page lets the
+**Param full names come from a glossary.** Every run_id param the page lets the
 reader select is shown by its full name only, with an (i) hover tooltip explaining what it
 controls; under `hashed-v2` the label beside each hash uses the same full names. Both come from the
 tracked `config/<experiment_path>/PARAM_GLOSSARY.json` (`{param: {name, explanation}}`), read with
 `load_param_glossary` and embedded in the file. A selectable param with no entry stops the render.
-Propose each new or changed entry's exact name and explanation, grounded in the producer's config
-and code, and wait for the user's acceptance before writing it; an approved entry is reused by every
-later plot without asking again. Axis and metric text stay agent-decided as above.
+Write each new or changed entry's exact name and explanation, grounded in the producer's config
+and code, and show it in the reply (do, then report); an entry is reused by every later plot, and
+the user may reword it at any time. Axis and metric text stay agent-decided as above.
 
 If runtime values prevent a concrete path before the code edit, decide the complete path template
 and identify every placeholder explicitly. Before rendering, resolve every concrete export path,
@@ -459,8 +470,8 @@ done".
   the first launch (agent-decided, reported).
 - **`hashed-v2`, after any one of those surfaces exists** — never edit a version in place. Append
   the next identity version and move every existing run to its new hash with a **run_id
-  migration** through `run-identity` (`migrate plan`, then `migrate apply` only after the user
-  approves the plan — it always asks). The plan refuses while a wave of the experiment is live,
+  migration** through `run-identity` (`migrate plan`, then `migrate apply` with the plan summary
+  reported — do, then report; `migrate rollback` undoes it). The plan refuses while a wave of the experiment is live,
   while a rig that ran it is unreachable, or while `rigsync collect --check` reports rig records
   the hub lacks; it backfills each new param for old runs from their `.run_config.json`, or from
   the code at their wave tag with its source cited, asks the user only for a value it cannot
@@ -589,8 +600,7 @@ Two runs of one identity must never be live in two waves at once: they would sha
 artifact paths. Dispatch refuses such an overlap; the user may instead **supersede** the old
 placement (its queued or running work is cancelled only with the user's approval in every mode,
 and its rows become `superseded`). A finished wave's worktree and any environment no remaining
-worktree uses are **pruned** only after the user approves a dry run that the skills propose on
-their own; a pruned
+worktree uses are **pruned** by the skills after a dry run, and reported; a pruned
 wave remains recoverable, because its worktree is recreated from its tag.
 
 ### Tested Git revision gate

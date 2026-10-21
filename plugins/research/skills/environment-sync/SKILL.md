@@ -46,10 +46,9 @@ and scope expansion always ask.
 - Require committed `pyproject.toml`, `uv.lock`, `.python-version`, `sync.toml`, and
   `code/common/environment.py`.
 - Require an exact `X.Y.Z` Python pin, exact `[tool.uv].required-version = "==X.Y.Z"`, and
-  `[environment].manager = "uv"`, a user-chosen single-directory `name` for the hub development
-  environment, and a tokenized Python `gpu_smoke` command. Before recording a name that has not
-  been chosen, ask the user which name the virtual environment should have; suggest `.venv` only as
-  an option and never infer or silently default the name.
+  `[environment].manager = "uv"`, a single-directory `name` for the hub development
+  environment, and a tokenized Python `gpu_smoke` command. When no name has been recorded, use
+  `.venv` and report it; use another name only when the user gives one.
   Reject names that collide with the project taxonomy, `.git`, `.env`, `.envs`, `.waves`, or
   `.rigsync_cache`.
 - Require the project `.gitignore` to ignore `.waves/` and `.envs/`, and the project not to be
@@ -89,7 +88,7 @@ and scope expansion always ask.
    it, and the smoke runs as the first step of every job instead.
 5. Give the printed `ENVIRONMENT_DIR` and fingerprint to `sweep-dispatch`; embed both in wave
    scripts and the fingerprint in status provenance. Re-run verification before initial launch and
-   recovery. Unused keys are removed only by `rig-sync prune`, after the user approves its dry run.
+   recovery. Unused keys are removed only by `rig-sync prune`, after its dry run.
 
 ## Commands
 

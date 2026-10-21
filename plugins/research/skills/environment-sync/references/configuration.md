@@ -35,8 +35,8 @@ gpu_smoke = ["python", "code/common/environment_smoke.py"]
 ```
 
 `name` is the hub **development** environment: the user's interpreter for the IDE, ad-hoc runs,
-and `uv add`. Waves never use it. Before adding `name`, ask the user which single directory name
-to use. `.venv` may be suggested, but never inferred or silently selected. Reject paths, `.` and
+and `uv add`. Waves never use it. Use `.venv` unless the user gives another single directory
+name, and report the name used. Reject paths, `.` and
 `..`; also reject names that collide with the project taxonomy, `.git`, `.env`, `.envs`, `.waves`,
 or `.rigsync_cache`. The chosen name is committed.
 

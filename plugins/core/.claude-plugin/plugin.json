@@ -1,7 +1,7 @@
 {
   "name": "core",
-  "version": "1.8.0",
-  "description": "Always-on working discipline for every project: mirror intent and hold brainstorm phases until an explicit greenlight, integrate reference code only through approved deviations, post timed status and ETA tables for long-running tasks, and tag each project with its categories so domain plugins such as research load only where they belong.",
+  "version": "2.0.0",
+  "description": "Always-on working discipline for every project: mirror intent and hold brainstorm phases until an explicit greenlight, integrate reference code with every behavioral deviation approved first, post timed status and ETA tables for long-running tasks, and tag each project with its categories so domain plugins such as research load only where they belong.",
   "author": {
     "name": "Dan Solombrino",
     "email": "dansolombrino@gmail.com",

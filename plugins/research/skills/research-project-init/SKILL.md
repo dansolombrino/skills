@@ -34,9 +34,9 @@ values, and material the user supplies explicitly. See "Directives are closed" i
    version, bounded GPU smoke command, and whether evaluations/plots are committed. A one-line
    description is optional: without one, `{{PROJECT_DESCRIPTION}}` falls back to the project name.
    The hub development environment's single directory name (waves use lock-keyed environments
-   under `.envs/` instead) and the framework questions are asked in the consolidated approval
-   below, never in a round of their own. Suggest `.venv` only as an option, and never infer or
-   silently default the name. Reject project-surface collisions.
+   under `.envs/` instead) is `.venv` unless the user names another in the consolidated approval
+   below; the framework questions are asked there too, never in a round of their own. Reject
+   project-surface collisions.
 4. Confirm the rig set this project will ever dispatch to, and require an entry in the user
    registry `~/.config/rigsync/machines.toml`
    (`rig-sync` → `references/configuration.md`) for each one before scaffolding: `ssh`, `hostname`,
@@ -49,7 +49,7 @@ values, and material the user supplies explicitly. See "Directives are closed" i
    project decision. When one is absent, walk the user through declaring it and never infer a
    volume, never default a cache or `TMPDIR` to `$HOME` or `~/.cache`, and never copy another
    project's values.
-5. Require an explicit `engineering_mode: manual|auto`. Never infer a default. Capture the
+5. Write `engineering_mode: auto` unless the user asks for `manual`. Capture the
    engineering repo/rig/GPU/budget envelope, approved destinations, and — when `leonardo` is in
    the rig set — its account and the **Leonardo core-hour ceiling** (conventions, "Approval
    tiers").
@@ -66,11 +66,11 @@ covers, listed explicitly:
 - rig bring-up for every intended rig, including `rig-sync provision-env` (it edits shell startup
   files; on a shared machine say that it affects that account's every future shell) and
   `rig-sync push-env` (it moves secrets);
-- the open questions, asked together: the hub development environment name, the framework, and
-  anything else admission left open.
+- the open questions, asked together: the framework and anything else admission left open (the
+  hub development environment is `.venv` unless the user names another).
 
-Both engineering modes ask this round; `engineering_mode` itself is still stated explicitly by the
-user, never inferred. Once approved, every step below runs without another prompt and is reported
+Both engineering modes ask this round; it states `engineering_mode: auto` and the user may switch
+it to `manual` in the same answer. Once approved, every step below runs without another prompt and is reported
 in one line each. A step that turns out to need something the approval did not cover — a new
 destination, a non-empty path, a rig without a registry entry — stops and asks.
 

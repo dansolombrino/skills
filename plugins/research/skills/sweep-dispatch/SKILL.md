@@ -15,7 +15,7 @@ both engineering modes (conventions, "Approval tiers"): inside the approved repo
 compute/budget, Leonardo core-hour ceiling, and destination envelope, build the pool, deploy, and
 launch, and report each gate's preview instead of waiting on it. Shared `behemoth` cards beyond
 gpu0, new destinations, destructive actions, cancelling or superseding runs outside the wave's
-standing authorization (another wave's runs, a supersede, a running Slurm job), prune, exceeding
+standing authorization (another wave's runs, a supersede, a running Slurm job), exceeding
 the Leonardo core-hour ceiling, and envelope expansion always ask, in every mode.
 
 Vocabulary (canon): a **wave** is one dispatch decision, identified by `YYYYMMDD-HHMMSS`; its **pool** is the set of lanes and cluster caps it may use; a **lane** is one GPU set on one rig; a **slice** is whatever part of the wave a rig ends up running. Lanes run in parallel, runs within a lane run sequentially, and a run belongs to the lane that claims it from the wave's queue — never to a lane chosen in advance. A **run** is one experiment execution; a **job** is one Slurm allocation on `leonardo`, which hosts exactly one run — the cluster has jobs, not lanes. Use both words strictly and never call a job a run or a lane.
@@ -33,7 +33,7 @@ rerun — there is no bypass; then `check_run_id_plan` (gate 1c) compares every 
 `.run_config.json` already at its path. Identical passes (resume/retry); any difference **halts**
 before anything is generated and names the differing keys — otherwise new runs collide with old
 artifacts: overwritten, or silently skipped as "done". Under `hashed-v2`, the route is the next
-identity version plus a run_id migration through `run-identity` (always asks; `experiment-design`
+identity version plus a run_id migration through `run-identity` (do, then report; `experiment-design`
 § 2b). Under a legacy `segments-v2`, `segments-v1`, `nested`, `collapsed-v1`, or `hashed-v1` pin,
 `RUN_ID_PARAMS` may change only while no checkpoint, evaluation, or plot output and no wave README
 or script exists; after the first such surface, any identity-schema change (including any change to
@@ -294,7 +294,8 @@ every engineering mode (cancelling work is destructive). Show the exact list fir
 - **Rows:** flip the old wave's rows for those runs to `superseded` with a note naming the new
   wave (`experiments-tracking`). A superseded row is terminal and never recovered.
 - **Partial state:** a superseded run may have left a checkpoint that the new wave would resume
-  from, possibly across a code change. Ask the user per supersede: keep (resume) or quarantine.
+  from, possibly across a code change. Decide it and report: keep (resume) when the new wave's
+  source revision equals the old wave's, otherwise quarantine.
   Quarantine is a rename to `<checkpoint dir>.superseded-<old_wave_id>`, never a deletion; the
   status file is simply overwritten by the new wave.
 - Then generate and dispatch the new wave as usual; gate 1h now passes.
@@ -303,10 +304,10 @@ every engineering mode (cancelling work is destructive). Show the exact list fir
 
 A terminal wave's worktree, and any keyed environment no remaining worktree uses, is disk that
 nothing needs — but a failed run may still be recovered, and recovery recreates what was pruned.
-So pruning is always **proposed by this skill and approved by the user**, never silent and never
-skipped: when the final summary of a wave is posted, run
-`rig-sync prune --machines <wave's machines plus the hub> --waves <wave_id> --dry-run`, show its
-output, and ask. On approval run the same command with `--confirm`. `prune` refuses active or
+So pruning is **done by this skill and reported**, never silent and never skipped: when the final
+summary of a wave is posted, run
+`rig-sync prune --machines <wave's machines plus the hub> --waves <wave_id> --dry-run`, then the
+same command with `--confirm`, and report what was removed. `prune` refuses active or
 dirty worktrees by itself; still list only waves whose rows are all terminal.
 
 ## Status and ETA updates
@@ -314,7 +315,7 @@ dirty worktrees by itself; still list only waves whose rows are all terminal.
 The periodic table, the urgent reports, the final summary, board refresh and release, and the
 once-per-wave `write_run_id_map(<evaluations experiment dir>, layout=RUN_ID_PATH_LAYOUT)` rebuild
 (`spec_root=` the tracked `config/<experiment_path>` under `hashed-v2`)
-(never per run) belong to `sweep-supervisor`. When its final table is posted, propose the prune
+(never per run) belong to `sweep-supervisor`. When its final table is posted, run the prune
 (§ Pruning finished waves).
 
 ## Tracking side-effects (same turn)

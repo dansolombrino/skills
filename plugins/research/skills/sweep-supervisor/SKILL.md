@@ -86,8 +86,8 @@ re-arm the wake-up if this chat has none.
    `table --full` (also `.waves/_state/<wave_id>/table.md`); post it only when the user asks.
 4. A `⚠ needs you [<id>]` line is a supervisor question. When the user answers in chat, record it with
    `answer`; the service wakes the agent on it. Until then the stated status quo holds.
-5. When the printout says `finished`, post it, the prune proposal
-   (`rig-sync prune --dry-run`, user-approved as always), and stop the schedule.
+5. When the printout says `finished`, post it, run the prune (`rig-sync prune --dry-run`, then
+   `--confirm`; do, then report), and stop the schedule.
 6. A direct request ("move X to behemoth", "stop using the 3080") goes through the same commands
    the agent uses (`queue`, `lane`, `steal`), with `--reason "user: ..."`. A change of a cluster's
    tracked core-hour cap goes through `pool --rig <cluster> --core-hours-cap <h> --reason "..."`

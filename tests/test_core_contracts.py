@@ -30,7 +30,7 @@ def load_project_init():
 class CoreContractTests(unittest.TestCase):
     def test_plugin_version_and_distributed_skills(self) -> None:
         manifest = json.loads((CORE / ".codex-plugin/plugin.json").read_text())
-        self.assertEqual(manifest["version"], "1.8.0")
+        self.assertEqual(manifest["version"], "2.0.0")
         claude_manifest = json.loads((CORE / ".claude-plugin/plugin.json").read_text())
         catalog = json.loads((ROOT / ".claude-plugin/marketplace.json").read_text())
         entry = next(plugin for plugin in catalog["plugins"] if plugin["name"] == "core")
@@ -84,11 +84,11 @@ class CoreContractTests(unittest.TestCase):
         self.assertIn("Keep this phase read-only", skill)
         self.assertIn("Enumerate every concrete", skill)
         self.assertIn("Use all seven columns", skill)
-        self.assertIn("mark each initial approval as", skill)
+        self.assertIn("mark each behavioral row's initial", skill)
         self.assertIn("Stop and wait for the user to approve", skill)
         self.assertIn("general permission", skill)
         self.assertIn("If a new deviation becomes necessary, stop before applying it", skill)
-        self.assertIn("any unapproved deviation remains", skill)
+        self.assertIn("any unapproved behavioral deviation remains", skill)
         self.assertIn("$integrate-reference-code", metadata)
 
     def test_intent_gate_family_is_congruent(self) -> None:

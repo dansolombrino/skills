@@ -1,6 +1,6 @@
 ---
 name: visualizations
-description: Create or update Research 2.0 plots as self-contained interactive HTML from provenance-valid experiment evaluation outputs, keep run_id selection inside the file instead of the export path, preserve each single producer's complete numbered hierarchy, run plotting directly on rig-4090 without orchestration or wave machinery, decide exact titles, title line arrangement, metric explanations, interaction affordances, and fully resolved export paths on every plotting-code edit, stating the reasoning in the reply and the journal, and show every selectable run_id param by its full name with an (i) hover explanation from the user-approved PARAM_GLOSSARY.json. Use when the user asks to plot, visualize, chart, make figures from results, add or modify scripts under visualizations/, or open, view, or serve rendered plots through the read-only plot server; do not use to recompute missing evaluation data.
+description: Create or update Research 2.0 plots as self-contained interactive HTML from provenance-valid experiment evaluation outputs, keep run_id selection inside the file instead of the export path, preserve each single producer's complete numbered hierarchy, run plotting directly on rig-4090 without orchestration or wave machinery, decide exact titles, title line arrangement, metric explanations, interaction affordances, and fully resolved export paths on every plotting-code edit, stating the reasoning in the reply and the journal, and show every selectable run_id param by its full name with an (i) hover explanation from PARAM_GLOSSARY.json. Use when the user asks to plot, visualize, chart, make figures from results, add or modify scripts under visualizations/, or open, view, or serve rendered plots through the read-only plot server; do not use to recompute missing evaluation data.
 ---
 
 # visualizations
@@ -16,9 +16,9 @@ is mode-owned: manual mode asks what the user wants; auto mode chooses inside th
 **Plot communication** — titles, their line arrangement, metric explanations and placement,
 interaction affordances, library, and export paths — is agent-decided in both engineering modes
 (conventions, "Approval tiers": do, then report), with every check below kept and the reasoning
-stated in the reply and the journal. **One exception: param full names and explanations** (the
-`PARAM_GLOSSARY.json` entries below) are always user-approved — propose each new or changed entry
-and wait; an approved entry is reused by every later plot without asking again. Scientific
+stated in the reply and the journal. Param full names and explanations (the `PARAM_GLOSSARY.json`
+entries below) are do, then report too: write each new or changed entry and show it in the reply;
+an entry is reused by every later plot. Scientific
 interpretation and claim changes remain owned by the user, who may override any part of a plot's
 specification at any time.
 
@@ -136,6 +136,20 @@ network, no server, and no sibling files:
   from `DOMContentLoaded` or later. The buttons are fixed page furniture, not part of the
   communication specification, and the user cannot decline them. An existing plotter that lacks
   them gains them with its next edit.
+- **Reader toolbar, always.** Inline this skill's `assets/plot-shell.js` verbatim, as a constant
+  like the download script, as the second `<script>` in `<head>`: after `plot-download.js` and
+  before Plotly. Mark the run-selection container (one or more elements) `data-plot-controls` and
+  the provenance block `data-plot-provenance`, and draw only through `Plotly.newPlot` or
+  `Plotly.react`. It gives every plot a sticky toolbar: hide or show the run selection (a
+  one-line summary of the current values stays visible while it is hidden), box zoom or pan, zoom
+  in, out and reset, an x-only or y-only zoom lock, mouse-wheel zoom, hover at x, crosshair
+  spikes, legend and every series on or off, log y, fit the figure to the window, PNG and SVG
+  export named after the leaf, fullscreen, and keyboard shortcuts (`?` lists them). Reader
+  settings persist in the browser and survive selection changes; provenance folds behind a
+  summary line. Like the download buttons it is fixed furniture, outside the communication
+  specification, and the user cannot decline it; an existing plotter gains it with its next edit,
+  and the plot server injects it into older plots it shows. Never hand-build a second zoom,
+  hide-selection, or export control in the page.
 - **Offer the affordances the figure's shape earns**: a series toggle whenever it carries two or
   more line series, and a slider or stepper whenever it spans an ordered dimension such as layer,
   epoch, step, or checkpoint. Decide each one as part of the specification and say why; the user
@@ -153,12 +167,11 @@ a hydra config nor identity: editing it never changes a run_id. Shape:
 
 - A name is the param's plain-language full name; an explanation says what the param controls
   and what changing it does, in one or two sentences a reader understands without the code.
-- **User-approved, always, in both engineering modes.** Before a plot needs a param with no
-  entry, or when an entry's wording should change, propose the exact `name` and `explanation`
-  grounded in the producer's config and code, and wait for the user's acceptance before writing
-  the file. Never invent an entry silently and never render a raw key in its place.
-- An approved entry is approved once: every later plot of the experiment reuses it without asking
-  again. Only a new or changed entry is proposed for approval again.
+- **Do, then report, in both engineering modes.** Before a plot needs a param with no entry, or
+  when an entry's wording should change, write the exact `name` and `explanation` grounded in the
+  producer's config and code, and show it in the reply. Never write an entry silently and never
+  render a raw key in its place.
+- Every later plot of the experiment reuses an entry. The user may reword any entry at any time.
 - Commit the glossary with the plotting code that first needs it.
 
 ## Design & execution
@@ -205,7 +218,8 @@ a hydra config nor identity: editing it never changes a run_id. Shape:
   the decided strings are present in the HTML source, that every selectable param shows its
   glossary full name with a working (i) hover explanation, that the page and plot area
   are white, and that both download buttons save a file that reopens offline — the selection
-  file holding only the runs in view. When a check fails, fix the code, render again, and report
+  file holding only the runs in view, and that the reader toolbar hides and shows the selection
+  and its zoom in, out and reset act on the figure. When a check fails, fix the code, render again, and report
   the correction; never hide a failed check.
 - **Hand the user each rendered file as a URL.** Run this skill's
   `scripts/plot_server.py url <file>` on the rendering machine for every leaf written. Always give

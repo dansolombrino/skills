@@ -79,7 +79,7 @@ map once per machine whose evaluations tree received runs
 (`write_run_id_map(<evaluations experiment dir>, layout=RUN_ID_PATH_LAYOUT)`, plus
 `spec_root=<root>/.waves/<wave_id>/config/<experiment_path>` under `hashed-v2` — that machine's
 wave worktree, which carries the tracked identity files the wave ran with — never per run), add
-a closing `decide` with counts and open problems, then `SUP finish --confirm`. Pruning stays a
-proposal for the user; never prune from a tick.
+a closing `decide` with counts and open problems, then `SUP finish --confirm`. Pruning is done by the
+chat agent once `finished` is posted (`sweep-dispatch`, § Pruning finished waves); never prune from a tick.
 
 Exit when done. The next tick starts from the files, not from your memory.
