@@ -420,6 +420,7 @@ execution file), one JSON object:
   "gpu_grants": {"behemoth": {"gpus": [5], "user_words": "<the user's grant, verbatim>", "date": "<YYYY-MM-DD>"}},
   "offload": ["behemoth"],
   "fix_depth": 0,
+  "fixes_wave": "<only in a fix round: the wave_id it replaces>",
   "runs": [
     {
       "id": "<run_id_name: the rid-<32 hex> hash under hashed-v2>",
@@ -449,7 +450,9 @@ otherwise); `register` refuses any shared-rig card outside `owned_gpus` and the 
 copied from conventions § Rig fleet and are only the prior: the supervisor replaces them with
 rates measured in this wave. `fix_depth` is 0 for a wave the user asked for and the parent's
 plus one for a wave an unattended `fix` follow-up dispatched (`sweep-supervisor` § Follow-ups); the
-supervisor refuses a third automatic fix round.
+supervisor refuses a third automatic fix round. Such a wave also names the wave it replaces in
+`fixes_wave` (omit the key otherwise): `register` refuses a fix round without it, and a chat
+watching the old wave follows the link to the new one.
 
 ## Pool and initial estimate
 

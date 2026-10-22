@@ -70,24 +70,25 @@ episode). The scheduled tick (`tick_every`, default 30 minutes) is only a safety
 
 - **Status on request:** `table --wave <id>` (a few lines: ETA, progress, one line per rig, a `⚠`
   line per warning); `table --full` for the per-GPU table. Post it as printed. The rig-board
-  viewer's **Experiments** tab shows every wave's progress at a glance.
+  viewer's **Experiments** tab shows every wave's progress.
 - **Following a wave:** after `register --confirm`, and when attaching to a live wave, run `watch
   --wave <id>` through the host's background-command capability. It returns only on a warning not
   announced yet, the wave's end, or after six hours; when it does, post its output (plus at most one
   sentence) and run it again, until it says `wave finished`. On a host without background-command
   completion notices, say once that status is on request and in the dashboard.
+- **Fix rounds:** watch follows a wave's `fix` follow-up (`… fix follow-up <id> running`) into the
+  wave it dispatches (`continuing as wave <id> (fix round <k>)`; watch it next); a fix that
+  dispatches nothing ends it with its report.
 - **A timed printout** only when the user asks for one: the host's scheduled wake-up at their
   interval, never a shell `sleep`.
 - **Questions:** a `⚠ needs you [<id>]` line is a supervisor question (the status names only its
-  id); record the user's answer with `answer` (the service wakes the agent on it). A chat waiting on the user never stops the
-  wave: the service carries on and the stated status quo holds.
+  id); record the user's answer with `answer` (the service wakes the agent on it). Waiting on the
+  user never stops the wave; the stated status quo holds.
 - **Direct requests** ("move X to behemoth", "stop using the 3080", "add gpu 3, Marco lent it") go
   through the commands the agent uses (`queue`, `lane`, `lane add`, `steal`) with
   `--reason "user: ..."`; a shared rig's card beyond ours takes the user's words with
   `--user-words`. A cluster's core-hour cap changes only when the user asks, through
   `pool --rig <cluster> --core-hours-cap <h> --reason "..."` (a raised cap resumes submission).
-- When the wave finishes, `finish` has already pruned it and queued its `analyze` follow-up, whose
-  report (plot links included) reaches the user as a notice; `followups` shows it too.
 
 ## Agent profile
 
@@ -130,12 +131,13 @@ so they outlive the wave, and one interrupted by a service restart runs again.
   (`--no-analysis` skips it): re-render every plotter of the experiment (or the smallest set that
   answers its question) under the `visualizations` contract, append the `research-journal` entry,
   commit, report the plot URLs.
-- **`fix`** — queued by the agent (`followup --kind fix --text "<diagnosis>"`) for a deterministic
-  engineering error: a traceback, a wrong path, a generator or wave-script bug. It fixes the code on
-  the hub's main checkout without changing what the experiment measures, reruns the smoke, commits,
-  and dispatches a wave of exactly the runs the error broke, inside the same pool and standing
-  authorization, carrying `fix_depth` + 1. The supervisor refuses a third automatic round in one
-  chain; a fix that would change the science or anything reserved for the user becomes an `ask`.
+- **`fix`** — queued by the agent for a deterministic engineering error: a traceback, a wrong
+  path, a generator or wave-script bug. It fixes the code on the hub's main checkout without
+  changing what the experiment measures, reruns the smoke, commits, and dispatches a wave of
+  exactly the runs the error broke, inside the same pool and standing authorization, carrying
+  `fix_depth` + 1 and `fixes_wave` (the wave it replaces). The supervisor refuses a third automatic
+  round in one chain; a fix that would change the science or anything reserved for the user becomes
+  an `ask`.
 
 Each follow-up ends with `followup-report --id <id> --text "<outcome and links>"`, recorded and
 pushed to the user; one that fails or ends without a report is pushed with its log path.

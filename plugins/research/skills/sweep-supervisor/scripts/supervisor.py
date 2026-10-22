@@ -73,6 +73,7 @@ HEARTBEAT_STALE_S = 180
 SERVICE_SILENT_S = 10 * 60  # the service cycles every wave each minute; this long without a snapshot means it is down
 WATCH_POLL_S = 20
 WATCH_TIMEOUT_S = 6 * 3600
+WATCH_SETTLE_S = 3600  # longest watch waits on an ended wave's closing agent tick, where a `fix` follow-up is queued
 BOARD_REFRESH_EVERY_S = 600
 RESERVED_EXITS = {86: "source drift", 87: "environment drift", 88: "insufficient storage"}
 LANE_STOPPING = {86, 87}
@@ -525,6 +526,16 @@ def build_queue(manifest: dict, project_root: Path, config, settings: Settings, 
     fix_depth = manifest.get("fix_depth", 0)
     if not isinstance(fix_depth, int) or isinstance(fix_depth, bool) or fix_depth < 0:
         raise SupervisorError("manifest: `fix_depth` must be a non-negative integer (automatic fix rounds behind this wave)")
+    # a fix round names the wave it replaces, so a chat watching that wave follows it here
+    fixes_wave = manifest.get("fixes_wave")
+    if fix_depth or fixes_wave is not None:
+        if not isinstance(fixes_wave, str) or not rigsync.WAVE_RE.fullmatch(fixes_wave) or fixes_wave >= wave_id:
+            raise SupervisorError("manifest: a fix round (`fix_depth` > 0) names the earlier wave it replaces in `fixes_wave`")
+        parent = board.read_json(Wave(project_root, fixes_wave).queue_path)
+        if not parent:
+            raise SupervisorError(f"manifest: fixes_wave {fixes_wave} is not a registered wave of this project")
+        if fix_depth != int(parent.get("fix_depth", 0)) + 1:
+            raise SupervisorError(f"manifest: wave {fixes_wave} has fix_depth {parent.get('fix_depth', 0)}, so this fix round's is {int(parent.get('fix_depth', 0)) + 1}")
     runs_in = _require(manifest, "runs", list, where)
     if not runs_in:
         raise SupervisorError("manifest: `runs` is empty")
@@ -591,6 +602,7 @@ def build_queue(manifest: dict, project_root: Path, config, settings: Settings, 
         "waiting_lanes": {},
         "next_seq": 1,
         "fix_depth": fix_depth,
+        "fixes_wave": fixes_wave,
         "runs": runs,
         "finished_at": None,
     }
@@ -1794,7 +1806,8 @@ def render_table(snapshot: dict, fmt: str) -> str:
 #
 # A chat's way to follow a wave without a timer: one blocking command, run in the background,
 # that returns only when there is something to say. It reads local files only (the snapshot the
-# service writes each cycle, the queue, the follow-up records), never a rig.
+# service writes each cycle, the queue, the follow-up records), never a rig. A wave replaced by an
+# automatic fix round is followed into the wave that replaces it, linked by that wave's `fixes_wave`.
 
 
 def wave_warnings(wave: Wave, snapshot: dict | None, at: datetime, board_config=None) -> list[dict]:
@@ -1843,33 +1856,100 @@ def wave_over(wave: Wave, snapshot: dict | None) -> bool:
     return bool((snapshot or {}).get("finished_at") or queue.get("finished_at"))
 
 
+def unannounced(wave: Wave, items: list[dict], at: datetime) -> list[dict]:
+    """The warnings not announced yet, now recorded in the wave's `watch.json`; one that cleared is forgotten."""
+    state_path = wave.dir / "watch.json"
+    current = {item["key"]: item for item in items}
+    with (wave.dir / ".watch.lock").open("a+") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        announced = set((board.read_json(state_path) or {}).get("announced", []))
+        new = [item for key, item in current.items() if key not in announced]
+        keep = (announced & set(current)) | {item["key"] for item in new}
+        if keep != announced:
+            board.write_json(state_path, {"announced": sorted(keep), "at": iso(at)})
+    return new
+
+
+def fix_round_after(wave: Wave) -> Wave | None:
+    """The wave an automatic fix round dispatched to replace this one (its `fixes_wave`), the first when several."""
+    for path in sorted(wave.dir.parent.glob("*/queue.json")):
+        if path.parent.name > wave.wave_id and (board.read_json(path) or {}).get("fixes_wave") == wave.wave_id:
+            return Wave(wave.project_root, path.parent.name)
+    return None
+
+
+def latest_fix(wave: Wave, board_config) -> dict | None:
+    fixes = [
+        record for _path, record in (followup_records(board_config) if board_config is not None else [])
+        if record.get("kind") == "fix" and record.get("wave_id") == wave.wave_id and record.get("project_root") == str(wave.project_root)
+    ]
+    return fixes[-1] if fixes else None
+
+
+def closing_tick_done(wave: Wave, queue: dict, snapshot: dict | None, board_config, at: datetime) -> bool:
+    """Whether the agent has had its say on an ended wave: `finish` ran, or an agent tick that started
+    after the end has ended. That tick is where a `fix` follow-up gets queued; a service that never
+    runs it is not waited on past WATCH_SETTLE_S."""
+    ended = parse_iso(queue.get("finished_at") or (snapshot or {}).get("finished_at"))
+    if board_config is None or ended is None or not index_path(board_config, queue["project"], wave.wave_id).exists():
+        return True
+    runtime = board.read_json(wave.runtime_path) or {}
+    started, ticked = parse_iso(runtime.get("agent_tick_started_at")), parse_iso(runtime.get("agent_ticked_at"))
+    if started and ticked and ended <= started <= ticked:
+        return True
+    return (at - ended).total_seconds() > WATCH_SETTLE_S
+
+
 def watch(wave: Wave, board_config, poll: float = WATCH_POLL_S, timeout: float = WATCH_TIMEOUT_S) -> int:
-    """Block until this wave has a warning not announced yet, or turns terminal, or `timeout` passes;
+    """Block until this wave has a warning not announced yet, or is finished, or `timeout` passes;
     then print why, followed by the brief printout. What was announced lives in the wave's
     `watch.json`, so running it again does not repeat a warning; a warning that clears is forgotten
-    and fires again if it comes back. A file caught mid-write is simply read again next poll."""
+    and fires again if it comes back. A file caught mid-write is simply read again next poll.
+
+    A wave that ends with runs not done is finished only once its closing agent tick is over. A `fix`
+    follow-up queued for it keeps watch waiting (one line says so); the wave it dispatches is followed
+    from then on (one line names it), warnings and end included. A fix that dispatches nothing ends
+    the watch with its report."""
     if not wave.queue_path.exists():
         raise SupervisorError(f"wave {wave.wave_id} is not registered here: {wave.queue_path}")
-    state_path = wave.dir / "watch.json"
     deadline = time.monotonic() + timeout
+    said: set[str] = set()
+
+    def say(line: str) -> None:
+        if line not in said:
+            said.add(line)
+            print(line, flush=True)
+
     while True:
         at = now()
         snapshot = board.read_json(wave.snapshot_path)
         reasons: list[str] = []
         try:
             over = wave_over(wave, snapshot)
-            current = {item["key"]: item for item in wave_warnings(wave, snapshot, at, board_config)}
-            with (wave.dir / ".watch.lock").open("a+") as handle:
-                fcntl.flock(handle, fcntl.LOCK_EX)
-                announced = set((board.read_json(state_path) or {}).get("announced", []))
-                new = [item for key, item in current.items() if key not in announced]
-                keep = (announced & set(current)) | {item["key"] for item in new}
-                if keep != announced:
-                    board.write_json(state_path, {"announced": sorted(keep), "at": iso(at)})
+            new = unannounced(wave, wave_warnings(wave, snapshot, at, board_config), at)
+            if over:
+                queue = board.read_json(wave.queue_path) or {}
+                fix, child = latest_fix(wave, board_config), fix_round_after(wave)
+                if child is not None:
+                    say(f"watch: continuing as wave {child.wave_id} (fix round {(board.read_json(child.queue_path) or {}).get('fix_depth')})")
+                    wave = child
+                    continue
+                if fix and fix.get("status") in ("pending", "running"):
+                    done = sum(run["state"] == "done" for run in queue["runs"])
+                    failed = sum(run["state"] == "failed" for run in queue["runs"])
+                    say(f"watch: wave {wave.wave_id} ended: {done} done, {failed} failed; fix follow-up {fix['id']} "
+                        f"{'queued' if fix['status'] == 'pending' else 'running'}")
+                    over = False
+                elif not all(run["state"] == "done" for run in queue["runs"]) and not closing_tick_done(wave, queue, snapshot, board_config, at):
+                    over = False
+                elif fix:
+                    report = (fix.get("report") or "").strip().splitlines()[:1]
+                    ending = report[0] if report else f"{fix.get('outcome') or fix['status']} without a report" + (f"; log {fix['log']}" if fix.get("log") else "")
+                    reasons = [f"watch: fix follow-up {fix['id']} ended without a new wave: {ending}"]
         except (KeyError, TypeError, ValueError, AttributeError, OSError, board.BoardError):
             over, new = False, []  # a snapshot from an older script, or a file mid-write: look again next poll
         if over:
-            reasons = ["watch: wave finished"]
+            reasons += ["watch: wave finished"]
         elif new:
             reasons = [f"watch: new ⚠ {item['line']}" for item in new]
         elif time.monotonic() >= deadline:
@@ -2205,8 +2285,8 @@ def followup_prompt(record: dict) -> str:
         "Fix it on the hub's main checkout so the code does what the experiment already intends; never change what the "
         "experiment measures, a behavior-affecting default, or the scientific contract. Re-run the experiment's smoke, "
         "commit with the journal entry, and dispatch a follow-up wave of exactly the runs this error broke (failed, dropped, "
-        f"or not yet started that would hit it) inside the same pool and standing authorization, with `fix_depth` = {record['fix_depth'] + 1} in "
-        "its supervisor manifest. When the only fix would change the science or anything reserved for the user, dispatch "
+        f"or not yet started that would hit it) inside the same pool and standing authorization, with `fix_depth` = {record['fix_depth'] + 1} and "
+        f"`fixes_wave` = \"{wave_id}\" in its supervisor manifest (a chat watching wave {wave_id} follows that link). When the only fix would change the science or anything reserved for the user, dispatch "
         f"nothing: `ask --wave {wave_id}` with the diagnosis and the proposed patch. " + unattended + report
     )
 

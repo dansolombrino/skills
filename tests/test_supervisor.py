@@ -26,6 +26,7 @@ rigsync = supervisor.rigsync
 board = supervisor.board
 
 WAVE = "20260921-093000"
+FIX_WAVE = "20260921-101500"  # the wave an automatic fix round dispatched to replace WAVE
 REVISION = "a" * 40
 
 FAKE_TMUX = """#!/bin/sh
@@ -176,7 +177,7 @@ class SupervisorTests(unittest.TestCase):
                 }
             )
         payload = {
-            "wave_id": WAVE,
+            "wave_id": extra.get("wave_id", WAVE),
             "experiment": "000_exp",
             "revision": REVISION,
             "lane_script": f"scripts/000_exp/_lanes/wave_{WAVE}/lane.sh",
@@ -184,6 +185,7 @@ class SupervisorTests(unittest.TestCase):
             "weights": {"hub": 1.0, "peer": 0.5, "cluster": 1.0},
             "offload": extra.get("offload", []),
             "runs": entries,
+            **{key: extra[key] for key in ("fix_depth", "fixes_wave") if key in extra},
         }
         payload["weights"] = {rig: payload["weights"][rig] for rig in payload["pool"]}
         path = self.base / "manifest.json"
@@ -696,15 +698,32 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(self.followups(), [])
 
     def test_fix_followups_stop_after_two_automatic_rounds(self) -> None:
-        path = self.manifest()
-        payload = json.loads(path.read_text())
-        payload["fix_depth"] = 2
-        path.write_text(json.dumps(payload))
-        self.assertEqual(self.cli("register", "--wave", WAVE, "--manifest", str(path), "--confirm")[0], 0)
-        code, _out, err = self.cli("followup", "--wave", WAVE, "--kind", "fix", "--text", "probe.py clobbers metrics.json")
+        board.write_json(supervisor.Wave(self.hub, WAVE).queue_path, {"fix_depth": 1})  # the round before
+        path = self.manifest(wave_id=FIX_WAVE, fix_depth=2, fixes_wave=WAVE)
+        self.assertEqual(self.cli("register", "--wave", FIX_WAVE, "--manifest", str(path), "--confirm")[0], 0)
+        code, _out, err = self.cli("followup", "--wave", FIX_WAVE, "--kind", "fix", "--text", "probe.py clobbers metrics.json")
         self.assertEqual(code, 2)
         self.assertIn("goes to the user", err)
-        self.assertEqual(self.cli("followup", "--wave", WAVE, "--kind", "analyze", "--text", "partial look")[0], 0)
+        self.assertEqual(self.cli("followup", "--wave", FIX_WAVE, "--kind", "analyze", "--text", "partial look")[0], 0)
+
+    def test_a_fix_round_names_the_wave_it_replaces(self) -> None:
+        self.register()
+        cases = [
+            ("no link", dict(fix_depth=1), "names the earlier wave it replaces in `fixes_wave`"),
+            ("link without depth", dict(fixes_wave=WAVE), "this fix round's is 1"),
+            ("unknown wave", dict(fix_depth=1, fixes_wave="20260921-080000"), "not a registered wave of this project"),
+            ("later wave", dict(fix_depth=1, fixes_wave="20260921-120000"), "names the earlier wave"),
+            ("wrong depth", dict(fix_depth=2, fixes_wave=WAVE), "this fix round's is 1"),
+        ]
+        for name, extra, message in cases:
+            with self.subTest(name):
+                code, _out, err = self.cli("register", "--wave", FIX_WAVE, "--manifest", str(self.manifest(wave_id=FIX_WAVE, **extra)), "--dry-run")
+                self.assertEqual(code, 2)
+                self.assertIn(message, err)
+        code, _out, err = self.cli("register", "--wave", FIX_WAVE, "--manifest", str(self.manifest(wave_id=FIX_WAVE, fix_depth=1, fixes_wave=WAVE)), "--confirm")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(supervisor.Wave(self.hub, FIX_WAVE).load()["fixes_wave"], WAVE)
+        self.assertIsNone(self.queue()["fixes_wave"])
 
     def test_a_fix_followup_carries_the_next_depth_into_its_prompt(self) -> None:
         self.register()
@@ -712,6 +731,7 @@ class SupervisorTests(unittest.TestCase):
         [record] = self.followups()
         prompt = supervisor.followup_prompt(record)
         self.assertIn("`fix_depth` = 1", prompt)
+        self.assertIn(f'`fixes_wave` = "{WAVE}"', prompt)
         self.assertIn("hydra over-quotes optim.betas", prompt)
         self.assertIn("never change what the experiment measures", prompt)
 
@@ -994,7 +1014,7 @@ class SupervisorTests(unittest.TestCase):
         self.cli("cycle", "--wave", WAVE)  # terminal: nothing in flight anywhere, so no new tail
         self.assertEqual(len(self.events("lane-idle-tail")), 1)
 
-    def snap(self, *, lanes=(), failed=(), questions=(), certs=None, written_ago_s: float = 0, finished_at=None) -> None:
+    def snap(self, *, lanes=(), failed=(), questions=(), certs=None, written_ago_s: float = 0, finished_at=None, wave: str = WAVE) -> None:
         at = supervisor.now()
         lanes = list(lanes) or [self.row("hub", "running", "model=m0")]
         snapshot = {
@@ -1004,14 +1024,14 @@ class SupervisorTests(unittest.TestCase):
             "finished_at": finished_at, "lanes": lanes, "failed": list(failed), "questions": list(questions),
             "rigs": {"hub": {"kind": "lanes", "done": 1}, "peer": {"kind": "lanes", "done": 0}}, "certs": certs or {},
         }
-        board.write_json(supervisor.Wave(self.hub, WAVE).snapshot_path, snapshot)
+        board.write_json(supervisor.Wave(self.hub, wave).snapshot_path, snapshot)
 
     @staticmethod
     def row(rig: str, state: str, run=None, problem=None) -> dict:
         return {"kind": "lane", "rig": rig, "gpu": "0", "state": state, "run": run, "done": 0, "lane_free_at": None, "problem": problem}
 
-    def watch(self, timeout: str = "0") -> str:
-        code, out, err = self.cli("watch", "--wave", WAVE, "--poll", "1", "--timeout", timeout)
+    def watch(self, timeout: str = "0", wave: str = WAVE) -> str:
+        code, out, err = self.cli("watch", "--wave", wave, "--poll", "1", "--timeout", timeout)
         self.assertEqual(code, 0, err)
         return out
 
@@ -1080,19 +1100,90 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(len(ticks), 2)
         self.assertTrue(out.startswith("watch: new ⚠ hub gpu0 stale (run model=m0)\n"), out)
 
-    def test_watch_returns_when_the_wave_turns_terminal(self) -> None:
+    def closing_tick(self, wave: str = WAVE) -> None:
+        """The agent's tick on the ended wave starts and ends."""
+        later = supervisor.iso(supervisor.now() + supervisor.timedelta(seconds=5))
+        board.write_json(supervisor.Wave(self.hub, wave).runtime_path, {"agent_tick_started_at": later, "agent_ticked_at": later})
+
+    def test_watch_returns_when_the_wave_turns_terminal_and_its_closing_tick_is_over(self) -> None:
         self.register()
-        self.snap(failed=[{"run": "model=m3", "note": None}])
+        failed = [{"run": "model=m3", "note": None}]
+        self.snap(failed=failed)
         self.watch()
+        ticks: list[float] = []
 
-        def finish(_seconds: float) -> None:
-            self.snap(failed=[{"run": "model=m3", "note": None}], finished_at=supervisor.iso(supervisor.now()))
+        def later(_seconds: float) -> None:
+            ticks.append(_seconds)
+            if len(ticks) == 1:
+                self.snap(failed=failed, finished_at=supervisor.iso(supervisor.now()))
+            elif len(ticks) == 3:
+                self.closing_tick()  # where a fix follow-up would have been queued: none was
 
-        with mock.patch.object(supervisor.time, "sleep", side_effect=finish):
+        with mock.patch.object(supervisor.time, "sleep", side_effect=later):
             out = self.watch(timeout="3600")
+        self.assertEqual(len(ticks), 3, "an ended wave with a failed run waits for its closing tick")
         self.assertTrue(out.startswith("watch: wave finished\n"), out)
         self.assertIn("finished ", out)
         self.assertTrue(self.watch().startswith("watch: wave finished"), "a finished wave answers at once")
+
+    def test_watch_follows_a_wave_into_its_fix_round(self) -> None:
+        """The case that lost a chat its wave: every run failed on a code error, the closing tick queued
+        a fix, and the fix dispatched a new wave whose question nobody saw."""
+        self.register()
+        board_config = board.load_config(self.registry)
+        failed = [{"run": f"model=m{i}", "note": "exit 1"} for i in range(5)]
+        self.snap(failed=failed, finished_at=supervisor.iso(supervisor.now()))
+        self.assertTrue(self.watch().startswith("watch: new ⚠ failed: `model=m0`"), "ended, but its closing tick is still to come")
+        ticks: list[float] = []
+        state: dict = {}
+
+        def later(_seconds: float) -> None:
+            ticks.append(_seconds)
+            if len(ticks) == 1:
+                with supervisor.WaveLock(supervisor.Wave(self.hub, WAVE)):
+                    queue = self.queue()
+                    for run in queue["runs"]:
+                        run["state"] = "failed"
+                    supervisor.Wave(self.hub, WAVE).save(queue)
+                state["fix"] = supervisor.enqueue_followup(board_config, supervisor.Wave(self.hub, WAVE), self.queue(), "fix", "wandb.util.generate_id is gone")
+                self.closing_tick()
+            elif len(ticks) == 2:
+                path, record = supervisor.find_followup(board_config, state["fix"]["id"])
+                board.write_json(path, {**record, "status": "running"})
+            elif len(ticks) == 3:
+                code, _out, err = self.cli("register", "--wave", FIX_WAVE, "--confirm", "--manifest",
+                                           str(self.manifest(wave_id=FIX_WAVE, fix_depth=1, fixes_wave=WAVE)))
+                self.assertEqual(code, 0, err)
+            elif len(ticks) == 4:
+                self.snap(wave=FIX_WAVE, questions=[{"id": "q1", "text": "run wandb login on rig-3080-ti?", "meanwhile": "skip it", "status": "open"}])
+
+        with mock.patch.object(supervisor.time, "sleep", side_effect=later):
+            out = self.watch(timeout="3600")
+        fix_id = state["fix"]["id"]
+        self.assertEqual(out.splitlines()[:4], [
+            f"watch: wave {WAVE} ended: 0 done, 5 failed; fix follow-up {fix_id} queued",
+            f"watch: wave {WAVE} ended: 0 done, 5 failed; fix follow-up {fix_id} running",
+            f"watch: continuing as wave {FIX_WAVE} (fix round 1)",
+            "watch: new ⚠ needs you [q1] run wandb login on rig-3080-ti? — meanwhile: skip it",
+        ])
+        self.assertNotIn("wave finished", out)
+        out = self.watch()
+        self.assertTrue(out.startswith(f"watch: continuing as wave {FIX_WAVE} (fix round 1)\nwatch: timeout"), out)
+        self.assertTrue(self.watch(wave=FIX_WAVE).startswith("watch: timeout"), "the new wave's question was announced once")
+
+    def test_a_fix_that_dispatches_nothing_ends_the_watch_with_its_report(self) -> None:
+        self.register()
+        board_config = board.load_config(self.registry)
+        self.snap(finished_at=supervisor.iso(supervisor.now()))
+        record = supervisor.enqueue_followup(board_config, supervisor.Wave(self.hub, WAVE), self.queue(), "fix", "a bug")
+        path, _ = supervisor.find_followup(board_config, record["id"])
+        board.write_json(path, {**record, "status": "done", "outcome": "exit 0", "report": "the fix changes the science; asked q2\nmore"})
+        self.closing_tick()
+        out = self.watch()
+        self.assertTrue(out.startswith(
+            f"watch: fix follow-up {record['id']} ended without a new wave: the fix changes the science; asked q2\nwatch: wave finished\n"), out)
+        board.write_json(path, {**record, "status": "failed", "outcome": "exit 1", "log": "/tmp/f.log"})
+        self.assertIn(f"{record['id']} ended without a new wave: exit 1 without a report; log /tmp/f.log\nwatch: wave finished", self.watch())
 
     def test_watch_times_out_with_nothing_new_and_refuses_an_unknown_wave(self) -> None:
         self.register()
