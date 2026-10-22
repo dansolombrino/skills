@@ -46,3 +46,10 @@ One skill tree serves both hosts. There is no per-host copy of a skill and no ge
   step that gets skipped.
 - `claude-final-v0.7.0` is the pre-Codex Claude-native state, kept for history only. Dual-host
   support was reintroduced in `research` 3.1.0 on the shared tree; do not restore that old layout.
+
+## Rig fleet network setup
+
+How the rigs reach `behemoth` (Sapienza VPN, reverse SSH tunnels, ssh multiplexing, per-rig
+units) lives in the private repo `dansolombrino/sapienza-vpn`, cloned on `rig-4090` at
+`~/sapienza-vpn-staging/`. Look there before debugging rig connectivity. It is personal
+infrastructure: distributed skills never reference it.
