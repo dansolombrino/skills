@@ -73,7 +73,9 @@ buffered runs of slower lanes:
 Anything outside the pool or the standing authorization:
 `SUP ask --text "<one decision, with the numbers>" --meanwhile "<what stays in force>"`. Then carry
 on with everything that does not depend on the answer. Never wait, never retry the question, and
-never treat silence as consent.
+never treat silence as consent. Something the user should know but need not decide goes out with
+`SUP say --text "<one or two lines>"`, sparingly: it lands in the wave's thread on the phone, and
+the user's reply comes back to this session.
 
 ## 5. Finish
 

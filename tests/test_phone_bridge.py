@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -185,9 +186,131 @@ public_key = "{self.base / 'id_leonardo.pub'}"
         with mock.patch.object(bridge, "_getaddrinfo", return_value=[v6, v4]):
             self.assertEqual(bridge.socket.getaddrinfo("api.telegram.org", 443), [v4, v6])
 
+    def test_send_from_an_older_install_runs_the_newest_one(self) -> None:
+        newer = self.base / "research/9.9.9/skills/phone-bridge/scripts/bridge.py"
+        argv = ["--registry", str(self.registry), "send", "hi", "--context", "{}"]
+        with mock.patch.object(bridge, "newer_installed_copy", return_value=newer), \
+                mock.patch.object(bridge.os, "execv", side_effect=SystemExit(0)) as execv, self.assertRaises(SystemExit):
+            bridge.main(argv)
+        self.assertEqual(execv.call_args.args[1][1:], [str(newer), *argv])
+
     def test_the_longest_duration_comes_from_the_ca(self) -> None:
         self.assertEqual(bridge.longest_duration(PROVISIONERS[1]), "48h")
         self.assertIsNone(bridge.longest_duration({"claims": {}}))
+
+
+class WaveThreadTests(unittest.TestCase):
+    """Each wave in its own topic; a reply reaches the agent session that wrote."""
+
+    ROOT = "/home/u/proj"
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name)
+        token = base / "telegram.token"
+        token.write_text("123456:" + "A" * 35 + "\n")
+        token.chmod(0o600)
+        registry = base / "machines.toml"
+        registry.write_text(f'[phone]\ntoken_file = "{token}"\nchat_id = -1001\nstate_dir = "{base / "state"}"\n')
+        self.config = bridge.load_config(registry)
+        self.forum = True
+        self.calls: list[tuple[str, dict]] = []
+        self.next_id = 100
+        self.supervisor_calls: list[tuple[str, ...]] = []
+        self.table = "Status written 2026-10-22 at 10:00 — ETA 12:00 (~2h) · 1/4 done\n"
+        patches = [mock.patch.object(bridge, "http_json", side_effect=self.fake_http),
+                   mock.patch.object(bridge, "supervisor", side_effect=self.fake_supervisor)]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def fake_http(self, url: str, data: dict | None = None, timeout: float = 30) -> dict:
+        method = url.rsplit("/", 1)[-1]
+        self.calls.append((method, data or {}))
+        self.next_id += 1
+        if method == "getChat":
+            return {"ok": True, "result": {"id": -1001, "type": "supergroup", "is_forum": self.forum}}
+        if method == "createForumTopic":
+            return {"ok": True, "result": {"message_thread_id": self.next_id, "name": data["name"]}}
+        if method == "sendMessage":
+            return {"ok": True, "result": {"message_id": self.next_id}}
+        return {"ok": True, "result": True}
+
+    def fake_supervisor(self, config, root, *argv, timeout=60):
+        self.supervisor_calls.append((root, *argv))
+        if argv[0] == "waves":
+            return subprocess.CompletedProcess(argv, 0, f"20261022-090000\t{self.ROOT}\n", "")
+        if argv[0] == "table":
+            return subprocess.CompletedProcess(argv, 0, self.table, "")
+        return subprocess.CompletedProcess(argv, 0, "[tell] queued\n", "")
+
+    def sent(self) -> list[dict]:
+        return [data for method, data in self.calls if method == "sendMessage"]
+
+    def notice(self, wave: str | None, **extra) -> dict:
+        context = {"kind": "say", "silent": False, **extra}
+        if wave:
+            context.update(project="proj", root=self.ROOT, wave=wave)
+        return context
+
+    def test_each_wave_gets_its_own_thread_and_quiet_notices_make_no_sound(self) -> None:
+        bridge.send_notice(self.config, "proj wave A: hi", self.notice("A", body="hi"), token="tok")
+        bridge.send_notice(self.config, "proj wave B: yo", self.notice("B", body="yo", silent=True), token="tok")
+        bridge.send_notice(self.config, "proj wave A: again", self.notice("A", body="again"), token="tok")
+        bridge.send_notice(self.config, "leonardo: SSH certificate expires 10:00", self.notice(None, kind="cert-expiring"), token="tok")
+        topics = [data["name"] for method, data in self.calls if method == "createForumTopic"]
+        self.assertEqual(topics, ["proj · A", "proj · B"])
+        a, b, again, cert = self.sent()
+        self.assertEqual(a["message_thread_id"], again["message_thread_id"])
+        self.assertNotEqual(a["message_thread_id"], b["message_thread_id"])
+        self.assertEqual((a["text"], b.get("disable_notification")), ("hi", "true"), "a thread needs no wave prefix")
+        self.assertNotIn("message_thread_id", cert, "fleet notices go to the general thread")
+        self.assertEqual(stat.S_IMODE((self.config.state_dir / "chat.json").stat().st_mode), 0o600)
+
+    def test_a_reply_reaches_the_session_that_wrote_and_a_thread_reaches_its_wave(self) -> None:
+        bridge.send_notice(self.config, "q", self.notice("A", kind="ask", session="s-1", question="q2", body="❓ [q2] lend gpu?"), token="tok")
+        asked = self.sent()[-1]
+        thread = asked["message_thread_id"]
+        question_id = self.next_id
+        reply = {"message_id": 7, "text": "yes until Friday", "is_topic_message": True, "message_thread_id": thread,
+                 "reply_to_message": {"message_id": question_id}}
+        bridge.respond(self.config, "tok", reply, thread)
+        self.assertEqual(self.supervisor_calls[-1], (self.ROOT, "tell", "--wave", "A", "--text", "yes until Friday", "--session", "s-1", "--question", "q2"))
+        self.assertEqual(self.calls[-1][0], "setMessageReaction", "an agent answers itself; the bot only acknowledges")
+        plain = {"message_id": 8, "text": "and pause the 3080", "is_topic_message": True, "message_thread_id": thread,
+                 "reply_to_message": {"message_id": thread}}
+        bridge.respond(self.config, "tok", plain, thread)
+        self.assertEqual(self.supervisor_calls[-1], (self.ROOT, "tell", "--wave", "A", "--text", "and pause the 3080"))
+        bridge.respond(self.config, "tok", {"message_id": 9, "text": "hello"}, None)
+        self.assertIn("write in the wave's thread", self.sent()[-1]["text"], "the general thread belongs to no wave")
+        bridge.respond(self.config, "tok", {"message_id": 10, "text": "/status", "is_topic_message": True, "message_thread_id": thread}, thread)
+        self.assertEqual((self.sent()[-1]["text"], self.sent()[-1]["message_thread_id"]), (self.table.strip(), thread))
+
+    def test_without_topics_plain_text_goes_to_the_wave_that_wrote_last(self) -> None:
+        self.forum = False
+        bridge.send_notice(self.config, "proj wave A: x", self.notice("A"), token="tok")
+        bridge.send_notice(self.config, "proj wave B: y", self.notice("B"), token="tok")
+        self.assertFalse([c for c in self.calls if c[0] == "createForumTopic"])
+        self.assertEqual(self.sent()[-1]["text"], "proj wave B: y", "one shared thread keeps the wave prefix")
+        bridge.respond(self.config, "tok", {"message_id": 3, "text": "go on"}, None)
+        self.assertEqual(self.supervisor_calls[-1][:4], (self.ROOT, "tell", "--wave", "B"))
+
+    def test_every_wave_has_a_pinned_card_kept_current_by_edits(self) -> None:
+        bridge.refresh_cards(self.config, "tok")
+        methods = [method for method, _data in self.calls]
+        self.assertEqual(methods, ["getChat", "createForumTopic", "sendMessage", "pinChatMessage"])
+        [card] = self.sent()
+        self.assertEqual(card["disable_notification"], "true")
+        self.calls.clear()
+        bridge.refresh_cards(self.config, "tok")
+        self.assertEqual([m for m, _ in self.calls], [], "an unchanged card costs nothing")
+        self.table = "Status written 2026-10-22 at 12:01 — finished 12:01 · 4/4 done\n"
+        bridge.refresh_cards(self.config, "tok")
+        self.assertEqual([m for m, _ in self.calls], ["editMessageText"])
+        self.calls.clear()
+        bridge.refresh_cards(self.config, "tok")
+        self.assertEqual(self.calls, [], "a finished wave's card stays as it ended")
 
 
 if __name__ == "__main__":

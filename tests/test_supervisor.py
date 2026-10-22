@@ -799,6 +799,115 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(sum("SSH certificate" in line for line in lines), 1)
         self.assertEqual(sum("1 run(s) failed" in line for line in lines), 2, "per wave")
 
+    # ── talking with the agents from the phone ──
+
+    def converse_registry(self, resume: str = '["sh", "-c", "echo RESUMED {session}; echo \\"$0\\"", "{prompt}"]') -> Path:
+        sink = self.base / "notices.jsonl"
+        text = self.registry.read_text().replace(
+            'command = ["sh", "-c", "echo model={model} effort={effort}; echo \\"$0\\"", "{prompt}"]',
+            'command = ["sh", "-c", "echo NEW session={session}; echo \\"$0\\"", "{prompt}"]\n'
+            f"resume_command = {resume}",
+        ).replace("cycle_every = 60", "cycle_every = 60\n"
+                  f'notify_command = ["sh", "-c", "printf \'%s\\\\t%s\\\\n\' \\"$0\\" \\"$1\\" >> {sink}", "{{text}}", "{{context}}"]')
+        self.registry.write_text(text)
+        return sink
+
+    def notices(self, sink: Path) -> list[tuple[str, dict]]:
+        lines = sink.read_text().splitlines() if sink.exists() else []
+        return [(text, json.loads(context)) for text, _, context in (line.rpartition("\t") for line in lines)]
+
+    def test_a_phone_reply_resumes_the_session_that_asked_and_always_gets_an_answer(self) -> None:
+        sink = self.converse_registry()
+        self.register()
+        wave = supervisor.Wave(self.hub, WAVE)
+        settings = supervisor.load_settings(self.registry)
+        board_config = board.load_config(self.registry)
+        self.assertEqual(self.cli("wake", "--wave", WAVE)[0], 0)
+        session = wave.runtime()["agent_session"]
+        self.assertIn(f"NEW session={session}", Path(wave.runtime()["agent_last_log"]).read_text())
+        with mock.patch.dict(os.environ, {"SWEEP_SUPERVISOR_SESSION": session}):
+            self.cli("ask", "--wave", WAVE, "--text", "use behemoth gpu 2?", "--meanwhile", "four lanes")
+        [(text, context)] = self.notices(sink)
+        self.assertIn("use behemoth gpu 2?", text)
+        self.assertEqual((context["wave"], context["root"], context["session"], context["question"]), (WAVE, str(self.hub.resolve()), session, "q1"))
+        self.assertFalse(context["silent"])
+        earlier = supervisor.now() - supervisor.timedelta(minutes=1)  # the service picks a message up on its next cycle
+        with mock.patch.object(supervisor, "now", return_value=earlier):
+            code, _out, err = self.cli("tell", "--wave", WAVE, "--text", "yes, until Friday", "--session", session, "--question", "q1")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(wave.questions()[0]["answer"], "yes, until Friday", "the answer is recorded before any agent runs")
+        [(key, chat)] = supervisor.pending_chats(board_config).items()
+        self.assertEqual(key, (str(self.hub.resolve()), WAVE))
+        supervisor.wake(wave, settings, "phone message", chat)
+        log = Path(wave.runtime()["agent_last_log"]).read_text()
+        self.assertIn(f"RESUMED {session}", log)
+        self.assertIn("«yes, until Friday» (answering your question q1)", log)
+        self.assertIn("they grant what its Authority section reserves for the user", log)
+        self.assertEqual(supervisor.pending_chats(board_config), {})
+        text, context = self.notices(sink)[-1]
+        self.assertIn("ended without a reply", text, "a turn that says nothing still answers the phone")
+        self.assertEqual(context["session"], session)
+        self.assertIsNone(supervisor.wake_due(wave, settings), "the turn already handled the answer: no second agent")
+
+    def test_say_reaches_the_wave_thread_and_plain_messages_follow_the_last_speaker(self) -> None:
+        sink = self.converse_registry()
+        self.register()
+        wave = supervisor.Wave(self.hub, WAVE)
+        with mock.patch.dict(os.environ, {"SWEEP_SUPERVISOR_SESSION": "s-42"}):
+            self.assertEqual(self.cli("say", "--wave", WAVE, "--text", "moved m3 to the 4090")[0], 0)
+        [(text, context)] = self.notices(sink)
+        self.assertEqual((text, context["body"], context["kind"]), (f"proj wave {WAVE}: moved m3 to the 4090", "moved m3 to the 4090", "say"))
+        self.assertEqual(wave.runtime()["chat_session"], "s-42")
+        self.cli("tell", "--wave", WAVE, "--text", "why?")
+        [(_key, chat)] = supervisor.pending_chats(board.load_config(self.registry)).items()
+        supervisor.wake(wave, supervisor.load_settings(self.registry), "phone message", chat)
+        self.assertIn("RESUMED s-42", Path(wave.runtime()["agent_last_log"]).read_text())
+
+    def test_a_session_that_cannot_be_resumed_hands_the_words_to_a_fresh_agent(self) -> None:
+        self.converse_registry(resume='["sh", "-c", "exit 3", "{prompt}", "{session}"]')
+        self.register()
+        wave = supervisor.Wave(self.hub, WAVE)
+        self.cli("wake", "--wave", WAVE)
+        self.cli("tell", "--wave", WAVE, "--text", "status?", "--session", "gone")
+        [(_key, chat)] = supervisor.pending_chats(board.load_config(self.registry)).items()
+        supervisor.wake(wave, supervisor.load_settings(self.registry), "phone message", chat)
+        fresh = sorted(wave.agent_logs.glob("*-chat-fresh.log"))
+        self.assertEqual(len(fresh), 1)
+        self.assertIn("Use the sweep-supervisor skill", fresh[0].read_text())
+        self.assertIn("«status?»", fresh[0].read_text())
+
+    def test_messages_queue_per_wave_and_a_finished_wave_can_still_be_told(self) -> None:
+        self.register()
+        board_config = board.load_config(self.registry)
+        for text, session in (("a", None), ("b", None), ("c", "other")):
+            argv = ["tell", "--wave", WAVE, "--text", text] + (["--session", session] if session else [])
+            self.assertEqual(self.cli(*argv)[0], 0)
+        [batch] = supervisor.pending_chats(board_config).values()
+        self.assertEqual([record["text"] for _path, record in batch], ["a", "b"], "one turn per target session")
+        self.assertEqual(self.cli("tell", "--wave", "20260921-093001", "--text", "x")[0], 2, "an unknown wave is refused")
+
+    def test_resume_needs_a_way_to_learn_each_session(self) -> None:
+        text = self.registry.read_text().replace('effort = "high"', 'effort = "high"\nresume_command = ["x", "{prompt}", "--resume", "{session}"]')
+        self.registry.write_text(text)
+        with self.assertRaisesRegex(supervisor.SupervisorError, "session_regex"):
+            supervisor.load_settings(self.registry)
+        self.registry.write_text(text.replace('effort = "high"', 'effort = "high"\nsession_regex = "session id: (\\\\S+)"', 1))
+        profile = supervisor.load_settings(self.registry).agent
+        self.assertEqual(profile.session_regex, "session id: (\\S+)")
+        self.assertEqual(self.cli("check")[0], 0)
+
+    def test_notices_carry_their_wave_and_only_what_needs_the_user_makes_a_sound(self) -> None:
+        sink = self.converse_registry()
+        settings = supervisor.load_settings(self.registry)
+        expiring = {"event": "cert-expiring", "rig": "cluster", "expires_at": supervisor.iso(supervisor.now())}
+        blocked = {"event": "recovery-blocked", "rig": "peer", "gpu": "0", "problem": "env drift"}
+        supervisor.notify_events(supervisor.Wave(self.hub, WAVE), settings, [expiring, blocked, {"event": "run-failed"}], {})
+        notices = {context["kind"]: (text, context) for text, context in self.notices(sink)}
+        self.assertNotIn("wave", notices["cert-expiring"][1], "a certificate is the fleet's, not a wave's")
+        self.assertEqual(notices["recovery-blocked"][1]["wave"], WAVE)
+        self.assertFalse(notices["recovery-blocked"][1]["silent"])
+        self.assertTrue(notices["run-failed"][1]["silent"], "the supervisor is already on it")
+
     # ── events that wake the agent, and the chat's watch ──
 
     def test_the_scheduled_tick_is_a_half_hour_safety_net_unless_the_registry_says_otherwise(self) -> None:
