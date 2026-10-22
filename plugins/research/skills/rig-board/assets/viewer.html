@@ -16,6 +16,7 @@
   --warn:#facc15;--warnbg:#2b2508;--foreign:#c4b5fd;--foreignbg:#1f1836;--pend:#7dd3fc;--pendbg:#0c2233;
   --unk:#9ca3af;--unkbg:#1f2430;--accent:#60a5fa;--shadow:none}}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"}
 code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
 a{color:var(--accent)}
@@ -161,6 +162,7 @@ details.fin[open]>summary{margin-bottom:10px}
 .vrow{margin-top:4px}
 .empty.big{font-size:20px;color:var(--ink);padding:48px 20px}.empty.big small{display:block;font-size:13px;color:var(--muted);margin-top:6px}
 .wave .lane{margin:6px 0}
+.liveruns{margin-top:10px}
 .wave details>summary{margin-top:2px}
 @media(max-width:600px){#exp{padding:12px}.tabs{order:-1;width:100%}.tabs button{flex:1;justify-content:center;padding:6px 8px}.etac{font-size:26px}.rigrow{grid-template-columns:1fr auto}.rigrow .ru{grid-column:1/-1;grid-row:2}body.tab-experiments header{position:static}#exptiles .tile{min-width:0;flex:1 1 28%;padding:3px 8px}#exptiles .tile b{font-size:16px}}
 </style></head><body>
@@ -511,7 +513,9 @@ function waveCard(w,nowMs){const b=w.brief||{};const eta=b.eta||{};const c=w.cou
   const rigs=(b.rigs||[]).map(r=>{let when;if(fin)when=`<span class="stamp">${r.done} done</span>`;else if(r.kind==="slurm")when=r.units?`<b class="c-run">${r.running} running</b>${r.waiting?` · <b class="c-q">${r.waiting} waiting</b>`:""}`:`<span class="stamp">no jobs in flight</span>`;
       else when=r.free_at?`free ${until(r.free_at,nowMs)}`:`<span class="stamp">idle</span>`;
     return `<div class="rigrow ${r.last_to_finish?"last":""}"><span class="rn">${esc(r.rig)}</span><span class="ru">${r.units} ${esc(r.unit)}${fin?"":` · ${r.done} done`}</span><span class="rw">${when}</span>${r.last_to_finish&&(b.rigs||[]).length>1?`<span class="lastp">🏁 last to finish: it sets the wave ETA</span>`:""}</div>`}).join("");
-  const rows=w.lanes||[];const kr=`runs/${w.key}`,kf=`failed/${w.key}`,kx=`excl/${w.key}`,kd=`dec/${w.key}`,kc=`common/${w.key}`;
+  const all=w.lanes||[];const kr=`runs/${w.key}`,kf=`failed/${w.key}`,kx=`excl/${w.key}`,kd=`dec/${w.key}`,kc=`common/${w.key}`;
+  // runs in flight are the wave's live progress: always shown; idle lanes stay in the collapsed list
+  const live=fin?[]:all.filter(r=>r.run||r.fraction!=null||r.progress_text);const rows=all.filter(r=>!live.includes(r));
   const jobs=rows.filter(r=>r.kind==="job").length,gpus=rows.length-jobs;
   const rowsLabel=[gpus?`${gpus} GPU lane${gpus===1?"":"s"}`:"",jobs?`${jobs} cluster job${jobs===1?"":"s"}`:""].filter(Boolean).join(" + ");
   return `<section class="card wave ${cls}" data-key="${esc(w.key)}">
@@ -519,9 +523,10 @@ function waveCard(w,nowMs){const b=w.brief||{};const eta=b.eta||{};const c=w.cou
     <div class="hero">${etaHtml}${tally}</div>${sbar}
     ${meta.length?`<div class="meta">${meta.map(x=>`<span>${x}</span>`).join("")}</div>`:""}
     ${warns.length?`<div class="warns">${warns.map(x=>warnHtml(w,x,nowMs)).join("")}</div>`:""}
+    ${live.length?`<div class="liveruns"><div class="etal">current · ${live.length} run${live.length===1?"":"s"}</div>${live.map(r=>laneRowHtml(r,w,nowMs)).join("")}</div>`:""}
     ${rigs?`<div class="rigs">${rigs}</div>`:""}
     ${(w.followups||[]).length?`<div class="fus">${w.followups.map(f=>followupHtml(f,nowMs)).join("")}</div>`:""}
-    ${rows.length?`<details data-key="${esc(kr)}" ${open.has(kr)?"open":""}><summary>per run · ${rowsLabel}</summary>${rows.map(r=>laneRowHtml(r,w,nowMs)).join("")}</details>`:""}
+    ${rows.length?`<details data-key="${esc(kr)}" ${open.has(kr)?"open":""}><summary>${live.length?"idle":"per run"} · ${rowsLabel}</summary>${rows.map(r=>laneRowHtml(r,w,nowMs)).join("")}</details>`:""}
     ${w._common.size?`<details data-key="${esc(kc)}" ${open.has(kc)?"open":""}><summary>configuration shared by every run shown</summary><div style="margin-top:3px">${params([...w._common].join("/"))}</div></details>`:""}
     ${(w.failed||[]).length?`<details data-key="${esc(kf)}" ${open.has(kf)?"open":""}><summary>❌ ${w.failed.length} failed run${w.failed.length===1?"":"s"}</summary><ul>${w.failed.map(f=>`<li>${variant(f.run,w._common)} <span class="stamp">${esc(f.note||"see its log")}</span></li>`).join("")}</ul></details>`:""}
     ${(w.excluded||[]).length?`<details data-key="${esc(kx)}" ${open.has(kx)?"open":""}><summary>${w.excluded.length} excluded run${w.excluded.length===1?"":"s"}</summary><ul>${w.excluded.map(f=>`<li>${variant(f.run,w._common)} <span class="stamp">${esc(f.note||"")}</span></li>`).join("")}</ul></details>`:""}

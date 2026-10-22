@@ -131,12 +131,13 @@ The **Experiments** tab (`/#experiments`; the chosen tab is remembered per brows
 wave the `sweep-supervisor` service drives, grouped project → experiment → wave, live waves first
 and the ones finished in the last 24 h / 48 h / 7 days in a collapsed section below. Per wave: the
 wave ETA as a clock time with its countdown, done / total with a stacked bar (done, failed,
-running, queued, excluded), time since launch, supervisor-cycle and agent-tick ages; one row per
+running, queued, excluded), time since launch, supervisor-cycle and agent-tick ages; every run in flight with its own progress bar, step count,
+heartbeat and run ETA, always shown; one row per
 rig (GPUs or cluster jobs, runs done, when it falls free, which finishes last); prominent warnings
 (stale, blocked or down lanes, failed runs, open questions with their id and text, expiring
 certificates, a supervisor that stopped cycling, a follow-up that ended without a report); the
 wave's `analyze` / `fix` follow-ups with their reports and clickable links; and, on expand, the
-per-run rows of `table --full`, failed and excluded runs, and the latest decisions. The warning
+idle lanes, failed and excluded runs, and the latest decisions. The warning
 count rides in the tab label and the page title. Every number is the supervisor's own
 `snapshot.json`, read through its `brief_view` (the brief printout's data), never recomputed here.
 `/api/experiments?hours=` (default 48, `api_version` 1) is the JSON behind it, under the same
