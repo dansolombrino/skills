@@ -100,7 +100,8 @@ failure, and a certificate about to expire or expired. It is what lets the user 
 chats: point it at a phone. `ntfy` needs only the app and an unguessable topic name (anyone who
 knows the topic reads it, so keep it private); the `phone-bridge` skill's Telegram bot
 (`["python3", "<phone-bridge>/scripts/bridge.py", "send", "{text}", "--context", "{context}"]`)
-gives every wave its own thread where the user talks to its agent, and renews a cluster's SSH
+gives every wave its own thread (in its project's own group, if it has one) where the user talks
+to its agent, and renews a cluster's SSH
 certificate from the phone; any command that takes the text as an argument
 works (`notify-send` for a desktop, a mail or chat CLI). Without it, notices exist only in the
 printout and `followups`.

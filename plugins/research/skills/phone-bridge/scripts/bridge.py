@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Telegram bridge on the hub: notices and conversations with the supervisor agents, and SSH certificate renewal.
 
-Every wave gets its own thread (a forum topic) holding a pinned, live status card; its notices land
-there, and whatever the user writes there (or in reply to one of its messages) goes to that wave's
-supervisor agent through `sweep-supervisor tell`, which resumes the session that wrote the message.
+Every wave gets its own thread (a forum topic) holding a pinned, live status card, closed when the
+wave finishes; its notices land there, and whatever the user writes there (or in reply to one of its
+messages) goes to that wave's supervisor agent through `sweep-supervisor tell`, which resumes the
+session that wrote the message. A project with its own group (`[phone.projects]`) has its waves'
+topics there; every other project shares the main chat.
 
 A cluster such as CINECA Leonardo hands out a 12-hour SSH certificate only after a browser login
 with a password and a one-time code. That login is the user's and stays the user's. This bridge
@@ -13,7 +15,7 @@ phone, the browser lands on the unreachable `http://127.0.0.1:<port>/?code=...` 
 user pastes that address back to the bot. The hub then redeems the code, has `step` sign the
 existing public key, and confirms the new validity. A pasted code is useless to anyone else.
 
-Only the configured chat is obeyed. Stdlib only; nothing listens on the network.
+Only the configured chats are obeyed. Stdlib only; nothing listens on the network.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ import subprocess
 import sys
 import time
 import tomllib
+import zlib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -49,6 +52,7 @@ CARD_EVERY_S = 120  # how often each wave's pinned status card is refreshed (an 
 MESSAGES_KEPT = 2000  # sent messages remembered for routing replies
 SUPERVISOR = Path(__file__).resolve().parents[2] / "sweep-supervisor" / "scripts" / "supervisor.py"
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+TOPIC_COLORS = (0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F)  # the only icon colors Telegram accepts
 
 
 class BridgeError(RuntimeError):
@@ -77,6 +81,15 @@ class Config:
     chat_id: int | None
     state_dir: Path
     logins: tuple[Login, ...]
+    projects: dict[str, int]  # project (its root's folder name) -> the group its waves' topics live in
+
+    @property
+    def chats(self) -> set[int]:
+        """Every chat the bot obeys: the main one and each project's group."""
+        return {chat for chat in (self.chat_id, *self.projects.values()) if chat is not None}
+
+    def chat_for(self, project: str | None) -> int | None:
+        return self.projects.get(project or "", self.chat_id)
 
 
 def _path(value: object, where: str) -> Path:
@@ -96,6 +109,9 @@ def load_config(registry: Path) -> Config:
     chat_id = phone.get("chat_id")
     if chat_id is not None and (not isinstance(chat_id, int) or isinstance(chat_id, bool)):
         raise BridgeError(f"{registry}: phone.chat_id must be an integer")
+    projects = phone.get("projects") or {}
+    if not isinstance(projects, dict) or not all(isinstance(v, int) and not isinstance(v, bool) for v in projects.values()):
+        raise BridgeError(f"{registry}: [phone.projects] maps each project's folder name to its group's chat id (an integer)")
     logins = []
     for rig, entry in (data.get("machines") or {}).items():
         login = entry.get("ssh_login") if isinstance(entry, dict) else None
@@ -121,6 +137,7 @@ def load_config(registry: Path) -> Config:
         chat_id=chat_id,
         state_dir=_path(phone.get("state_dir", "~/.local/state/phone-bridge"), f"{registry}: phone.state_dir"),
         logins=tuple(logins),
+        projects=dict(projects),
     )
 
 
@@ -174,11 +191,13 @@ def telegram(token: str, method: str, http_timeout: float = 30, **params: object
 
 
 def send(config: Config, text: str, token: str | None = None, thread: int | None = None, silent: bool = False,
-         reply_to: int | None = None) -> dict:
-    if config.chat_id is None:
+         reply_to: int | None = None, chat: int | None = None) -> dict:
+    """One message, to the main chat unless `chat` names a project's group."""
+    chat = chat if chat is not None else config.chat_id
+    if chat is None:
         raise BridgeError("phone.chat_id is not set yet: message the bot, then run `bridge.py chat-id`")
     reply = json.dumps({"message_id": reply_to, "allow_sending_without_reply": True}) if reply_to else None
-    result = telegram(token or read_token(config), "sendMessage", chat_id=config.chat_id, text=text[:4000], message_thread_id=thread,
+    result = telegram(token or read_token(config), "sendMessage", chat_id=chat, text=text[:4000], message_thread_id=thread,
                       disable_web_page_preview="true", disable_notification="true" if silent else None, reply_parameters=reply)
     return result if isinstance(result, dict) else {}
 
@@ -187,14 +206,15 @@ def send(config: Config, text: str, token: str | None = None, thread: int | None
 
 
 class ChatState:
-    """Each wave's thread and status card, and the wave and agent session behind every message sent,
-    so a reply reaches the agent that wrote. `send` runs as its own process per notice while `serve`
-    runs, so every use holds a file lock; 0600 like the rest of the state."""
+    """Each chat's kind, each wave's thread and status card, and the wave and agent session behind every
+    message sent, so a reply reaches the agent that wrote. Message ids are per chat, so messages are
+    keyed `<chat>:<id>`. `send` runs as its own process per notice while `serve` runs, so every use
+    holds a file lock; 0600 like the rest of the state."""
 
     def __init__(self, config: Config) -> None:
         self.dir = config.state_dir
         self.path = config.state_dir / "chat.json"
-        self.chat_id = config.chat_id
+        self.allowed = {str(chat) for chat in config.chats}
 
     def __enter__(self) -> "ChatState":
         self.dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -204,12 +224,13 @@ class ChatState:
             data = json.loads(self.path.read_text())
         except (OSError, ValueError):
             data = {}
-        if not isinstance(data, dict) or data.get("chat", self.chat_id) != self.chat_id:
-            data = {}  # another chat (phone.chat_id changed): its threads and messages do not exist here
-        self.forum: bool | None = data.get("forum")
-        self.topics: dict[str, dict] = data.get("topics") or {}
-        self.messages: dict[str, dict] = data.get("messages") or {}
-        self.receipts: dict[str, int] = data.get("receipts") or {}  # the user's message id on the hub -> the bot's status line
+        data = upgrade_state(data if isinstance(data, dict) else {})
+        # a chat no longer configured (phone.chat_id or a project's group changed): its threads and messages do not exist here
+        self.chats: dict[str, dict] = {chat: entry for chat, entry in data["chats"].items() if chat in self.allowed}
+        self.topics: dict[str, dict] = {key: topic for key, topic in data["topics"].items() if str(topic.get("chat")) in self.allowed}
+        self.messages: dict[str, dict] = {key: entry for key, entry in data["messages"].items() if key.split(":")[0] in self.allowed}
+        # the user's message id on the hub -> the bot's status line under it, [chat, message id]
+        self.receipts: dict[str, list] = {key: line for key, line in data["receipts"].items() if str(line[0]) in self.allowed}
         return self
 
     def __exit__(self, kind, *_exc) -> None:
@@ -218,54 +239,97 @@ class ChatState:
                 tmp = self.path.with_suffix(".tmp")
                 fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
                 with os.fdopen(fd, "w") as handle:
-                    json.dump({"chat": self.chat_id, "forum": self.forum, "topics": self.topics, "messages": self.messages,
+                    json.dump({"version": 2, "chats": self.chats, "topics": self.topics, "messages": self.messages,
                                "receipts": self.receipts}, handle)
                 os.replace(tmp, self.path)
         finally:
             fcntl.flock(self.handle, fcntl.LOCK_UN)
             self.handle.close()
 
-    def remember(self, message_id: object, context: dict) -> None:
+    def remember(self, chat: int, message_id: object, context: dict) -> None:
         if message_id is None:
             return
-        self.messages[str(message_id)] = {key: context[key] for key in ("project", "root", "wave", "session", "question") if context.get(key)}
+        self.messages[f"{chat}:{message_id}"] = {key: context[key] for key in ("project", "root", "wave", "session", "question") if context.get(key)}
         for stale in list(self.messages)[:-MESSAGES_KEPT]:
             del self.messages[stale]
 
-    def track(self, receipt: str, message_id: object) -> None:
+    def track(self, receipt: str, chat: int, message_id: object) -> None:
         if message_id is not None:
-            self.receipts[receipt] = message_id
+            self.receipts[receipt] = [chat, message_id]
         for stale in list(self.receipts)[:-MESSAGES_KEPT]:
             del self.receipts[stale]
 
-    def topic_by_thread(self, thread: int) -> dict | None:
-        return next((topic for topic in self.topics.values() if topic.get("thread") == thread), None)
+    def topic_by_thread(self, chat: int, thread: int) -> dict | None:
+        return next((topic for topic in self.topics.values() if topic.get("chat") == chat and topic.get("thread") == thread), None)
+
+
+def upgrade_state(data: dict) -> dict:
+    """The state as written since per-project groups; a one-chat state from before keeps its threads."""
+    if data.get("version") == 2:
+        return data
+    chat = data.get("chat")
+    if chat is None:
+        return {"chats": {}, "topics": {}, "messages": {}, "receipts": {}}
+    return {
+        "chats": {str(chat): {"forum": data.get("forum")}},
+        "topics": {key: {**topic, "chat": chat} for key, topic in (data.get("topics") or {}).items()},
+        "messages": {f"{chat}:{key}": entry for key, entry in (data.get("messages") or {}).items()},
+        "receipts": {key: [chat, line] for key, line in (data.get("receipts") or {}).items()},
+    }
 
 
 def wave_key(context: dict) -> str:
     return f"{context['root']}::{context['wave']}"
 
 
-def is_forum(config: Config, token: str, state: ChatState) -> bool:
-    """Whether the chat is a supergroup with topics; asked once, then remembered."""
-    if state.forum is None:
-        chat = telegram(token, "getChat", chat_id=config.chat_id)
-        state.forum = bool(isinstance(chat, dict) and chat.get("is_forum"))
-    return state.forum
+def project_of(context: dict) -> str:
+    return context.get("project") or Path(context["root"]).name
 
 
-def wave_thread(config: Config, token: str, state: ChatState, context: dict) -> int | None:
-    """The wave's topic, created on first use; None in a chat without topics, where every wave shares
-    the one thread and replies are routed by what they reply to."""
-    if not is_forum(config, token, state):
-        return None
+def is_forum(config: Config, token: str, state: ChatState, chat: int) -> bool:
+    """Whether the chat is a supergroup with topics; asked once per chat, then remembered."""
+    entry = state.chats.setdefault(str(chat), {})
+    if entry.get("forum") is None:
+        found = telegram(token, "getChat", chat_id=chat)
+        entry["forum"] = bool(isinstance(found, dict) and found.get("is_forum"))
+    return entry["forum"]
+
+
+def close_topic(token: str, topic: dict) -> None:
+    """Close a finished wave's topic: it sinks under the live ones with a lock, history kept, and an admin
+    (the user, the bot) can still write in it."""
+    try:
+        telegram(token, "closeForumTopic", chat_id=topic["chat"], message_thread_id=topic["thread"])
+    except BridgeError as exc:
+        if "NOT_MODIFIED" not in str(exc):  # already closed by hand
+            print(f"phone-bridge: cannot close {topic.get('name')}: {exc}", file=sys.stderr)
+    topic["closed"] = True
+
+
+def wave_thread(config: Config, token: str, state: ChatState, context: dict) -> tuple[int, int | None]:
+    """The chat and topic of the wave: its project's group if it has one, else the main chat. The topic
+    is created on first use (and again in a group set up after the wave started, closing the old one);
+    None in a chat without topics, where every wave shares the one thread and replies are routed by
+    what they reply to."""
+    project = project_of(context)
+    chat = config.chat_for(project)
+    if chat is None:
+        raise BridgeError("phone.chat_id is not set yet: message the bot, then run `bridge.py chat-id`")
+    if not is_forum(config, token, state, chat):
+        return chat, None
     key = wave_key(context)
-    if key not in state.topics:
-        name = f"{context.get('project') or Path(context['root']).name} · {context['wave']}"[:128]
-        created = telegram(token, "createForumTopic", chat_id=config.chat_id, name=name)
-        state.topics[key] = {"thread": created["message_thread_id"], "name": name, "project": context.get("project"),
-                             "root": context["root"], "wave": context["wave"], "card": None, "card_text": None, "done": False}
-    return state.topics[key]["thread"]
+    topic = state.topics.get(key)
+    if topic is None or topic.get("chat") != chat:
+        if topic and not topic.get("closed"):
+            close_topic(token, topic)
+        # in the project's own group the wave alone names it; in the shared chat the project's color groups its waves
+        name = (context["wave"] if chat != config.chat_id else f"{project} · {context['wave']}")[:128]
+        created = telegram(token, "createForumTopic", chat_id=chat, name=name,
+                           icon_color=TOPIC_COLORS[zlib.crc32(project.encode()) % len(TOPIC_COLORS)])
+        topic = state.topics[key] = {"chat": chat, "thread": created["message_thread_id"], "name": name, "project": project,
+                                     "root": context["root"], "wave": context["wave"], "card": None, "card_text": None,
+                                     "done": False, "closed": False}
+    return chat, topic["thread"]
 
 
 def send_notice(config: Config, text: str, context: dict, token: str | None = None) -> None:
@@ -275,37 +339,44 @@ def send_notice(config: Config, text: str, context: dict, token: str | None = No
     with ChatState(config) as state:
         lines = [state.receipts[r] for r in context.get("receipts") or [] if r in state.receipts]
         if lines and context.get("body"):
-            for message_id in lines:  # a receipt edits the status line under the user's message
+            for chat, message_id in lines:  # a receipt edits the status line under the user's message
                 try:
-                    telegram(token, "editMessageText", chat_id=config.chat_id, message_id=message_id, text=context["body"][:4000])
+                    telegram(token, "editMessageText", chat_id=chat, message_id=message_id, text=context["body"][:4000])
                 except BridgeError as exc:
                     if "not modified" not in str(exc):
                         raise
             return
-        thread = None
+        chat, thread = config.chat_id, None
         if context.get("wave") and context.get("root"):
             try:
-                thread = wave_thread(config, token, state, context)
+                chat, thread = wave_thread(config, token, state, context)
             except BridgeError as exc:  # no topic rights: the main thread still gets it
                 print(f"phone-bridge: no thread for {context['wave']}: {exc}", file=sys.stderr)
-        message = send(config, (context.get("body") or text) if thread else text, token, thread, bool(context.get("silent")))
+        try:
+            message = send(config, (context.get("body") or text) if thread else text, token, thread, bool(context.get("silent")), chat=chat)
+        except BridgeError as exc:
+            if chat == config.chat_id:
+                raise
+            print(f"phone-bridge: {project_of(context)}'s group refused the notice, sent to the main chat: {exc}", file=sys.stderr)
+            chat, message = config.chat_id, send(config, text, token, None, bool(context.get("silent")))
         if context.get("wave") and context.get("root"):
-            state.remember(message.get("message_id"), context)
+            state.remember(chat, message.get("message_id"), context)
 
 
 def conversation(config: Config, message: dict) -> dict | None:
     """The wave (and agent session) a user's message is for: the message it replies to, else the topic
-    it was written in; in a chat without topics, the wave that wrote last. None in the general thread."""
+    it was written in; in a chat without topics, the wave that wrote there last. None in a general thread."""
+    chat = (message.get("chat") or {}).get("id", config.chat_id)
     with ChatState(config) as state:
         replied = (message.get("reply_to_message") or {}).get("message_id")
-        if replied is not None and str(replied) in state.messages:
-            return dict(state.messages[str(replied)])
-        if message.get("is_topic_message") and (topic := state.topic_by_thread(message.get("message_thread_id"))):
+        if replied is not None and f"{chat}:{replied}" in state.messages:
+            return dict(state.messages[f"{chat}:{replied}"])
+        if message.get("is_topic_message") and (topic := state.topic_by_thread(chat, message.get("message_thread_id"))):
             return {key: topic[key] for key in ("project", "root", "wave") if topic.get(key)}
-        if state.forum or not state.messages:
+        here = [entry for key, entry in state.messages.items() if key.split(":")[0] == str(chat)]
+        if (state.chats.get(str(chat)) or {}).get("forum") or not here:
             return None
-        latest = list(state.messages.values())[-1]
-        return {key: latest[key] for key in ("project", "root", "wave") if latest.get(key)}
+        return {key: here[-1][key] for key in ("project", "root", "wave") if here[-1].get(key)}
 
 
 def supervisor(config: Config, root: str, *argv: str, timeout: float = 60) -> subprocess.CompletedProcess:
@@ -350,17 +421,21 @@ def wave_card(config: Config, root: str, wave: str) -> tuple[str, bool] | None:
 
 def refresh_cards(config: Config, token: str) -> None:
     """Give every supervised wave a thread with a pinned status card, and keep the card current by
-    editing it: the live state never costs a new message or a sound."""
+    editing it: the live state never costs a new message or a sound. A finished wave's topic is closed."""
     waves = supervisor(config, str(Path.home()), "waves")
     with ChatState(config) as state:
-        if not is_forum(config, token, state):
-            return
         for line in waves.stdout.splitlines() if waves.returncode == 0 else []:
             wave_id, _, root = line.partition("\t")
-            if root and f"{root}::{wave_id}" not in state.topics:
-                wave_thread(config, token, state, {"root": root, "wave": wave_id, "project": Path(root).name})
+            topic = state.topics.get(f"{root}::{wave_id}")
+            if root and not (topic and topic.get("done")):
+                try:
+                    wave_thread(config, token, state, {"root": root, "wave": wave_id, "project": Path(root).name})
+                except BridgeError as exc:  # one group without topic rights leaves the others' cards current
+                    print(f"phone-bridge: no thread for {wave_id}: {exc}", file=sys.stderr)
         for topic in state.topics.values():
             if topic.get("done"):
+                if not topic.get("closed"):
+                    close_topic(token, topic)
                 continue
             card = wave_card(config, topic["root"], topic["wave"])
             if card is None:
@@ -368,16 +443,18 @@ def refresh_cards(config: Config, token: str) -> None:
             text, finished = card
             if topic.get("card") and text != topic.get("card_text"):
                 try:
-                    telegram(token, "editMessageText", chat_id=config.chat_id, message_id=topic["card"], text=text[:4000])
+                    telegram(token, "editMessageText", chat_id=topic["chat"], message_id=topic["card"], text=text[:4000])
                 except BridgeError as exc:
                     if "not modified" not in str(exc):
                         topic["card"] = None  # deleted or too old to edit: post a new one
             if not topic.get("card"):
-                topic["card"] = send(config, text, token, topic["thread"], silent=True).get("message_id")
+                topic["card"] = send(config, text, token, topic["thread"], silent=True, chat=topic["chat"]).get("message_id")
                 with contextlib.suppress(BridgeError):
-                    telegram(token, "pinChatMessage", chat_id=config.chat_id, message_id=topic["card"], disable_notification="true")
-                state.remember(topic["card"], topic)
+                    telegram(token, "pinChatMessage", chat_id=topic["chat"], message_id=topic["card"], disable_notification="true")
+                state.remember(topic["chat"], topic["card"], topic)
             topic.update(card_text=text, done=finished)
+            if finished:
+                close_topic(token, topic)
 
 
 # ───────────────────────────── certificates ─────────────────────────────
@@ -602,7 +679,8 @@ def serve(config: Config) -> int:
     token = read_token(config)
     if config.chat_id is None:
         raise BridgeError("phone.chat_id is not set yet: message the bot, then run `bridge.py chat-id`")
-    print(f"[serve] {Path(__file__).resolve()}: chat {config.chat_id}, {len(config.logins)} certificate(s) watched", flush=True)
+    print(f"[serve] {Path(__file__).resolve()}: chat {config.chat_id}, {len(config.projects)} project group(s), "
+          f"{len(config.logins)} certificate(s) watched", flush=True)
     try:
         register_commands(config, token)
     except BridgeError as exc:
@@ -632,7 +710,7 @@ def serve(config: Config) -> int:
         for update in updates or []:
             offset = update["update_id"] + 1
             message = update.get("message") or {}
-            if (message.get("chat") or {}).get("id") != config.chat_id or not message.get("text") or (message.get("from") or {}).get("is_bot"):
+            if (message.get("chat") or {}).get("id") not in config.chats or not message.get("text") or (message.get("from") or {}).get("is_bot"):
                 continue  # anyone else is ignored, silently
             thread = message.get("message_thread_id") if message.get("is_topic_message") else None
             try:
@@ -644,17 +722,18 @@ def serve(config: Config) -> int:
 def respond(config: Config, token: str, message: dict, thread: int | None) -> None:
     """Answer one message in the thread it came from. A message passed to an agent gets a silent
     status line under it instead, which the supervisor edits as the agent takes it, answers or fails."""
+    chat = (message.get("chat") or {}).get("id", config.chat_id)
     try:
         reply = handle(config, token, message["text"], conversation(config, message))
     except BridgeError as exc:
         reply = f"✗ {exc}"
     if isinstance(reply, str):
-        send(config, reply, token, thread, reply_to=message.get("message_id"))
+        send(config, reply, token, thread, reply_to=message.get("message_id"), chat=chat)
         return
     line = send(config, f"📨 received · waiting for the wave's agent · id {reply.receipt}", token, thread, silent=True,
-                reply_to=message.get("message_id"))
+                reply_to=message.get("message_id"), chat=chat)
     with ChatState(config) as state:
-        state.track(reply.receipt, line.get("message_id"))
+        state.track(reply.receipt, chat, line.get("message_id"))
 
 
 def chat_ids(config: Config) -> int:
@@ -728,6 +807,8 @@ def main(argv: list[str] | None = None) -> int:
             read_token(config)
             print(f"OK token file {config.token_file}")
             print(f"OK chat {config.chat_id}" if config.chat_id is not None else "TODO phone.chat_id: message the bot, then run chat-id")
+            for project, chat in config.projects.items():
+                print(f"OK {project}: its waves' topics in chat {chat}")
             for login in config.logins:
                 print(f"OK {login.rig}: {login.identity} via {login.provisioner}, key {login.public_key}, cert {login.cert}")
             return 0 if config.chat_id is not None else 1

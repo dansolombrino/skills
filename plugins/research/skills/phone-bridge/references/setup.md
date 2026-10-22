@@ -19,6 +19,17 @@ Then make the chat the bot lives in, so each wave gets its own thread:
 3. Write anything in the group, then run `chat-id`: the row marked `supergroup with topics` (a
    negative id) is `phone.chat_id`.
 
+Finished waves' topics are closed (a lock, history kept, still writable by you and the bot), so the
+live ones stay on top.
+
+**A group per project (optional).** Bots cannot create groups, so for each project that should have
+its own, repeat steps 1–3 with a group named after it, then map the project (its root's folder
+name, as the topics show it) to that group's id under `[phone.projects]`. Its waves' topics are
+then named by the wave alone; a project without a group keeps sharing the main chat, where each
+project's topics share an icon color. Mapping a project while a wave runs moves that wave to a new
+topic in the group and closes the old one. Certificate notices always go to the main chat. A Telegram
+chat folder holding the groups keeps them together on the phone.
+
 A one-to-one chat with the bot also works, without threads: every wave shares it, the wave name
 prefixes each notice, a reply reaches the wave of the message it replies to, and plain text goes to
 the wave that wrote last.
@@ -30,6 +41,9 @@ the wave that wrote last.
 token_file = "~/.config/phone-bridge/telegram.token"
 chat_id = -1001234567890                 # from `bridge.py chat-id`: the group with topics
 # state_dir = "~/.local/state/phone-bridge"   # default; pending logins, wave threads, owner-only
+
+[phone.projects]                          # optional: projects with their own group
+my-project = -1009876543210               # project root's folder name = its group's chat id
 
 [machines.leonardo]
 ssh_cert = "~/.ssh/id_leonardo-cert.pub"  # also read by sweep-supervisor's certificate watch
@@ -66,4 +80,5 @@ a fresh agent, the supervisor's agent profile declares `resume_command` (its set
 
 The bridge calls `sweep-supervisor`'s script beside this skill (`tell`, `table`, `waves`), so both
 come from the same plugin install. In the state directory, `chat.json` maps every message the bot
-sent to its wave and session; deleting it only forgets threads and routing.
+sent to its wave and session; deleting it only forgets threads and routing. The bot obeys only
+`phone.chat_id` and the groups under `[phone.projects]`.

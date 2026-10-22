@@ -324,10 +324,62 @@ class WaveThreadTests(unittest.TestCase):
         self.assertEqual([m for m, _ in self.calls], [], "an unchanged card costs nothing")
         self.table = "Status written 2026-10-22 at 12:01 — finished 12:01 · 4/4 done\n"
         bridge.refresh_cards(self.config, "tok")
-        self.assertEqual([m for m, _ in self.calls], ["editMessageText"])
+        self.assertEqual([m for m, _ in self.calls], ["editMessageText", "closeForumTopic"], "a finished wave's topic is closed")
         self.calls.clear()
         bridge.refresh_cards(self.config, "tok")
         self.assertEqual(self.calls, [], "a finished wave's card stays as it ended")
+
+    def test_a_project_with_its_own_group_gets_its_waves_topics_there(self) -> None:
+        self.config = dataclasses.replace(self.config, projects={"proj": -2002})
+        other = {"kind": "say", "project": "other", "root": "/home/u/other", "wave": "C", "body": "c"}
+        bridge.send_notice(self.config, "proj wave A: hi", self.notice("A", body="hi"), token="tok")
+        hi = self.next_id
+        bridge.send_notice(self.config, "other wave C: c", other, token="tok")
+        created = [data for method, data in self.calls if method == "createForumTopic"]
+        self.assertEqual([(c["chat_id"], c["name"]) for c in created], [(-2002, "A"), (-1001, "other · C")],
+                         "in its own group the wave alone names the topic")
+        a, c = self.sent()
+        self.assertEqual((a["chat_id"], c["chat_id"]), (-2002, -1001))
+        self.assertIn(created[1]["icon_color"], bridge.TOPIC_COLORS)
+        self.assertEqual(self.config.chats, {-1001, -2002})
+        question = {"message_id": 5, "text": "how far?", "chat": {"id": -2002}, "reply_to_message": {"message_id": hi}}
+        # message ids are per chat: the same id in the main chat is not this conversation
+        self.assertIsNone(bridge.conversation(self.config, {**question, "chat": {"id": -1001}}))
+        bridge.respond(self.config, "tok", question, None)
+        self.assertEqual(self.supervisor_calls[-1][:4], (self.ROOT, "tell", "--wave", "A"))
+        self.assertEqual(self.sent()[-1]["chat_id"], -2002, "the status line goes where the user wrote")
+
+    def test_a_group_set_up_while_a_wave_runs_takes_it_over_and_closes_the_old_topic(self) -> None:
+        bridge.send_notice(self.config, "proj wave A: hi", self.notice("A", body="hi"), token="tok")
+        old_thread = self.sent()[-1]["message_thread_id"]
+        self.config = dataclasses.replace(self.config, projects={"proj": -2002})
+        bridge.send_notice(self.config, "proj wave A: again", self.notice("A", body="again"), token="tok")
+        self.assertIn(("closeForumTopic", {"chat_id": -1001, "message_thread_id": old_thread}), self.calls)
+        self.assertEqual(self.sent()[-1]["chat_id"], -2002)
+
+    def test_finished_waves_from_before_are_closed_once_and_old_state_keeps_its_threads(self) -> None:
+        self.config.state_dir.mkdir(parents=True)
+        (self.config.state_dir / "chat.json").write_text(json.dumps({
+            "chat": -1001, "forum": True, "messages": {"77": {"root": self.ROOT, "wave": "A"}}, "receipts": {"r1": 78},
+            "topics": {f"{self.ROOT}::old": {"thread": 9, "name": "proj · old", "root": self.ROOT, "wave": "old", "done": True},
+                       f"{self.ROOT}::20261022-090000": {"thread": 10, "name": "proj · 20261022-090000", "root": self.ROOT,
+                                                         "wave": "20261022-090000", "card": 11, "card_text": self.table.strip(), "done": False}}}))
+        bridge.refresh_cards(self.config, "tok")
+        self.assertEqual(self.calls, [("closeForumTopic", {"chat_id": -1001, "message_thread_id": 9})],
+                         "no new topic, no getChat: the old state's thread and chat kind carry over")
+        self.calls.clear()
+        bridge.refresh_cards(self.config, "tok")
+        self.assertEqual(self.calls, [])
+        reply = {"message_id": 80, "text": "go", "chat": {"id": -1001}, "reply_to_message": {"message_id": 77}}
+        self.assertEqual(bridge.conversation(self.config, reply)["wave"], "A")
+        bridge.send_notice(self.config, "x", self.notice("A", kind="receipt", body="✓ done", receipts=["r1"]), token="tok")
+        self.assertEqual(self.calls[-1], ("editMessageText", {"chat_id": -1001, "message_id": 78, "text": "✓ done"}))
+
+    def test_a_project_group_must_be_an_integer_chat_id(self) -> None:
+        registry = self.config.registry
+        registry.write_text(registry.read_text() + '\n[phone.projects]\nproj = "-100"\n')
+        with self.assertRaisesRegex(bridge.BridgeError, "phone.projects"):
+            bridge.load_config(registry)
 
 
 if __name__ == "__main__":

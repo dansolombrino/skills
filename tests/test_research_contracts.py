@@ -70,7 +70,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "14.3.0")
+        self.assertEqual(manifest["version"], "14.4.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -1263,7 +1263,7 @@ SIZE_BUDGETS = {
     "environment-sync/SKILL.md": 8_500,
     "experiment-design/SKILL.md": 6_500,
     "experiments-tracking/SKILL.md": 7_500,
-    "phone-bridge/SKILL.md": 4_750,
+    "phone-bridge/SKILL.md": 5_100,
     "research-journal/SKILL.md": 2_500,
     "research-project-init/SKILL.md": 5_500,
     "rig-board/SKILL.md": 13_000,
