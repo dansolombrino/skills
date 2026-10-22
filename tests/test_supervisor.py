@@ -387,7 +387,8 @@ class SupervisorTests(unittest.TestCase):
         rig_lines = [line for line in lines if line.startswith("  hub ") or line.startswith("  peer ")]
         self.assertEqual(len(rig_lines), 2)
         self.assertIn("1 GPU ·", rig_lines[0])
-        self.assertIn("⚠ needs you [q1] use behemoth gpu 5? — meanwhile: gpu 5 stays unused", out)
+        self.assertIn("❓ waiting on you: q1", out)
+        self.assertNotIn("use behemoth gpu 5?", out, "the question's text went out once with ask; the status only names it")
         self.assertNotIn("| rig | gpu |", out)
 
     def test_brief_counts_a_slurm_rigs_finished_jobs_and_reports_what_is_in_flight(self) -> None:
@@ -421,7 +422,11 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual([w["kind"] for w in view["warnings"]], ["lane", "failed", "cert", "question"])
         brief = supervisor.render_brief(snapshot)
         for item in view["warnings"]:
-            self.assertIn(f"⚠ {item['line']}", brief, "the page and the chat print the same warnings")
+            if item["kind"] == "question":
+                self.assertIn(f"❓ waiting on you: {item['id']}", brief)
+                self.assertNotIn(item["text"], brief)
+            else:
+                self.assertIn(f"⚠ {item['line']}", brief, "the page and the chat print the same warnings")
 
     def test_running_cluster_jobs_bound_the_wave_eta(self) -> None:
         self.assertEqual(supervisor.with_cluster_jobs(0.0, "feeder simulation", {"c job 1": 3600.0}), (3600.0, "running cluster jobs' progress"))

@@ -1703,7 +1703,9 @@ def brief_view(snapshot: dict, at: datetime | None = None) -> dict:
 
 def render_brief(snapshot: dict) -> str:
     """The chat printout: the wave ETA first, one line per rig only when there are several, and a
-    warning line only for what needs a look. The per-GPU table stays in `table --full` and table.md."""
+    warning line only for what needs a look. An open question is only named by its id: its text went
+    out once with `ask`, and repeating it on every refresh buries the status. The per-GPU table stays
+    in `table --full` and table.md."""
     at = now()
     view = brief_view(snapshot, at)
     eta = view["eta"]
@@ -1724,8 +1726,11 @@ def render_brief(snapshot: dict) -> str:
                 when = f"free {clock(item['free_at'], at)}" if item["free_at"] else "idle"
             mark = "  ← last to finish" if item["last_to_finish"] else ""
             lines.append(f"  {item['rig'].ljust(width)}  {item['units']} {item['unit']} · {item['done']} done · {when}{mark}")
-    if view["warnings"]:
-        lines += [""] + [f"⚠ {item['line']}" for item in view["warnings"]]
+    warnings = [f"⚠ {item['line']}" for item in view["warnings"] if item["kind"] != "question"]
+    if asked := [item["id"] for item in view["warnings"] if item["kind"] == "question"]:
+        warnings.append(f"❓ waiting on you: {', '.join(asked)}")
+    if warnings:
+        lines += [""] + warnings
     return "\n".join(lines) + "\n"
 
 

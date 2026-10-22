@@ -78,8 +78,8 @@ episode). The scheduled tick (`tick_every`, default 30 minutes) is only a safety
   completion notices, say once that status is on request and in the dashboard.
 - **A timed printout** only when the user asks for one: the host's scheduled wake-up at their
   interval, never a shell `sleep`.
-- **Questions:** a `⚠ needs you [<id>]` line is a supervisor question; record the user's answer
-  with `answer` (the service wakes the agent on it). A chat waiting on the user never stops the
+- **Questions:** a `⚠ needs you [<id>]` line is a supervisor question (the status names only its
+  id); record the user's answer with `answer` (the service wakes the agent on it). A chat waiting on the user never stops the
   wave: the service carries on and the stated status quo holds.
 - **Direct requests** ("move X to behemoth", "stop using the 3080", "add gpu 3, Marco lent it") go
   through the commands the agent uses (`queue`, `lane`, `lane add`, `steal`) with
