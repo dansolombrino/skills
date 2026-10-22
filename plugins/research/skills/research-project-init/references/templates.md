@@ -16,8 +16,8 @@ trees.
 | `checkpoints/` | checkpoints produced by trainings/finetunings |
 | `code/` | experiment code (hydra-configured) |
 | `config/` | hydra yaml configs for `code/`, plus each experiment's run_id and glossary files |
-| `evaluations/` | data produced by running experiments (+ `.status.json` markers) |
-| `logs/` | run logs — tee'd stdout+stderr per run, wandb files (gitignored, rig-local) |
+| `evaluations/` | data produced by running experiments (+ `.status.json` markers, `metrics.jsonl` curves) |
+| `logs/` | run logs — tee'd stdout+stderr per run (gitignored, rig-local) |
 | `plots/` | plots produced by `visualizations/` |
 | `scripts/` | shell scripts that launch experiments/sweeps |
 | `tests/` | optional pytest unit tests, mirroring `code/` and `visualizations/` inside itself |
@@ -118,8 +118,6 @@ Project notes live in `AGENTS.md`. Read @AGENTS.md before doing anything.
 ## .env.example (committed key mirror)
 
 ```bash
-WANDB_API_KEY=
-
 # Hugging Face credentials (secrets; keep values only in .env)
 HF_TOKEN=
 HUGGING_FACE_HUB_TOKEN=
@@ -147,8 +145,6 @@ Project-scoped storage stays **relative to the project root**, which `rig-sync d
 requires to sit on a declared storage root, so one file is right on every rig.
 
 ```bash
-WANDB_API_KEY=
-
 HF_TOKEN=
 HUGGING_FACE_HUB_TOKEN=
 
@@ -233,11 +229,10 @@ explorer but out of the watcher, search, and Python analysis.
     "{{ENVIRONMENT_NAME}}/**": true,
     ".rigsync_cache/**": true,
     ".pytest_cache/**": true,
-    "**/__pycache__/**": true,
-    "**/wandb/**": true
+    "**/__pycache__/**": true
   },
 
-  // logs/wandb/ holds symlinks (latest-run, debug logs) that can walk the
+  // logs/ can hold symlinks (latest-run, debug logs) that can walk the
   // watcher and search outside the workspace entirely.
   "files.followSymlinks": false,
   "search.followSymlinks": false,
@@ -460,7 +455,7 @@ value, elect its top-level subtree key. A run's directory is ``rid-<32 hex>``:
 sha256 of the canonical JSON ``{"layout": "hashed-v2", "params": {param:
 value-or-null}}`` (sorted keys, so param order never matters; a param missing
 from the config hashes as null). run_id_label() gives the readable ``k=v,...``
-WandB display name; the hash (run_id_name) is a WandB tag, never the WandB id.
+shown beside the hash (run_id_name), which stays the identity.
 Changing the identifying params means a new version plus a run_id migration
 that renames every hash through RUN_ID_HISTORY.json.
 
@@ -507,11 +502,6 @@ run_id. plots/ is not run-scoped and needs no guard. The guard's I/O is O(1)
 per run: it never scans the experiment or writes RUN_ID_MAP.json. The map is
 rebuilt once per wave with write_run_id_map(), and check_run_id_plan() rescans
 every record before dispatch.
-
-Scripts that use wandb must call wandb.init(config=wandb_config(cfg)) — the whole
-resolved config, never a subset. Under hashed-v2 the one form is
-wandb.init(name=run_id_label(cfg, params), tags=[run_id_name(cfg, params,
-layout="hashed-v2")], config=wandb_config(cfg)).
 """
 
 import hashlib
@@ -738,11 +728,10 @@ def run_id_name(cfg, params, *, layout="nested", segments=None) -> str:
     """The one string identity of a run.
 
     Under segments-v2 (and a legacy segments-v1 pin) it is the rendered run_id
-    path in POSIX form, used for the wandb run name, the EXPERIMENTS.md
-    ``run_id`` column, and the Slurm job-name suffix, so every surface matches
-    the directories on disk. Under hashed-v2 it is the hash itself: the WandB
-    tag, while run_id_label is the WandB display name. Other legacy layouts keep
-    ``run_id_flat``.
+    path in POSIX form, used for the EXPERIMENTS.md ``run_id`` column and the
+    Slurm job-name suffix, so every surface matches the directories on disk.
+    Under hashed-v2 it is the hash itself, while run_id_label is the readable
+    label shown beside it. Other legacy layouts keep ``run_id_flat``.
     """
     if layout in SEGMENTS_LAYOUTS:
         return run_id_path(cfg, params, layout=layout, segments=segments).as_posix()
@@ -794,7 +783,7 @@ def run_id_hash_v2(cfg, params) -> str:
 
 
 def run_id_label(cfg, params) -> str:
-    """Readable lossless ``k=v,...`` for a hashed-v2 run: the wandb display name only.
+    """Readable lossless ``k=v,...`` for a hashed-v2 run: a display label only.
 
     Never a path or an identity: the hash is the identity.
     """
@@ -1291,7 +1280,7 @@ def run_id_flat(cfg, params) -> str:
 
     The complete, lossless identity string: recorded in .run_id.json and
     RUN_ID_MAP.json under every layout. Legacy non-segment layouts also use it
-    for scripts/ and logs/ run-folder names, wandb run names, and EXPERIMENTS.md
+    for scripts/ and logs/ run-folder names and EXPERIMENTS.md
     rows; segments layouts use run_id_path()/run_id_name() there instead.
     """
     return ",".join(_run_id_pairs(cfg, params))
@@ -1306,9 +1295,8 @@ def resolved_config(cfg) -> dict:
     """The run's ENTIRE config, resolved and json-normalized.
 
     Single source of truth for "the full config of this run", wherever it is
-    recorded: the .run_config.json snapshot AND the wandb run config are both
-    built from this, so the two can never disagree. Do not resolve a config
-    anywhere else; do not record a hand-picked subset anywhere.
+    recorded: the .run_config.json snapshot is built from this. Do not resolve
+    a config anywhere else; do not record a hand-picked subset anywhere.
     """
     try:
         from omegaconf import OmegaConf
@@ -1322,33 +1310,6 @@ def resolved_config(cfg) -> dict:
         else cfg
     )
     return json.loads(json.dumps(raw, sort_keys=True, default=str))
-
-
-def wandb_config(cfg) -> dict:
-    """Payload for wandb.init(config=...): whole config + wave provenance.
-
-    Provenance sits in its own "provenance" namespace and is read from the env
-    vars the wave script exports (same set StatusWriter records), NOT from config
-    params: they must stay out of resolved_config()/.run_config.json, or every
-    relaunch in a new wave or on another GPU would trip the run_id-collision hard
-    error. In wandb they are pure gain — they make runs filterable by tested
-    commit, rig/GPU, and environment fingerprint, not just hyperparameters.
-    """
-    resolved = resolved_config(cfg)
-    if "provenance" in resolved:
-        raise RuntimeError(
-            "config has a top-level 'provenance' key, which would be shadowed by "
-            "wave provenance in the wandb run config — rename the config key."
-        )
-    resolved["provenance"] = {
-        "wave_id": os.environ.get("WAVE_ID"),
-        "gpu": os.environ.get("CUDA_VISIBLE_DEVICES"),
-        "rig": os.environ.get("LANE_RIG"),
-        "source_revision": os.environ.get("SOURCE_REVISION"),
-        "source_tag": os.environ.get("SOURCE_TAG"),
-        "environment_fingerprint": os.environ.get("ENVIRONMENT_FINGERPRINT"),
-    }
-    return resolved
 
 
 def guard_run_config(
@@ -1650,3 +1611,85 @@ class StatusWriter:
 Call `heartbeat(completed=<done>, total=<total>, unit=<label>)` after every completed training or
 evaluation unit. A daemon thread refreshes liveness and elapsed time every 60 seconds, so a long
 unit still looks alive.
+
+## code/common/metrics.py
+
+```python
+"""Append-only per-run metric log: every tracked scalar, kept offline."""
+
+import datetime
+import json
+import os
+from pathlib import Path
+
+
+class MetricsWriter:
+    """Own evaluations/NNN_exp/<run_id path>/metrics.jsonl for one run.
+
+    One JSON object per line: {"step": <int>, "time": <iso>, <key>: <number>, ...}.
+    A fresh run truncates the file; a run that restored its training state
+    appends, so steps it repeats after the restored checkpoint are logged twice
+    and read_metrics() keeps the last value of each (step, key).
+    """
+
+    def __init__(self, eval_dir, *, resume=False):
+        self.path = Path(eval_dir) / "metrics.jsonl"
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._file = self.path.open("a" if resume else "w", encoding="utf-8")
+
+    def log(self, metrics, *, step):
+        """Record one step's scalars; values are anything float() accepts (tensors included)."""
+        if not isinstance(step, int) or isinstance(step, bool) or step < 0:
+            raise ValueError("step must be a non-negative int")
+        if not metrics:
+            raise ValueError("metrics must not be empty")
+        record = {
+            "step": step,
+            "time": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+        }
+        for key, value in metrics.items():
+            if not isinstance(key, str) or not key or key in record:
+                raise ValueError(f"bad metric key {key!r}")
+            if isinstance(value, bool):
+                raise ValueError(f"metric {key} is a bool, not a number")
+            record[key] = value if isinstance(value, int) else float(value)
+        self._file.write(json.dumps(record) + "\n")
+        self._file.flush()
+        os.fsync(self._file.fileno())
+
+    def close(self):
+        self._file.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+
+def read_metrics(eval_dir) -> dict:
+    """{key: [(step, value), ...]} sorted by step; the last value of a repeated step wins.
+
+    A torn last line (the run was killed mid-write) is skipped; NaN and inf are kept.
+    """
+    path = Path(eval_dir) / "metrics.jsonl"
+    latest: dict = {}
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    for index, line in enumerate(lines):
+        try:
+            record = json.loads(line)
+        except ValueError:
+            if index == len(lines) - 1:
+                break
+            raise
+        step = record["step"]
+        for key, value in record.items():
+            if key not in ("step", "time"):
+                latest.setdefault(key, {})[step] = value
+    return {key: sorted(values.items()) for key, values in latest.items()}
+```
+
+Open one `MetricsWriter(<eval run dir>, resume=<training state was restored>)` per entrypoint,
+after `guard_run_config` and inside `StatusWriter`, and call `log({"train/loss": ..., ...},
+step=<global step>)` wherever a metric is computed. Plotters read it with `read_metrics`.

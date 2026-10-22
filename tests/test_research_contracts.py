@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 import os
 import re
 import subprocess
@@ -70,7 +71,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "14.5.1")
+        self.assertEqual(manifest["version"], "14.6.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -1176,46 +1177,59 @@ class ResearchContractTests(unittest.TestCase):
             self.assertFalse(writer.path.with_suffix(".json.tmp").exists())
 
     def test_run_id_template_resolves_the_config_in_exactly_one_place(self) -> None:
-        """One resolver, every recorder -- so wandb and .run_config.json cannot drift."""
+        """One resolver for every recorder of the whole config."""
         block = run_id_template()
         self.assertEqual(block.count("OmegaConf.to_container"), 1)
         self.assertIn("def resolved_config(cfg)", block)
-        self.assertIn("def wandb_config(cfg)", block)
-        self.assertIn("resolved = resolved_config(cfg)", block)
+        self.assertNotIn("wandb", block.lower())
 
-    def test_wandb_config_carries_the_whole_config_plus_wave_provenance(self) -> None:
+    def test_metrics_writer_logs_offline_and_reads_back_last_value_per_step(self) -> None:
         namespace: dict[str, object] = {}
-        stub = type(sys)("omegaconf")
-        stub.OmegaConf = type(
-            "OmegaConf",
-            (),
-            {"is_config": staticmethod(lambda cfg: False)},
-        )
-        sys.modules["omegaconf"] = stub
-        try:
-            exec(compile(run_id_template(), "run_id.py", "exec"), namespace)
-            wandb_config = namespace["wandb_config"]
-            guard_run_config = namespace["guard_run_config"]
+        exec(compile(template_block("code/common/metrics.py"), "metrics.py", "exec"), namespace)
+        metrics_writer, read_metrics = namespace["MetricsWriter"], namespace["read_metrics"]
 
-            cfg = {"model": "mlp", "lr": 0.001, "seed": 0, "batch_size": 32}
-            logged = wandb_config(cfg)
-            provenance = logged.pop("provenance")
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "rid-x"
+            with metrics_writer(run_dir) as writer:
+                writer.log({"train/loss": 2.0, "train/acc": 0.1}, step=0)
+                writer.log({"train/loss": 1.5}, step=1)
+                writer.log({"val/loss": float("nan")}, step=1)
+                for bad in ({}, {"step": 1.0}, {"train/ok": True}):
+                    with self.assertRaises(ValueError):
+                        writer.log(bad, step=2)
+                with self.assertRaises(ValueError):
+                    writer.log({"train/loss": 1.0}, step=-1)
+                with self.assertRaises(ValueError):
+                    writer.log({"train/loss": 1.0}, step=1.0)
+            first = (run_dir / "metrics.jsonl").read_text().splitlines()
+            self.assertEqual(len(first), 3)
+            self.assertIsNotNone(datetime.fromisoformat(json.loads(first[0])["time"]).tzinfo)
 
-            # everything, not just the run_id params
-            self.assertEqual(logged, cfg)
-            self.assertEqual(set(provenance), status_provenance_fields())
+            # a resumed run appends and repeats step 1: the later value wins
+            with metrics_writer(run_dir, resume=True) as writer:
+                writer.log({"train/loss": 1.25}, step=1)
+                writer.log({"train/loss": 1.0}, step=2)
+            with (run_dir / "metrics.jsonl").open("a") as torn:
+                torn.write('{"step": 3, "train/lo')
+            curves = read_metrics(run_dir)
+            self.assertEqual(curves["train/loss"], [(0, 2.0), (1, 1.25), (2, 1.0)])
+            self.assertEqual(curves["train/acc"], [(0, 0.1)])
+            self.assertTrue(math.isnan(curves["val/loss"][0][1]))
 
-            with tempfile.TemporaryDirectory() as tmp:
-                run_dir = Path(tmp) / "run"
-                guard_run_config(cfg, ["model", "lr", "seed"], run_dir)
-                snapshot = json.loads((run_dir / ".run_config.json").read_text())
-            # the wandb payload is the snapshot plus provenance -- never a subset
-            self.assertEqual(logged, snapshot)
+            # a fresh (non-resumed) run starts the log over
+            with metrics_writer(run_dir) as writer:
+                writer.log({"train/loss": 9.0}, step=0)
+            self.assertEqual(read_metrics(run_dir), {"train/loss": [(0, 9.0)]})
+            self.assertEqual(read_metrics(Path(tmp) / "missing"), {})
 
-            with self.assertRaises(RuntimeError):
-                wandb_config({**cfg, "provenance": "mine"})
-        finally:
-            del sys.modules["omegaconf"]
+    def test_new_projects_track_metrics_offline_without_wandb(self) -> None:
+        templates = PROJECT_TEMPLATES.read_text()
+        self.assertNotIn("WANDB_API_KEY", templates)
+        self.assertNotIn("wandb_config", templates)
+        skill = (ROOT / "plugins/research/skills/experiment-design/SKILL.md").read_text()
+        self.assertNotIn("wandb", skill.lower())
+        self.assertIn("metrics.jsonl", skill)
+        self.assertIn("MetricsWriter(", skill)
 
 
     def test_dispatch_triggers_on_the_cluster_and_loads_its_reference_lazily(self) -> None:

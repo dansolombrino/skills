@@ -42,8 +42,11 @@ evaluations/ logs/ plots/ scripts/ visualizations/`.
   live at `tests/<root>/<path>/<stem>/test_*.py`. They are not the pre-dispatch smoke.
 - **Logs.** A wave script tees its stdout and stderr into the mirror of its own folder:
   `scripts/NNN_exp/<run folder>/wave_<wave_id>/wave.sh` logs to
-  `logs/NNN_exp/<run folder>/wave_<wave_id>/wave_<rig>_gpu<ids>-<YYYYmmdd-HHMMSS>.log`. WandB
-  writes under `logs/`; Hydra job file logging is off (`- override hydra/job_logging: none`).
+  `logs/NNN_exp/<run folder>/wave_<wave_id>/wave_<rig>_gpu<ids>-<YYYYmmdd-HHMMSS>.log`. Hydra
+  job file logging is off (`- override hydra/job_logging: none`).
+- **Metrics.** Tracking is offline only, with no external service: each run appends its scalars to
+  `evaluations/<experiment_path>/<run dir>/metrics.jsonl` through `code/common/metrics.py`, beside
+  its `.run_config.json` (whole config) and `.status.json` (provenance).
 
 ## run_id
 
@@ -64,10 +67,8 @@ New experiments use the `hashed-v2` layout. An experiment pinned to an older lay
   `{"layout": "hashed-v2", "params": {param: value or null}}` with sorted keys.
 - **Renderings** (`code/common/run_id.py`). `run_id_path` gives the run directory `rid-<32 hex>`
   under `checkpoints|evaluations|scripts|logs/<experiment_path>/`. `run_id_name` is the hash: the
-  EXPERIMENTS.md `run_id` column, the WandB tag, the Slurm job-name suffix. `run_id_label` is the
-  readable `k=v,…`: the WandB display name and the `label` column; it is never a path. WandB is
-  `wandb.init(name=run_id_label(...), tags=[run_id_name(...)], config=wandb_config(cfg))`, where
-  `wandb_config` is the whole resolved config plus a `provenance` namespace.
+  EXPERIMENTS.md `run_id` column, the Slurm job-name suffix. `run_id_label` is the readable
+  `k=v,…`: the `label` column; it is never a path.
 - **Guards.** `guard_run_config` runs before any artifact is written: it checks the params against
   the current version, atomically writes `.run_config.json` and `.run_id.json`, and refuses a
   different config at an existing hash; its I/O is O(1) per run. `check_run_id_plan` runs before
@@ -82,8 +83,8 @@ Adding, removing, or renaming a behavior-affecting config param changes what ide
 Before any checkpoint, evaluation, plot, or wave record of the experiment exists, rewrite the
 current version entry. After that, append the next version and run a run_id migration through
 `run-identity`: it is the one operation that rewrites existing hashes (run directories, wave
-READMEs and scripts, EXPERIMENTS.md, JOURNAL.md, WandB runs). `RUN_ID_PATH_LAYOUT` itself never
-changes once outputs exist.
+READMEs and scripts, EXPERIMENTS.md, JOURNAL.md, and an older project's WandB runs).
+`RUN_ID_PATH_LAYOUT` itself never changes once outputs exist.
 
 ## Waves, lanes, and the pool
 

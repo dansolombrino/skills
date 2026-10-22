@@ -60,9 +60,9 @@ Use the remote the user names; otherwise:
    is not templated: the environment gate generates it. `.env` holds secrets (empty unless the
    user supplies them), repo-relative storage, and machine-local settings only.
 3. Install `.githooks/pre-commit` (the journal guard) with `git config core.hooksPath .githooks`.
-4. Create `code/common/run_id.py`, `status.py`, `paths.py`, and `environment_smoke.py` (the
-   default `gpu_smoke` target), and copy `assets/environment.py` from the `environment-sync`
-   skill's installed directory to `code/common/environment.py`.
+4. Create `code/common/` `run_id.py`, `status.py`, `metrics.py`, `paths.py`,
+   `environment_smoke.py` (default `gpu_smoke` target); copy `assets/environment.py` from the
+   `environment-sync` skill's directory to `code/common/environment.py`.
 
 ## Git, environment, and rigs
 

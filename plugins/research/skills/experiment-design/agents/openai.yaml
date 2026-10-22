@@ -1,4 +1,4 @@
 interface:
   display_name: "Experiment Design"
   short_description: "Design reproducible experiments and run identities"
-  default_prompt: "Use $experiment-design to compile a requested research step into a reproducible experiment with its hashed-v2 run identity, checkpoints, status telemetry, smoke command, and WandB setup."
+  default_prompt: "Use $experiment-design to compile a requested research step into a reproducible experiment with its hashed-v2 run identity, checkpoints, status telemetry, offline metric logging, and smoke command."

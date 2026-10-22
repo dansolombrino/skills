@@ -26,8 +26,8 @@ Each gate names what enforces it; a failure stops the wave and is reported as is
    A config difference means the identity must grow: the next version plus a run_id migration
    (`run-identity`). An experiment pinned to an older layout: see `run-identity`
    references/legacy-layouts.md.
-3. **Project contract** — the current `code/common/` helpers (`run_id.py` with `hashed-v2`,
-   `wandb_config`, and `hydra_override_arg`; schema-v3 `status.py` with numeric `heartbeat` call
+3. **Project contract** — the current `code/common/` helpers (`run_id.py` with `hashed-v2` and
+   `hydra_override_arg`; schema-v3 `status.py` with numeric `heartbeat` call
    sites in the entrypoints), `paths.py` honouring `RESEARCH_PROJECT_ROOT`, and `.waves/` and
    `.envs/` ignored. A project without them is unsupported: name what is missing rather than
    upgrading it here. `rig-sync deploy-revision` also refuses a hub that does not ignore `.waves/`.

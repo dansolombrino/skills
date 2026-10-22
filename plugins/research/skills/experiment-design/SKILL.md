@@ -1,6 +1,6 @@
 ---
 name: experiment-design
-description: Compile a requested scientific step into a reproducible Research 2.0 experiment - NNN naming, hashed-v2 run_id election, checkpoints, schema-v3 status telemetry, smoke criteria, and WandB setup. Use when creating a new experiment or sub-experiment, writing training, finetuning, or evaluation code under code/NNN_..., or adding its Hydra configuration; do not use to migrate legacy experiment layouts.
+description: Compile a requested scientific step into a reproducible Research 2.0 experiment - NNN naming, hashed-v2 run_id election, checkpoints, schema-v3 status telemetry, offline metric logging, and smoke criteria. Use when creating a new experiment or sub-experiment, writing training, finetuning, or evaluation code under code/NNN_..., or adding its Hydra configuration; do not use to migrate legacy experiment layouts.
 ---
 
 # experiment-design
@@ -27,8 +27,7 @@ Turns a requested step into an experiment that `sweep-dispatch` can launch. Proj
   with `version, params = load_run_id_spec(source_path("config/<experiment_path>"))`.
 - Every run-scoped path and name goes through `code/common/run_id.py`: `run_id_path(cfg, params,
   layout=RUN_ID_PATH_LAYOUT)` for checkpoints, evaluations, and the `scripts/`/`logs/` run
-  folders; `run_id_name` (the hash) and `run_id_label` (readable `k=v,…`) for EXPERIMENTS.md and
-  WandB.
+  folders; `run_id_name` (the hash) and `run_id_label` (readable `k=v,…`) for EXPERIMENTS.md.
 - Call `guard_run_config(cfg, params, <eval run dir>, layout=RUN_ID_PATH_LAYOUT,
   experiment_root=<evaluations experiment dir>, spec_root=source_path("config/<experiment_path>"))`
   in every training/eval script before the StatusWriter starts and before any artifact is written.
@@ -81,21 +80,22 @@ interpreter written as `<env>/bin/python` and an output that cannot collide with
 plus its pass criterion (exit 0 and a named output proving one unit of work). Record both in the
 section header; `sweep-dispatch` runs it before tagging each wave.
 
-The smoke shrinks the workload, never the code path: every subsystem production enables (WandB,
-checkpoints, evaluation, telemetry) stays on, or a broken setup call passes the smoke and kills
-every run of the wave. WandB runs offline, never disabled: `WANDB_MODE=offline` prefixes the
-command and the config's WandB switch stays on.
+The smoke shrinks the workload, never the code path: every subsystem production enables
+(checkpoints, metric logging, evaluation, telemetry) stays on, or a broken setup call passes the
+smoke and kills every run of the wave.
 
-## 7. WandB
+## 7. Metrics
 
-- The whole resolved config: `wandb.init(config=wandb_config(cfg), ...)`. A finished run's config
-  cannot be changed retroactively (a run_id migration renames runs, it never refills a config),
-  so a subset is permanent loss; `wandb_config` adds a `provenance` namespace.
-- project = the research project, group = `NNN_experiment`,
-  `wandb.init(name=run_id_label(...), tags=[run_id_name(...)], config=wandb_config(cfg))`,
-  `WANDB_API_KEY` from `.env`, `dir=project_path("logs")`.
-- Production runs log online, the smoke offline (§ 6): the mode comes from the environment,
-  `mode=os.environ.get("WANDB_MODE", "online")`, never hard-coded.
+Tracking is offline only, in the evaluations run dir: the whole config (`.run_config.json`),
+wave provenance (`.status.json`), and every tracked scalar (`metrics.jsonl`).
+
+- Ask the user which metrics to track and under which keys (`train/loss`, `val/acc`); record the
+  keys in the section header.
+- Open `MetricsWriter(<eval run dir>, resume=<training state was restored>)`
+  (`code/common/metrics.py`) after `guard_run_config`, inside the `StatusWriter`, and call
+  `log({<key>: <value>, ...}, step=<global step>)` wherever a metric is computed. A project
+  lacking `metrics.py` takes it from the `research-project-init` template.
+- Plots read it with `read_metrics`; final results still go to their own evaluation outputs (§ 4).
 
 ## 8. Paths in code
 

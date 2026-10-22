@@ -70,9 +70,9 @@ already in the queue keep running; only observation is lost until a new certific
 - Booster node: 4× NVIDIA A100 64 GB, 32 cores, 512 GB RAM, diskless, `/tmp` is 10 GB of RAM.
   Driver 535 / CUDA 12.2 on the nodes; a wheel built for a newer CUDA runs only if the environment
   smoke says so. (https://docs.hpc.cineca.it/hpc/leonardo.html, https://docs.hpc.cineca.it/services/singularity.html)
-- **Compute nodes have no internet.** Wandb runs with `WANDB_MODE=offline` and is synced from a
-  login node afterwards; datasets and model weights are downloaded beforehand on a login node or
-  a data mover. (https://docs.hpc.cineca.it/faq.html "local-only restricted")
+- **Compute nodes have no internet.** Datasets and model weights are downloaded beforehand on a
+  login node or a data mover; metrics are logged offline anyway (`metrics.jsonl`).
+  (https://docs.hpc.cineca.it/faq.html "local-only restricted")
 - Partitions and QOS for GPU work (https://docs.hpc.cineca.it/hpc/leonardo.html):
 
 | partition / QOS | walltime | per-job | per-user | priority | use here |
@@ -80,7 +80,7 @@ already in the queue keep running; only observation is lost until a new certific
 | `boost_usr_prod` / normal | 24 h | ≤ 64 nodes | — | 40 | **default for every run** |
 | `boost_usr_prod` / `boost_qos_dbg` | 30 min | ≤ 8 nodes | ≤ 2 jobs running or pending | 80 | smoke and template checks only |
 | `boost_usr_prod` / `boost_qos_lprod` | 4 days | ≤ 8 nodes | 32 GPUs per project | 40 | only when a run's ETA exceeds 24 h and the user asks |
-| `lrd_all_serial` (default partition) | 4 h | 4 cores, no GPU | — | 40 | budget-free CPU work: `wandb sync`, packing |
+| `lrd_all_serial` (default partition) | 4 h | 4 cores, no GPU | — | 40 | budget-free CPU work: packing |
 
 - Billing: a job costs `hours × nodes × R × 32` core-hours, `R` the largest fraction of the node
   it holds. One GPU is a quarter node, so **one GPU-hour costs 8 core-hours**. Interactive
@@ -127,7 +127,6 @@ HF_HOME = "/leonardo_scratch/fast/<account>/cache/huggingface"
 HF_DATASETS_CACHE = "/leonardo_scratch/fast/<account>/cache/huggingface/datasets"
 UV_CACHE_DIR = "/leonardo_work/<account>/cache/uv"
 TORCH_HOME = "/leonardo_scratch/fast/<account>/cache/torch"
-WANDB_DIR = "/leonardo_work/<account>/wandb"
 ```
 
 `gpus = "job"` and `transfer_ssh` are the two cluster fields of `rig-sync`'s registry
@@ -190,7 +189,6 @@ the bare shebang; inside a job the script leaves `CUDA_VISIBLE_DEVICES` to Slurm
 # label: <run_id_label under hashed-v2; the flat run_id under a legacy pin>
 # wave: <wave_id>   rig: leonardo   gpu: 1 (Slurm-assigned)
 set -uo pipefail
-export WANDB_MODE=offline
 export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
 # ...then the standard body from `export WAVE_ID=...` on
 ```
@@ -307,7 +305,7 @@ restarts from scratch and cannot fit 24 h goes to the user.
 The ledger and the status table say which jobs were resubmitted, why, with what walltime, and
 whether each resumes or restarts.
 
-## Fetch results and sync wandb
+## Fetch results
 
 - Artifact movement stays `rig-sync`'s job (`pull evaluations/<NNN_exp> --from leonardo`). For
   anything beyond small files, point the transfer at the data-mover alias `leonardo-dm` with
@@ -317,9 +315,6 @@ whether each resumes or restarts.
   says `via leonardo-dm` and prints the rsync command line), and retry up to three times if the
   connection still drops (rsync exit 12/255), resuming where the previous attempt stopped. Never
   hand-write the rsync.
-- After the slice finishes, sync offline wandb runs from a login node:
-  `ssh leonardo "cd <repo_path> && wandb sync --sync-all <WANDB_DIR>"`; if it is killed for CPU
-  time, run the same command inside a `lrd_all_serial` job.
 - `logs/.../slurm-<jobid>.out` is pulled with the run logs.
 
 ## Smoke job (once per hub setup, and after any change to this header)

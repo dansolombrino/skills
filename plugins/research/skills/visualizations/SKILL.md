@@ -30,6 +30,7 @@ Plots read `evaluations/` and write self-contained HTML under `plots/`. Project 
 - Inputs are `evaluations/` only, through `run_id_path(..., layout=RUN_ID_PATH_LAYOUT)` with
   params from `load_run_id_spec(source_path("config/<experiment_path>"))`; each run is
   `evaluations/<experiment_path>/rid-<32 hex>/`, its params in `.run_id.json` or `RUN_ID_MAP.json`.
+  Training curves are its `metrics.jsonl`, read with `read_metrics` (`code/common/metrics.py`).
   A quantity missing from evaluations is exported by the producer first; plots never read
   checkpoints. An experiment pinned to an older layout: see `run-identity`
   references/legacy-layouts.md.
