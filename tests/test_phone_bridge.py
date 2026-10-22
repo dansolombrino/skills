@@ -244,7 +244,7 @@ class WaveThreadTests(unittest.TestCase):
             return subprocess.CompletedProcess(argv, 0, f"20261022-090000\t{self.ROOT}\n", "")
         if argv[0] == "table":
             return subprocess.CompletedProcess(argv, 0, self.table, "")
-        return subprocess.CompletedProcess(argv, 0, "[tell] queued\n", "")
+        return subprocess.CompletedProcess(argv, 0, "[tell] 20261022-112747-000001: queued for wave A\n", "")
 
     def sent(self) -> list[dict]:
         return [data for method, data in self.calls if method == "sendMessage"]
@@ -278,7 +278,14 @@ class WaveThreadTests(unittest.TestCase):
                  "reply_to_message": {"message_id": question_id}}
         bridge.respond(self.config, "tok", reply, thread)
         self.assertEqual(self.supervisor_calls[-1], (self.ROOT, "tell", "--wave", "A", "--text", "yes until Friday", "--session", "s-1", "--question", "q2"))
-        self.assertEqual(self.calls[-1][0], "setMessageReaction", "an agent answers itself; the bot only acknowledges")
+        status = self.sent()[-1]
+        self.assertEqual(status["text"], "📨 received · waiting for the wave's agent · id 20261022-112747-000001")
+        self.assertEqual((status["disable_notification"], json.loads(status["reply_parameters"])["message_id"]), ("true", 7))
+        line_id = self.next_id
+        body = "✓ answered in 3m · id 20261022-112747-000001"
+        bridge.send_notice(self.config, "proj wave A: " + body, self.notice("A", kind="receipt", body=body, receipts=["20261022-112747-000001"]), token="tok")
+        self.assertEqual(self.calls[-1], ("editMessageText", {"chat_id": -1001, "message_id": line_id, "text": body}),
+                         "the status line under the user's message is edited, never a new message")
         plain = {"message_id": 8, "text": "and pause the 3080", "is_topic_message": True, "message_thread_id": thread,
                  "reply_to_message": {"message_id": thread}}
         bridge.respond(self.config, "tok", plain, thread)

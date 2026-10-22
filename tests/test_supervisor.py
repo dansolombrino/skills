@@ -844,9 +844,14 @@ class SupervisorTests(unittest.TestCase):
         self.assertIn("«yes, until Friday» (answering your question q1)", log)
         self.assertIn("they grant what its Authority section reserves for the user", log)
         self.assertEqual(supervisor.pending_chats(board_config), {})
-        text, context = self.notices(sink)[-1]
-        self.assertIn("ended without a reply", text, "a turn that says nothing still answers the phone")
-        self.assertEqual(context["session"], session)
+        (working, start), (ended, end) = self.notices(sink)[-2:]
+        message_id = chat[0][1]["id"]
+        self.assertIn("🤖 working since", working)
+        self.assertIn("(resuming its conversation)", working)
+        self.assertIn("✗ ended without answering (exit 0", ended, "a turn that says nothing still answers the phone")
+        self.assertIn(str(wave.agent_logs), ended, "with the log to look into")
+        self.assertTrue(ended.endswith(f"· id {message_id}"))
+        self.assertEqual((start["receipts"], end["receipts"], end["kind"], end["silent"]), ([message_id], [message_id], "receipt", True))
         self.assertIsNone(supervisor.wake_due(wave, settings), "the turn already handled the answer: no second agent")
 
     def test_say_reaches_the_wave_thread_and_plain_messages_follow_the_last_speaker(self) -> None:

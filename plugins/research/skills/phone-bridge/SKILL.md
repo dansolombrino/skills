@@ -12,8 +12,8 @@ folder holding this SKILL.md, never the research project). It does two things:
   with a pinned status card, edited every two minutes. `send --context` is the `sweep-supervisor`
   `notify_command`: a notice lands in its wave's topic (certificates in the general one), silent
   when it needs nothing from the user. What the user writes there goes to the wave's agent
-  (`sweep-supervisor tell`); a reply reaches the session that wrote the message, resumed. The bot
-  marks it 👀; the agent answers in the thread.
+  (`sweep-supervisor tell`); a reply reaches the session that wrote the message, resumed. A silent
+  status line under it tracks it: received, agent working, answered, or failed with its log.
 - **Certificate renewal.** A cluster whose SSH access is a short-lived certificate signed after a
   browser login with a password and a one-time code (CINECA Leonardo: smallstep CA
   `sshproxy.hpc.cineca.it`, provisioner `cineca-hpc`) is renewed with the user doing only the

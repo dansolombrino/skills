@@ -1984,6 +1984,9 @@ def wake(wave: Wave, settings: Settings, reason: str, chat: list[tuple[Path, dic
         prompt = chat_prompt(wave, messages, resumed=bool(target)) if messages else agent_prompt(wave, reason)
         stamp = started.strftime("%Y%m%d-%H%M%S")
         log_path = wave.agent_logs / (f"{stamp}-chat.log" if messages else f"{stamp}.log")
+        if messages:
+            receipt(settings, wave, messages, f"🤖 working since {started.strftime('%H:%M')} "
+                    + ("(resuming its conversation)" if target else "(a fresh agent)"))
         outcome, session = run_agent(wave, profile, prompt, log_path, settings.agent_timeout, f"{iso(started)} reason: {reason}", target)
         if messages and target and outcome != "exit 0" and not outcome.startswith("timed out") and not spoke_since(wave, started):
             # the recorded session could not be resumed (expired, moved): the same words to a fresh agent
@@ -2002,9 +2005,10 @@ def wake(wave: Wave, settings: Settings, reason: str, chat: list[tuple[Path, dic
         for path, record in chat or []:
             board.write_json(path, {**record, "status": "done" if outcome == "exit 0" else "failed", "outcome": outcome,
                                     "session": session, "ended_at": iso(now()), "log": str(log_path)})
-        if messages and not spoke:
-            notify(settings, f"{wave.project_root.name} wave {wave.wave_id}: the agent ended without a reply ({outcome}); log {log_path}",
-                   notice_context(wave, "say", session=session))
+        if messages:
+            took = humanize((now() - started).total_seconds())
+            receipt(settings, wave, messages, f"✓ answered in {took}" if spoke else
+                    f"✗ ended without answering ({outcome}, after {took}) · log {log_path}")
         print(f"[wake] wave {wave.wave_id}: {outcome} ({log_path})")
         return 0 if outcome == "exit 0" else 1
     finally:
@@ -2047,6 +2051,16 @@ def notice_context(wave: Wave | None, kind: str, *, session: str | None = None, 
         if value:
             context[key] = value
     return context
+
+
+def receipt(settings: Settings, wave: Wave, messages: list[dict], line: str) -> None:
+    """Where the user's phone messages stand (`📨 received` is the bridge's, then working, answered or
+    failed with its log): one line the bridge keeps editing under the user's message, ending with the
+    message id, so anything that went wrong can be looked up on the hub."""
+    ids = [message["id"] for message in messages]
+    body = f"{line} · id {ids[-1]}"
+    context = {**notice_context(wave, "receipt", body=body, silent=True), "receipts": ids}
+    notify(settings, f"{wave.project_root.name} wave {wave.wave_id}: {body}", context)
 
 
 def notify(settings: Settings, text: str, context: dict | None = None) -> None:

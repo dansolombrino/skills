@@ -93,7 +93,8 @@ bypass; a denied tool call fails that step of the tick, which the tick reports w
 
 `notify_command` is an argv list run with `{text}` substituted (and `{context}`, when present, with
 a JSON object: `kind`, `silent`, and for a wave's notice `project`, `root`, `wave`, `body` without
-the wave prefix, the writing agent's `session`, an `ask`'s `question`), for every `ask` and `say`,
+the wave prefix, the writing agent's `session`, an `ask`'s `question`, and for a `receipt` the ids of the phone
+messages whose status line it updates), for every `ask` and `say`,
 every follow-up report, a finished wave, failed runs, a rig down, a lane that cannot start, a cluster submission
 failure, and a certificate about to expire or expired. It is what lets the user stay away from
 chats: point it at a phone. `ntfy` needs only the app and an unguessable topic name (anyone who

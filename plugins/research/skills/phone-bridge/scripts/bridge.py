@@ -173,11 +173,13 @@ def telegram(token: str, method: str, http_timeout: float = 30, **params: object
     return reply.get("result")
 
 
-def send(config: Config, text: str, token: str | None = None, thread: int | None = None, silent: bool = False) -> dict:
+def send(config: Config, text: str, token: str | None = None, thread: int | None = None, silent: bool = False,
+         reply_to: int | None = None) -> dict:
     if config.chat_id is None:
         raise BridgeError("phone.chat_id is not set yet: message the bot, then run `bridge.py chat-id`")
+    reply = json.dumps({"message_id": reply_to, "allow_sending_without_reply": True}) if reply_to else None
     result = telegram(token or read_token(config), "sendMessage", chat_id=config.chat_id, text=text[:4000], message_thread_id=thread,
-                      disable_web_page_preview="true", disable_notification="true" if silent else None)
+                      disable_web_page_preview="true", disable_notification="true" if silent else None, reply_parameters=reply)
     return result if isinstance(result, dict) else {}
 
 
@@ -207,6 +209,7 @@ class ChatState:
         self.forum: bool | None = data.get("forum")
         self.topics: dict[str, dict] = data.get("topics") or {}
         self.messages: dict[str, dict] = data.get("messages") or {}
+        self.receipts: dict[str, int] = data.get("receipts") or {}  # the user's message id on the hub -> the bot's status line
         return self
 
     def __exit__(self, kind, *_exc) -> None:
@@ -215,7 +218,8 @@ class ChatState:
                 tmp = self.path.with_suffix(".tmp")
                 fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
                 with os.fdopen(fd, "w") as handle:
-                    json.dump({"chat": self.chat_id, "forum": self.forum, "topics": self.topics, "messages": self.messages}, handle)
+                    json.dump({"chat": self.chat_id, "forum": self.forum, "topics": self.topics, "messages": self.messages,
+                               "receipts": self.receipts}, handle)
                 os.replace(tmp, self.path)
         finally:
             fcntl.flock(self.handle, fcntl.LOCK_UN)
@@ -227,6 +231,12 @@ class ChatState:
         self.messages[str(message_id)] = {key: context[key] for key in ("project", "root", "wave", "session", "question") if context.get(key)}
         for stale in list(self.messages)[:-MESSAGES_KEPT]:
             del self.messages[stale]
+
+    def track(self, receipt: str, message_id: object) -> None:
+        if message_id is not None:
+            self.receipts[receipt] = message_id
+        for stale in list(self.receipts)[:-MESSAGES_KEPT]:
+            del self.receipts[stale]
 
     def topic_by_thread(self, thread: int) -> dict | None:
         return next((topic for topic in self.topics.values() if topic.get("thread") == thread), None)
@@ -263,6 +273,15 @@ def send_notice(config: Config, text: str, context: dict, token: str | None = No
     a reply finds its agent; a notice that needs nothing from the user arrives silently."""
     token = token or read_token(config)
     with ChatState(config) as state:
+        lines = [state.receipts[r] for r in context.get("receipts") or [] if r in state.receipts]
+        if lines and context.get("body"):
+            for message_id in lines:  # a receipt edits the status line under the user's message
+                try:
+                    telegram(token, "editMessageText", chat_id=config.chat_id, message_id=message_id, text=context["body"][:4000])
+                except BridgeError as exc:
+                    if "not modified" not in str(exc):
+                        raise
+            return
         thread = None
         if context.get("wave") and context.get("root"):
             try:
@@ -299,8 +318,9 @@ def supervisor(config: Config, root: str, *argv: str, timeout: float = 60) -> su
         raise BridgeError(f"cannot run the supervisor: {exc}") from None
 
 
-def tell(config: Config, context: dict, text: str) -> None:
-    """Hand the user's words to the wave's supervisor; its agent answers in the thread."""
+def tell(config: Config, context: dict, text: str) -> str:
+    """Hand the user's words to the wave's supervisor (its agent answers in the thread); returns the
+    message's id on the hub, which every status line names."""
     argv = ["tell", "--wave", context["wave"], "--text", text]
     for flag, key in (("--session", "session"), ("--question", "question")):
         if context.get(key):
@@ -308,6 +328,15 @@ def tell(config: Config, context: dict, text: str) -> None:
     result = supervisor(config, context["root"], *argv)
     if result.returncode != 0:
         raise BridgeError(f"the supervisor did not take it: {(result.stderr or result.stdout).strip()[-300:]}")
+    match = re.search(r"\[tell\] (\S+):", result.stdout)
+    return match.group(1) if match else "?"
+
+
+@dataclass(frozen=True)
+class Forwarded:
+    """A message handed to a wave's agent, by its id on the hub."""
+
+    receipt: str
 
 
 def wave_card(config: Config, root: str, wave: str) -> tuple[str, bool] | None:
@@ -527,9 +556,9 @@ def status_lines(config: Config) -> list[str]:
     return lines or ["no rig declares [machines.<rig>.ssh_login]"]
 
 
-def handle(config: Config, token: str, text: str, context: dict | None = None) -> str | None:
-    """The reply to one message from the user; None when it went to the wave's agent (`context`),
-    which answers in the thread itself."""
+def handle(config: Config, token: str, text: str, context: dict | None = None) -> str | Forwarded:
+    """The reply to one message from the user, or `Forwarded` when it went to the wave's agent
+    (`context`), which answers in the thread itself."""
     text = text.strip()
     word = text.split()[0].split("@")[0].lstrip("/") if text.startswith("/") else ""
     chosen = [login for login in config.logins if word == login.command or word == "renew"]  # plain /renew: every rig
@@ -543,8 +572,7 @@ def handle(config: Config, token: str, text: str, context: dict | None = None) -
     if pasted:
         return finish_renewal(config, *pasted)
     if context and not word:
-        tell(config, context, text)
-        return None
+        return Forwarded(tell(config, context, text))
     return help_text(config)
 
 
@@ -614,19 +642,19 @@ def serve(config: Config) -> int:
 
 
 def respond(config: Config, token: str, message: dict, thread: int | None) -> None:
-    """Answer one message in the thread it came from; a message passed to an agent gets a 👀 instead."""
+    """Answer one message in the thread it came from. A message passed to an agent gets a silent
+    status line under it instead, which the supervisor edits as the agent takes it, answers or fails."""
     try:
         reply = handle(config, token, message["text"], conversation(config, message))
     except BridgeError as exc:
         reply = f"✗ {exc}"
-    if reply is not None:
-        send(config, reply, token, thread)
+    if isinstance(reply, str):
+        send(config, reply, token, thread, reply_to=message.get("message_id"))
         return
-    try:
-        telegram(token, "setMessageReaction", chat_id=config.chat_id, message_id=message.get("message_id"),
-                 reaction=json.dumps([{"type": "emoji", "emoji": "👀"}]))
-    except BridgeError:
-        send(config, "→ passed to the wave's agent", token, thread, silent=True)
+    line = send(config, f"📨 received · waiting for the wave's agent · id {reply.receipt}", token, thread, silent=True,
+                reply_to=message.get("message_id"))
+    with ChatState(config) as state:
+        state.track(reply.receipt, line.get("message_id"))
 
 
 def chat_ids(config: Config) -> int:

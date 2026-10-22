@@ -107,7 +107,7 @@ work requests that same profile.
   wave to the session that wrote the message it replies to, else the one that last spoke to the
   user, resumed through `resume_command` (else a fresh agent). The turn also handles new events; a
   finished wave can still be talked to. The agent answers with `say`, the only way its words reach
-  the phone; a turn without one still sends a line. The phone's words are the user's: they grant
+  the phone; a status line under the message tracks the turn (`✗` with its log). The phone's words are the user's: they grant
   what Authority reserves, quoted in `--reason "user: ..."` or `--user-words`.
 - **Certificates.** A rig's `ssh_cert` (a cluster login certificate, such as Leonardo's 12-hour
   one) is watched: a notice an hour before it expires and one when it does, and a `⚠` line. Renewal
