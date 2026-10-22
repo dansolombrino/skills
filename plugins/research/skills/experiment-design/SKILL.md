@@ -81,14 +81,21 @@ interpreter written as `<env>/bin/python` and an output that cannot collide with
 plus its pass criterion (exit 0 and a named output proving one unit of work). Record both in the
 section header; `sweep-dispatch` runs it before tagging each wave.
 
+The smoke shrinks the workload, never the code path: every subsystem production enables (WandB,
+checkpoints, evaluation, telemetry) stays on, or a broken setup call passes the smoke and kills
+every run of the wave. WandB runs offline, never disabled: `WANDB_MODE=offline` prefixes the
+command and the config's WandB switch stays on.
+
 ## 7. WandB
 
 - The whole resolved config: `wandb.init(config=wandb_config(cfg), ...)`. A finished run's config
   cannot be changed retroactively (a run_id migration renames runs, it never refills a config),
   so a subset is permanent loss; `wandb_config` adds a `provenance` namespace.
 - project = the research project, group = `NNN_experiment`,
-  `wandb.init(name=run_id_label(...), tags=[run_id_name(...)], config=wandb_config(cfg))`, online
-  mode, `WANDB_API_KEY` from `.env`, `dir=project_path("logs")`.
+  `wandb.init(name=run_id_label(...), tags=[run_id_name(...)], config=wandb_config(cfg))`,
+  `WANDB_API_KEY` from `.env`, `dir=project_path("logs")`.
+- Production runs log online, the smoke offline (§ 6): the mode comes from the environment,
+  `mode=os.environ.get("WANDB_MODE", "online")`, never hard-coded.
 
 ## 8. Paths in code
 
