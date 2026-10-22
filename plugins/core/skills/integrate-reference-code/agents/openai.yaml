@@ -1,4 +1,0 @@
-interface:
-  display_name: "Integrate Reference Code"
-  short_description: "Adapt references with explicit delta approval"
-  default_prompt: "Use $integrate-reference-code to compare a reference implementation with the target and get my approval for every behavioral deviation before editing."

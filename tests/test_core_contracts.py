@@ -30,7 +30,7 @@ def load_project_init():
 class CoreContractTests(unittest.TestCase):
     def test_plugin_version_and_distributed_skills(self) -> None:
         manifest = json.loads((CORE / ".codex-plugin/plugin.json").read_text())
-        self.assertEqual(manifest["version"], "4.0.0")
+        self.assertEqual(manifest["version"], "5.0.0")
         claude_manifest = json.loads((CORE / ".claude-plugin/plugin.json").read_text())
         catalog = json.loads((ROOT / ".claude-plugin/marketplace.json").read_text())
         entry = next(plugin for plugin in catalog["plugins"] if plugin["name"] == "core")
@@ -38,14 +38,7 @@ class CoreContractTests(unittest.TestCase):
         self.assertEqual(entry["version"], manifest["version"])
         self.assertEqual(
             {path.parent.name for path in (CORE / "skills").glob("*/SKILL.md")},
-            {
-                "brainstorm-hold",
-                "integrate-reference-code",
-                "intent-gate",
-                "intent-mirror",
-                "progress-updates",
-                "project-init",
-            },
+            {"progress-updates", "project-init"},
         )
 
     def test_core_is_installed_by_default_in_codex(self) -> None:
@@ -75,66 +68,6 @@ class CoreContractTests(unittest.TestCase):
         self.assertIn("The project tag written by `project-init` does not count as content", init)
         self.assertIn("Require `.project.toml` to list `research`", init)
         self.assertIn("hand off to `project-init`", init)
-
-    def test_reference_code_integration_requires_informed_delta_approval(self) -> None:
-        skill_root = CORE / "skills/integrate-reference-code"
-        skill = (skill_root / "SKILL.md").read_text()
-        metadata = (skill_root / "agents/openai.yaml").read_text()
-
-        self.assertIn("Keep this phase read-only", skill)
-        self.assertIn("Enumerate every concrete", skill)
-        self.assertIn("Use all seven columns", skill)
-        self.assertIn("mark each behavioral row's initial", skill)
-        self.assertIn("Stop and wait for the user to approve", skill)
-        self.assertIn("general permission", skill)
-        self.assertIn("If a new deviation becomes necessary, stop before applying it", skill)
-        self.assertIn("any unapproved behavioral deviation remains", skill)
-        self.assertIn("$integrate-reference-code", metadata)
-
-    def test_intent_gate_family_is_congruent(self) -> None:
-        skills_root = CORE / "skills"
-        contract_path = skills_root / "intent-gate/references/contract.md"
-        self.assertTrue(contract_path.is_file())
-        contract = " ".join(contract_path.read_text().split())
-        bodies = {
-            name: " ".join((skills_root / name / "SKILL.md").read_text().split())
-            for name in ("intent-mirror", "brainstorm-hold", "intent-gate")
-        }
-
-        # The two single-mode skills defer to the combined skill's contract as canon.
-        for name in ("intent-mirror", "brainstorm-hold"):
-            self.assertIn("../intent-gate/references/contract.md", bodies[name], name)
-        self.assertIn("references/contract.md", bodies["intent-gate"])
-
-        # Shared vocabulary appears in the contract and in every body.
-        for text_name, text in {"contract": contract, **bodies}.items():
-            self.assertNotIn("Did I sniff that right", text, text_name)
-            self.assertIn("trigger confirmation", text, text_name)
-            self.assertIn("greenlight", text, text_name)
-            self.assertIn("not doing yet", text, text_name)
-            self.assertIn("bypasses this gate", text, text_name)
-            self.assertNotIn("Engineering-auto", text, text_name)
-
-        # The hold forbids the host's planning mode, host-neutrally.
-        for text_name in ("contract", "brainstorm-hold", "intent-gate"):
-            text = contract if text_name == "contract" else bodies[text_name]
-            self.assertIn("planning mode", text, text_name)
-
-        # The combined skill names every detected mode in one line and never asks whether it was meant.
-        self.assertIn("one line naming every detected mode", bodies["intent-gate"])
-        self.assertIn("drop only that mode", bodies["intent-gate"])
-
-        # Read-only exploration during a hold is on unless the user turns it off.
-        for text_name in ("contract", "brainstorm-hold", "intent-gate"):
-            text = contract if text_name == "contract" else bodies[text_name]
-            self.assertNotIn("Do you want exploration at this stage?", text, text_name)
-            self.assertIn("read-only", text.lower(), text_name)
-
-        # The mirror re-fires only on a directive that changes the goal or scope.
-        for text_name in ("contract", "intent-mirror", "intent-gate"):
-            text = contract if text_name == "contract" else bodies[text_name]
-            self.assertIn("changes the goal or scope", text, text_name)
-            self.assertIn("inside the confirmed scope", text, text_name)
 
 
 class ProjectInitTests(unittest.TestCase):
