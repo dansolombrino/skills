@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import dataclasses
 import hashlib
 import importlib.util
 import json
@@ -295,6 +296,15 @@ class WaveThreadTests(unittest.TestCase):
         self.assertEqual(self.sent()[-1]["text"], "proj wave B: y", "one shared thread keeps the wave prefix")
         bridge.respond(self.config, "tok", {"message_id": 3, "text": "go on"}, None)
         self.assertEqual(self.supervisor_calls[-1][:4], (self.ROOT, "tell", "--wave", "B"))
+
+    def test_moving_to_another_chat_forgets_the_old_ones_threads(self) -> None:
+        self.forum = False
+        bridge.send_notice(self.config, "proj wave A: x", self.notice("A"), token="tok")
+        self.forum = True
+        self.config = dataclasses.replace(self.config, chat_id=-1002)
+        bridge.send_notice(self.config, "proj wave A: y", self.notice("A", body="y"), token="tok")
+        self.assertEqual([m for m, _ in self.calls].count("getChat"), 2, "the new chat is asked again")
+        self.assertEqual(self.sent()[-1]["text"], "y", "and gets its own thread")
 
     def test_every_wave_has_a_pinned_card_kept_current_by_edits(self) -> None:
         bridge.refresh_cards(self.config, "tok")

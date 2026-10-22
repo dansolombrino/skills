@@ -192,6 +192,7 @@ class ChatState:
     def __init__(self, config: Config) -> None:
         self.dir = config.state_dir
         self.path = config.state_dir / "chat.json"
+        self.chat_id = config.chat_id
 
     def __enter__(self) -> "ChatState":
         self.dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -201,7 +202,8 @@ class ChatState:
             data = json.loads(self.path.read_text())
         except (OSError, ValueError):
             data = {}
-        data = data if isinstance(data, dict) else {}
+        if not isinstance(data, dict) or data.get("chat", self.chat_id) != self.chat_id:
+            data = {}  # another chat (phone.chat_id changed): its threads and messages do not exist here
         self.forum: bool | None = data.get("forum")
         self.topics: dict[str, dict] = data.get("topics") or {}
         self.messages: dict[str, dict] = data.get("messages") or {}
@@ -213,7 +215,7 @@ class ChatState:
                 tmp = self.path.with_suffix(".tmp")
                 fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
                 with os.fdopen(fd, "w") as handle:
-                    json.dump({"forum": self.forum, "topics": self.topics, "messages": self.messages}, handle)
+                    json.dump({"chat": self.chat_id, "forum": self.forum, "topics": self.topics, "messages": self.messages}, handle)
                 os.replace(tmp, self.path)
         finally:
             fcntl.flock(self.handle, fcntl.LOCK_UN)
