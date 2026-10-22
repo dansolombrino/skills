@@ -76,9 +76,9 @@ episode). The scheduled tick (`tick_every`, default 30 minutes) is only a safety
   announced yet, the wave's end, or after six hours; when it does, post its output (plus at most one
   sentence) and run it again, until it says `wave finished`. On a host without background-command
   completion notices, say once that status is on request and in the dashboard.
-- **Fix rounds:** watch follows a wave's `fix` follow-up (`… fix follow-up <id> running`) into the
-  wave it dispatches (`continuing as wave <id> (fix round <k>)`; watch it next); a fix that
-  dispatches nothing ends it with its report.
+- **Fix rounds:** watch returns once on a wave's `fix` follow-up (`… fix follow-up <id> …`)
+  and once on its new wave (`continuing as wave <id> (fix round <k>)`; watch it next);
+  a fix dispatching nothing ends it with its report.
 - **A timed printout** only when the user asks for one: the host's scheduled wake-up at their
   interval, never a shell `sleep`.
 - **Questions:** a `⚠ needs you [<id>]` line is a supervisor question (the status names only its

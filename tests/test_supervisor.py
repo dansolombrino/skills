@@ -1128,7 +1128,8 @@ class SupervisorTests(unittest.TestCase):
 
     def test_watch_follows_a_wave_into_its_fix_round(self) -> None:
         """The case that lost a chat its wave: every run failed on a code error, the closing tick queued
-        a fix, and the fix dispatched a new wave whose question nobody saw."""
+        a fix, and the fix dispatched a new wave whose question nobody saw. Each step of the fix round
+        returns once, so a chat that reads watch only when it ends hears each when it happens."""
         self.register()
         board_config = board.load_config(self.registry)
         failed = [{"run": f"model=m{i}", "note": "exit 1"} for i in range(5)]
@@ -1137,38 +1138,36 @@ class SupervisorTests(unittest.TestCase):
         ticks: list[float] = []
         state: dict = {}
 
-        def later(_seconds: float) -> None:
+        def closing_tick_queues_a_fix(_seconds: float) -> None:
             ticks.append(_seconds)
-            if len(ticks) == 1:
-                with supervisor.WaveLock(supervisor.Wave(self.hub, WAVE)):
-                    queue = self.queue()
-                    for run in queue["runs"]:
-                        run["state"] = "failed"
-                    supervisor.Wave(self.hub, WAVE).save(queue)
-                state["fix"] = supervisor.enqueue_followup(board_config, supervisor.Wave(self.hub, WAVE), self.queue(), "fix", "wandb.util.generate_id is gone")
-                self.closing_tick()
-            elif len(ticks) == 2:
-                path, record = supervisor.find_followup(board_config, state["fix"]["id"])
-                board.write_json(path, {**record, "status": "running"})
-            elif len(ticks) == 3:
-                code, _out, err = self.cli("register", "--wave", FIX_WAVE, "--confirm", "--manifest",
-                                           str(self.manifest(wave_id=FIX_WAVE, fix_depth=1, fixes_wave=WAVE)))
-                self.assertEqual(code, 0, err)
-            elif len(ticks) == 4:
-                self.snap(wave=FIX_WAVE, questions=[{"id": "q1", "text": "run wandb login on rig-3080-ti?", "meanwhile": "skip it", "status": "open"}])
+            wave = supervisor.Wave(self.hub, WAVE)
+            with supervisor.WaveLock(wave):
+                queue = self.queue()
+                for run in queue["runs"]:
+                    run["state"] = "failed"
+                wave.save(queue)
+            state["fix"] = supervisor.enqueue_followup(board_config, wave, self.queue(), "fix", "wandb.util.generate_id is gone")
+            self.closing_tick()
 
-        with mock.patch.object(supervisor.time, "sleep", side_effect=later):
+        with mock.patch.object(supervisor.time, "sleep", side_effect=closing_tick_queues_a_fix):
             out = self.watch(timeout="3600")
+        self.assertEqual(len(ticks), 1)
         fix_id = state["fix"]["id"]
-        self.assertEqual(out.splitlines()[:4], [
-            f"watch: wave {WAVE} ended: 0 done, 5 failed; fix follow-up {fix_id} queued",
-            f"watch: wave {WAVE} ended: 0 done, 5 failed; fix follow-up {fix_id} running",
-            f"watch: continuing as wave {FIX_WAVE} (fix round 1)",
+        self.assertTrue(out.startswith(f"watch: wave {WAVE} ended: 0 done, 5 failed; fix follow-up {fix_id} queued; "
+                                       "run watch again for the wave it dispatches\n"), out)
+        path, record = supervisor.find_followup(board_config, fix_id)
+        board.write_json(path, {**record, "status": "running"})
+        self.assertTrue(self.watch().startswith("watch: timeout"), "the fix is told once, queued or running")
+        code, _out, err = self.cli("register", "--wave", FIX_WAVE, "--confirm", "--manifest",
+                                   str(self.manifest(wave_id=FIX_WAVE, fix_depth=1, fixes_wave=WAVE)))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.watch(), f"watch: continuing as wave {FIX_WAVE} (fix round 1); run watch --wave {FIX_WAVE} next\n")
+        self.snap(wave=FIX_WAVE, questions=[{"id": "q1", "text": "run wandb login on rig-3080-ti?", "meanwhile": "skip it", "status": "open"}])
+        out = self.watch()  # a chat that kept the old id still lands on the new wave, and is told so
+        self.assertEqual(out.splitlines()[:2], [
+            f"watch: following wave {FIX_WAVE} (fix round 1 after wave {WAVE})",
             "watch: new ⚠ needs you [q1] run wandb login on rig-3080-ti? — meanwhile: skip it",
         ])
-        self.assertNotIn("wave finished", out)
-        out = self.watch()
-        self.assertTrue(out.startswith(f"watch: continuing as wave {FIX_WAVE} (fix round 1)\nwatch: timeout"), out)
         self.assertTrue(self.watch(wave=FIX_WAVE).startswith("watch: timeout"), "the new wave's question was announced once")
 
     def test_a_fix_that_dispatches_nothing_ends_the_watch_with_its_report(self) -> None:

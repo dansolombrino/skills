@@ -1862,12 +1862,26 @@ def unannounced(wave: Wave, items: list[dict], at: datetime) -> list[dict]:
     current = {item["key"]: item for item in items}
     with (wave.dir / ".watch.lock").open("a+") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
-        announced = set((board.read_json(state_path) or {}).get("announced", []))
+        state = board.read_json(state_path) or {}
+        announced = set(state.get("announced", []))
         new = [item for key, item in current.items() if key not in announced]
         keep = (announced & set(current)) | {item["key"] for item in new}
         if keep != announced:
-            board.write_json(state_path, {"announced": sorted(keep), "at": iso(at)})
+            board.write_json(state_path, {**state, "announced": sorted(keep), "at": iso(at)})
     return new
+
+
+def first_time(wave: Wave, key: str, at: datetime) -> bool:
+    """Whether this step of a fix round (`fix:<id>`, `round:<wave>`) is told for the first time; it is
+    recorded in the wave's `watch.json` and, unlike a warning, never forgotten."""
+    state_path = wave.dir / "watch.json"
+    with (wave.dir / ".watch.lock").open("a+") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        state = board.read_json(state_path) or {}
+        if key in state.get("rounds", []):
+            return False
+        board.write_json(state_path, {**state, "rounds": sorted({*state.get("rounds", []), key}), "at": iso(at)})
+    return True
 
 
 def fix_round_after(wave: Wave) -> Wave | None:
@@ -1876,6 +1890,10 @@ def fix_round_after(wave: Wave) -> Wave | None:
         if path.parent.name > wave.wave_id and (board.read_json(path) or {}).get("fixes_wave") == wave.wave_id:
             return Wave(wave.project_root, path.parent.name)
     return None
+
+
+def fix_round(wave: Wave) -> object:
+    return (board.read_json(wave.queue_path) or {}).get("fix_depth")
 
 
 def latest_fix(wave: Wave, board_config) -> dict | None:
@@ -1907,19 +1925,15 @@ def watch(wave: Wave, board_config, poll: float = WATCH_POLL_S, timeout: float =
     and fires again if it comes back. A file caught mid-write is simply read again next poll.
 
     A wave that ends with runs not done is finished only once its closing agent tick is over. A `fix`
-    follow-up queued for it keeps watch waiting (one line says so); the wave it dispatches is followed
-    from then on (one line names it), warnings and end included. A fix that dispatches nothing ends
-    the watch with its report."""
+    follow-up queued for it returns once (`ended: …; fix follow-up … running`) and keeps the wave
+    open; the wave it dispatches returns once (`continuing as wave …`) and is followed from then on,
+    warnings and end included, also by a watch run on the old wave. Each step returns rather than
+    being printed along the way, because a chat sees a background command's output when it ends. A
+    fix that dispatches nothing ends the watch with its report."""
     if not wave.queue_path.exists():
         raise SupervisorError(f"wave {wave.wave_id} is not registered here: {wave.queue_path}")
     deadline = time.monotonic() + timeout
-    said: set[str] = set()
-
-    def say(line: str) -> None:
-        if line not in said:
-            said.add(line)
-            print(line, flush=True)
-
+    started = wave.wave_id
     while True:
         at = now()
         snapshot = board.read_json(wave.snapshot_path)
@@ -1931,15 +1945,23 @@ def watch(wave: Wave, board_config, poll: float = WATCH_POLL_S, timeout: float =
                 queue = board.read_json(wave.queue_path) or {}
                 fix, child = latest_fix(wave, board_config), fix_round_after(wave)
                 if child is not None:
-                    say(f"watch: continuing as wave {child.wave_id} (fix round {(board.read_json(child.queue_path) or {}).get('fix_depth')})")
+                    told = first_time(wave, f"round:{child.wave_id}", at)
                     wave = child
+                    if told:
+                        snapshot = board.read_json(wave.snapshot_path)
+                        print(f"watch: continuing as wave {wave.wave_id} (fix round {fix_round(wave)}); run watch --wave {wave.wave_id} next")
+                        if snapshot:
+                            with contextlib.suppress(KeyError, TypeError, ValueError, AttributeError):
+                                print("\n" + render_brief(snapshot), end="")
+                        return 0
                     continue
                 if fix and fix.get("status") in ("pending", "running"):
-                    done = sum(run["state"] == "done" for run in queue["runs"])
-                    failed = sum(run["state"] == "failed" for run in queue["runs"])
-                    say(f"watch: wave {wave.wave_id} ended: {done} done, {failed} failed; fix follow-up {fix['id']} "
-                        f"{'queued' if fix['status'] == 'pending' else 'running'}")
                     over = False
+                    if first_time(wave, f"fix:{fix['id']}", at):
+                        done = sum(run["state"] == "done" for run in queue["runs"])
+                        failed = sum(run["state"] == "failed" for run in queue["runs"])
+                        reasons = [f"watch: wave {wave.wave_id} ended: {done} done, {failed} failed; fix follow-up {fix['id']} "
+                                   f"{'queued' if fix['status'] == 'pending' else 'running'}; run watch again for the wave it dispatches"]
                 elif not all(run["state"] == "done" for run in queue["runs"]) and not closing_tick_done(wave, queue, snapshot, board_config, at):
                     over = False
                 elif fix:
@@ -1951,10 +1973,12 @@ def watch(wave: Wave, board_config, poll: float = WATCH_POLL_S, timeout: float =
         if over:
             reasons += ["watch: wave finished"]
         elif new:
-            reasons = [f"watch: new ⚠ {item['line']}" for item in new]
-        elif time.monotonic() >= deadline:
+            reasons = [f"watch: new ⚠ {item['line']}" for item in new] + reasons
+        elif not reasons and time.monotonic() >= deadline:
             reasons = ["watch: timeout, nothing new; run watch again"]
         if reasons:
+            if wave.wave_id != started:
+                reasons.insert(0, f"watch: following wave {wave.wave_id} (fix round {fix_round(wave)} after wave {started})")
             print("\n".join(reasons))
             if snapshot:
                 with contextlib.suppress(KeyError, TypeError, ValueError, AttributeError):
