@@ -17,7 +17,9 @@ A *board* groups the tasks one chat is watching:
 Task kinds (each may live on another machine with --host, read over ssh):
 
     rsync  --log F           rsync --info=progress2 output captured in F
-    log    --log F           last tqdm bar, "epoch|step|iter|batch a/b", or "NN%" in F;
+    log    --log F           last tqdm bar or "epoch|step|iter|batch a/b" in F, else the last
+                             progress-shaped "NN%" (a line that is just it, or "progress NN%",
+                             "NN% done"; never a metric such as "acc 93%");
                              --pattern REGEX with named groups done and total overrides
     size   --path P --total  bytes under P against a known total (62G, or --total-of SRC)
 
@@ -54,7 +56,13 @@ WATCH_TIMEOUT = 6 * 3600.0
 RSYNC_RE = re.compile(r"([\d,]+)\s+(\d{1,3})%\s+\S+/s\s+(\d+):(\d\d):(\d\d)")
 TQDM_RE = re.compile(r"(\d+)/(\d+)\s*\[(?:[\d:]+)<((?:\d+:)?\d+:\d\d|\?)")
 KEYWORD_RE = re.compile(r"(?i)\b(epoch|step|iter(?:ation)?|batch)\s*[:=]?\s*\[?\s*(\d+)\s*/\s*(\d+)")
-PERCENT_RE = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*%")
+# a bare percentage is progress only on a line that is just it or names it as progress; a metric
+# such as `acc 93.1%` or `gpu mem 45%` is neither
+PERCENT_RE = re.compile(
+    r"(?i)^\W*(\d{1,3}(?:\.\d+)?)\s*%\W*$"
+    r"|\b(?:progress|complete[d]?|done|downloaded|uploaded|copied|transferred|processed)\b\W*(\d{1,3}(?:\.\d+)?)\s*%"
+    r"|(\d{1,3}(?:\.\d+)?)\s*%\W*(?:complete[d]?|done)\b"
+)
 SIZE_RE = re.compile(r"^\s*([\d.]+)\s*([KMGTP]?)i?B?\s*$", re.IGNORECASE)
 
 
@@ -195,12 +203,15 @@ def parse_log(kind: str, text: str, pattern: str | None) -> dict | None:
             return {"done": int(match.group(1)), "total": int(match.group(2)), "unit": "count",
                     "tool_remaining": hms_seconds(match.group(3)), "tool": "tqdm"}
         match = KEYWORD_RE.search(line)
-        if match:
+        if match and 0 < int(match.group(3)) and int(match.group(2)) <= int(match.group(3)):
             return {"done": int(match.group(2)), "total": int(match.group(3)),
                     "unit": match.group(1).lower()}
+    # a bare percentage only when the tail has no bar or counter: a later metric line never wins
+    for line in reversed(lines):
         match = PERCENT_RE.search(line)
-        if match:
-            return {"done": float(match.group(1)), "total": 100.0, "unit": "percent"}
+        value = match and float(next(group for group in match.groups() if group is not None))
+        if match and value <= 100:
+            return {"done": value, "total": 100.0, "unit": "percent"}
     return None
 
 

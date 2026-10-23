@@ -977,7 +977,10 @@ class Cycle:
                     "progress_completed", "progress_total", "progress_unit")}
             buffers = view["lanes"].get(lane.get("gpu"), {})
             present = run["entry"] in buffers.get("queue", []) or run["entry"] in buffers.get("running", []) or run["entry"] in buffers.get("finished", {})
-            if not present:
+            if not present and run.get("superseded_by"):
+                run["state"] = "excluded"
+                self.event("run-superseded", run=run["id"], rig=rig, gpu=lane.get("gpu"), by=run["superseded_by"])
+            elif not present:
                 # the rig lost the entry (state wiped, disk swapped): the run is simply due again
                 self.requeue(run, front=True)
                 self.event("run-lost", run=run["id"], rig=rig, gpu=lane.get("gpu"))
@@ -988,6 +991,10 @@ class Cycle:
         if signals.get("artifact"):
             run["state"] = "done"
             self.event("run-done", run=run["id"], rig=rig, gpu=gpu, elapsed_s=status.get("elapsed_s"))
+        elif run.get("stolen") and run.get("superseded_by"):
+            run.pop("stolen", None)
+            run["state"] = "excluded"
+            self.event("run-superseded", run=run["id"], rig=rig, gpu=gpu, by=run["superseded_by"])
         elif run.get("stolen"):
             run.pop("stolen", None)
             self.requeue(run, front=True)
@@ -2659,6 +2666,40 @@ def steal(wave: Wave, config, board_config, args: argparse.Namespace) -> int:
     return 0
 
 
+def supersede(wave: Wave, config, args: argparse.Namespace) -> int:
+    """Retire a run a newer wave replaces: it ends `excluded` here and is never requeued or resubmitted
+    into this wave. A cluster job is cancelled by id; a lane run must be stolen first (steal proves the
+    lane is ours), and an in-flight one is excluded once its lane reports the kill."""
+    rigsync.require_confirmation(args.dry_run, args.confirm)
+    if not TAG_RE.fullmatch(args.by) or args.by == wave.wave_id:
+        raise SupervisorError(f"--by must name the superseding wave, not {args.by!r}")
+    with WaveLock(wave):
+        queue = wave.load()
+        run = find_run(queue, args.run)
+        if run["state"] in ("done", "excluded"):
+            raise SupervisorError(f"{run['id']} is {run['state']}; nothing to supersede")
+        lane = run.get("lane") or {}
+        machine = config.machines.get(lane.get("rig", "")) if run["state"] in ("assigned", "running") else None
+        job = run.get("job_id") if machine is not None and machine.gpus_in_job else None
+        if machine is not None and job is None and not run.get("stolen"):
+            raise SupervisorError(f"{run['id']} is {run['state']} on {lane.get('rig')} gpu{lane.get('gpu')}; steal it first, then supersede")
+        print(f"[{'dry-run' if args.dry_run else 'supersede'}] {run['id']} ({run['state']}) superseded by wave {args.by}"
+              + (f": scancel job {job}" if job else ""))
+        if args.dry_run:
+            return 0
+        if job:
+            result = sh(machine, 'scancel "$1"', str(job))
+            if result.returncode != 0:
+                raise SupervisorError(f"scancel {job} on {machine.name} failed: {result.stderr.strip() or result.returncode}")
+        run["superseded_by"] = args.by
+        run["note"] = f"superseded by wave {args.by}"
+        if not run.get("stolen"):
+            run["state"] = "excluded"
+        wave.save(queue)
+        wave.log("supersede", run=run["id"], by=args.by, job=job, in_flight=bool(run.get("stolen")))
+    return 0
+
+
 def ask(wave: Wave, settings: Settings, args: argparse.Namespace) -> int:
     with WaveLock(wave):
         items = wave.questions()
@@ -2905,6 +2946,10 @@ def build_parser() -> argparse.ArgumentParser:
     steal_p.add_argument("--front", action="store_true")
     steal_p.add_argument("--exclude-source", action="store_true")
     confirmable(steal_p)
+    supersede_p = wave_parser("supersede", help="retire a run a newer wave replaces; cancels its cluster job by id")
+    supersede_p.add_argument("--run", required=True)
+    supersede_p.add_argument("--by", required=True, help="the superseding wave id")
+    confirmable(supersede_p)
     ask_p = wave_parser("ask")
     ask_p.add_argument("--text", required=True)
     ask_p.add_argument("--meanwhile", required=True, help="what stays in force until the user answers")
@@ -3012,6 +3057,8 @@ def main(argv: list[str] | None = None) -> int:
             return pool_command(wave, args)
         if args.command == "steal":
             return steal(wave, project_config(wave, settings), board_config, args)
+        if args.command == "supersede":
+            return supersede(wave, project_config(wave, settings), args)
         if args.command == "ask":
             return ask(wave, settings, args)
         if args.command == "answer":

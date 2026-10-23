@@ -25,10 +25,13 @@ pool or ledger for the experiment's waves (a Slurm target such as `leonardo` inc
   that name is read or written. `RUN_ID_MAP.json` (in `evaluations/<exp>/`) is rebuilt on the hub,
   and on any rig that already has one, embedding the new `versions` and `history`.
 - **Listed, not changed:** `plots/` files whose name or content holds an old hash (to re-render),
-  and WandB runs. Every hashed-v2 run is `wandb.init(name=run_id_label(...),
-  tags=[run_id_name(...)], config=wandb_config(cfg))`, so `wandb_rename.py` finds a run by its
-  old-hash tag, sets its display name to the new label, and replaces the old-hash tag with the new
-  hash; the WandB run id never carries the hash and never changes.
+  and, only in a project whose runs logged to WandB before tracking became offline-only, its WandB
+  runs. The plan detects them from a `wandb` section in the run configs or `wandb-metadata.json`
+  under the run dirs; a project tracking offline only has neither, and gets no `wandb_rename.py`.
+  Such a run was `wandb.init(name=run_id_label(...), tags=[run_id_name(...)], ...)`, so
+  `wandb_rename.py` finds it by its old-hash tag, sets its display name to the new label, and
+  replaces the old-hash tag with the new hash; the WandB run id never carries the hash and never
+  changes.
 - **Follow-up, not rewritten by `apply`:** EXPERIMENTS.md beyond its hash strings. `apply` writes
   `followups.json` (below); the agent updates the section preamble, the new param columns, and
   the label cells from it through `experiments-tracking`.

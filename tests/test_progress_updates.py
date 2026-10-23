@@ -73,6 +73,21 @@ class ProgressUpdatesTests(unittest.TestCase):
         custom = self.module.parse_log("log", "wrote 4 of 8", r"(?P<done>\d+) of (?P<total>\d+)")
         self.assertEqual((custom["done"], custom["total"]), (4.0, 8.0))
 
+    def test_a_metric_percentage_is_never_read_as_progress(self) -> None:
+        parse = self.module.parse_log
+        step = parse("log", "step 3/10\nval acc 100.0%\n", None)
+        self.assertEqual((step["done"], step["total"]), (3, 10))
+        self.assertIsNone(parse("log", "epoch 1 loss 0.3 acc 93.1%\ngpu mem 45%\n", None))
+        self.assertEqual(parse("log", "Progress: 45%\nacc 99%\n", None)["done"], 45.0)
+        self.assertEqual(parse("log", "  12%  \n", None)["done"], 12.0)
+        self.assertEqual(parse("log", "12% done\n", None)["done"], 12.0)
+
+    def test_a_finished_metric_line_does_not_mark_a_task_done(self) -> None:
+        log = self.write("train.log", "loading\ntrain acc 100.0%\n")
+        self.cli("add", "--board", self.board, "--name", "train", "--kind", "log", "--log", log)
+        [row] = self.rows()
+        self.assertEqual(row[3], "ok")
+
     def test_linear_eta_after_two_samples(self) -> None:
         task = {"samples": [[0.0, 0.2], [600.0, 0.4]]}
         cell = self.module.eta_cell(task, {"done": 4, "total": 10}, 600.0, 1200.0)

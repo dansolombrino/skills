@@ -110,10 +110,11 @@ named `wave_<rig>_gpu<ids>.sh`) can be monitored and reconciled, not relaunched.
 
 When the user wants a newer wave to replace in-flight placements of the same runs:
 
-- `scancel` exactly the overlapping Slurm jobs, by id (`leonardo.jobs`, job name
-  `<old_wave_id>__<run_id_name>`).
-- For a supervised lane: `sweep-supervisor steal --run <id> --reason "superseded by wave <new>"`
-  then `queue drop`.
+- Retire each overlapping run of the old wave with `sweep-supervisor supersede --wave <old> --run
+  <id> --by <new> --dry-run`, then `--confirm`: it ends `excluded` and is never requeued or
+  resubmitted into the old wave. A Slurm job is cancelled by id; a lane run is first taken back
+  with `steal --reason "superseded by wave <new>"`. Never `scancel` by hand: the supervisor
+  resubmits a cancelled job it was not told about.
 - Flip the old rows to `superseded`, naming the new wave (`experiments-tracking`).
 - A superseded run's partial checkpoint is kept for resume when the source revision is the same,
   otherwise renamed to `<checkpoint dir>.superseded-<old_wave_id>`.

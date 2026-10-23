@@ -571,6 +571,54 @@ class SupervisorTests(unittest.TestCase):
         self.assertIn("job-adopted", events)
         self.assertNotIn("claim-refused", events)
 
+    def test_a_superseded_cluster_job_is_cancelled_by_id_and_never_resubmitted(self) -> None:
+        pool = {"cluster": {"max_jobs": 1, "core_hours_cap": 1000, "default_walltime_s": 3600}}
+        self.register(runs=1, pool=pool)
+        self.cli("cycle", "--wave", WAVE)
+        run = self.queue()["runs"][0]
+        self.assertEqual(self.cli("supersede", "--wave", WAVE, "--run", run["id"], "--by", WAVE, "--confirm")[0], 2)
+        code, out, _err = self.cli("supersede", "--wave", WAVE, "--run", run["id"], "--by", FIX_WAVE, "--dry-run")
+        self.assertIn(f"scancel job {run['job_id']}", out)
+        self.assertFalse((self.base / "slurm" / "cancelled").exists())
+        code, _out, err = self.cli("supersede", "--wave", WAVE, "--run", run["id"], "--by", FIX_WAVE, "--confirm")
+        self.assertEqual(code, 0, err)
+        self.assertEqual((self.base / "slurm" / "cancelled").read_text().split(), [str(run["job_id"])])
+        write(self.base / "slurm" / "sacct", f"{run['job_id']}|{WAVE}__{run['id']}|CANCELLED|00:10:00|0:0\n")
+        self.cli("cycle", "--wave", WAVE)
+        after = self.queue()["runs"][0]
+        self.assertEqual((after["state"], after["note"]), ("excluded", f"superseded by wave {FIX_WAVE}"))
+        self.assertEqual(len((self.base / "slurm" / "submitted").read_text().splitlines()), 1)
+
+    def test_a_cancelled_job_nobody_superseded_is_resubmitted_as_a_machine_fault(self) -> None:
+        pool = {"cluster": {"max_jobs": 1, "core_hours_cap": 1000, "default_walltime_s": 3600}}
+        self.register(runs=1, pool=pool)
+        self.cli("cycle", "--wave", WAVE)
+        run = self.queue()["runs"][0]
+        write(self.base / "slurm" / "sacct", f"{run['job_id']}|{WAVE}__{run['id']}|CANCELLED|00:10:00|0:0\n")
+        self.cli("cycle", "--wave", WAVE)
+        self.assertEqual(len((self.base / "slurm" / "submitted").read_text().splitlines()), 2)
+
+    def test_a_lane_run_is_superseded_only_after_steal_and_ends_excluded_once_killed(self) -> None:
+        self.register()
+        self.cli("cycle", "--wave", WAVE)
+        run = [r for r in self.queue()["runs"] if (r["lane"] or {}).get("rig") == "hub"][0]
+        code, _out, err = self.cli("supersede", "--wave", WAVE, "--run", run["id"], "--by", FIX_WAVE, "--confirm")
+        self.assertEqual(code, 2)
+        self.assertIn("steal it first", err)
+        wave = supervisor.Wave(self.hub, WAVE)
+        queue = wave.load()
+        [target] = [r for r in queue["runs"] if r["id"] == run["id"]]
+        target.update(state="running", stolen=True)  # what an in-flight steal leaves behind
+        wave.save(queue)
+        code, _out, err = self.cli("supersede", "--wave", WAVE, "--run", run["id"], "--by", FIX_WAVE, "--confirm")
+        self.assertEqual(code, 0, err)
+        self.assertEqual([r for r in self.queue()["runs"] if r["id"] == run["id"]][0]["state"], "running")
+        self.finish_entry(self.hub, run["entry"], 143, None)
+        self.cli("cycle", "--wave", WAVE)
+        after = [r for r in self.queue()["runs"] if r["id"] == run["id"]][0]
+        self.assertEqual(after["state"], "excluded")
+        self.assertIn("run-superseded", [record["event"] for record in wave.ledger()])
+
     def test_pool_raises_a_cluster_cap_and_resumes_submission(self) -> None:
         pool = {"cluster": {"max_jobs": 2, "core_hours_cap": 1, "default_walltime_s": 3600}}
         self.register(runs=2, pool=pool)

@@ -726,12 +726,6 @@
     for (const k of ["run_id_flat", "run_id", "label", "path"]) if (typeof e[k] === "string") return parseLabel(e[k]);
     return {};
   }
-  function findWandb(entry, flat) {
-    for (const [k, v] of Object.entries(Object.assign({}, flat, entry))) {
-      if (/wandb/i.test(k) && typeof v === "string" && /^https?:\/\//i.test(v)) return v;
-    }
-    return null;
-  }
   const currentVersion = () => runs.versions.length ? runs.versions[runs.versions.length - 1] : null;
 
   function buildRuns() {
@@ -750,7 +744,7 @@
         params: Object.assign(fromPath ? parseLabel(key) : {}, entryParams(e)),
         wave: entry.wave_id ?? undefined, rig: entry.rig ?? undefined, state: entry.state ?? undefined,
         label: typeof entry.run_id_flat === "string" ? entry.run_id_flat : "",
-        config, flat, wandb: findWandb(entry, flat),
+        config, flat,
       };
       row.text = [key, row.label, row.wave, row.rig, row.state, row.version != null ? "v" + row.version : "",
         ...Object.entries(row.params).map(([k, v]) => k + "=" + valText(v)),
@@ -880,7 +874,6 @@
       '<td><div class="ract"><button data-act="copy-hash" title="Copy the full hash">hash</button>' +
       (r.config ? '<button data-act="copy-config" title="Copy this run’s full resolved config as JSON">config</button>' : "") +
       '<button data-act="plots" title="Show the plots of this experiment, which select runs by hash">plots</button>' +
-      (r.wandb ? '<a href="' + esc(r.wandb) + '" target="_blank" rel="noopener noreferrer" title="' + esc(r.wandb) + '">WandB</a>' : "") +
       "</div></td></tr>");
     if (!shown.length) out.push('<tr><td colspan="' + span + '" class="empty">No run matches. Filters take words or key=value terms (lr=1e-4 seed=0); all must match.</td></tr>');
     if (shown.length > MAX_ROWS) out.push('<tr><td colspan="' + span + '" class="empty">Showing ' + MAX_ROWS + " of " + shown.length + "; narrow the filter to see the rest.</td></tr>");

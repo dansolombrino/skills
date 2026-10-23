@@ -271,8 +271,8 @@ State mapping (`squeue` while queued or running, `sacct` once gone):
 | `COMPLETED` + artifact absent | `failed` with reason "exit 0 without artifact" | report; never resubmit blindly |
 | `FAILED`, `OUT_OF_MEMORY` | `failed` (code) | report with the tail of `slurm-%j.out`; no automatic resubmit |
 | `TIMEOUT` | `interrupted` (walltime) | resubmit with a walltime resized from the run's measured progress; a restart-from-scratch run that cannot fit the 24 h cap goes to the user |
-| `NODE_FAIL`, `PREEMPTED`, `CANCELLED` not by the user, `BOOT_FAIL` | `interrupted` (machine fault) | resubmit the same script, same wave id |
-| `CANCELLED` by the user for a supersede | `superseded` | none; the row names the superseding wave (SKILL.md § Supersede) |
+| `NODE_FAIL`, `PREEMPTED`, any other `CANCELLED` (a hand `scancel` included), `BOOT_FAIL` | `interrupted` (machine fault) | resubmit the same script, same wave id |
+| `CANCELLED` by `sweep-supervisor supersede` | `superseded` | none; the run is already `excluded`, and the row names the superseding wave (SKILL.md § Supersede) |
 | exit code `86`/`87`/`88` in `sacct` | drift or storage, never a run failure | stop the slice, report, do not resubmit |
 
 - ETA for a queued job = `squeue --start` estimate (labeled `scheduler estimate`; often absent,
@@ -284,8 +284,9 @@ State mapping (`squeue` while queued or running, `sacct` once gone):
   status files of its live runs). Never poll from inside a job.
 - A stale heartbeat with `RUNNING` in `squeue` is a hang, not a machine fault: report it, and
   never `scancel` a **running** job without the user's approval (the cost is already spent and is
-  not refunded). The other `scancel`s are a user-approved supersede and the supervisor's
-  pending-job move above; both name exact job ids, never a user, partition, or pattern.
+  not refunded). The other `scancel`s are a user-approved `sweep-supervisor supersede` and the
+  supervisor's pending-job move above; both name exact job ids, never a user, partition, or
+  pattern.
 - The certificate check from the precondition section is rerun on every ssh failure before the
   site is called unreachable.
 

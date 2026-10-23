@@ -70,7 +70,8 @@ Trigger: a sweep must vary a param that is not in the identity, or `check_run_id
    `file:line@sha`; a param that did not exist yet is `null` with source `"absent"`. Ask the user
    only when the code cannot settle it. Rerun the plan with `--backfill-file`.
 3. **Review the plan summary** it prints: counts per machine, the old → new map, every backfill
-   with its source, plots to re-render, WandB renames. `apply` writes a rollback manifest first
+   with its source, plots to re-render, and WandB renames when older runs logged there. `apply`
+   writes a rollback manifest first
    and `migrate rollback` undoes it.
 4. **Apply** with `--confirm`. It re-verifies the preconditions and that nothing changed since the
    plan, writes the rollback manifest and per-machine backups first, renames run dirs and rewrites
@@ -80,10 +81,12 @@ Trigger: a sweep must vary a param that is not in the identity, or `check_run_id
    checks every machine's index equals the planned map. Any failure rolls back what was applied,
    then reports. It prints, per run, the new hash, the new label and the backfilled values, and
    writes them to `followups.json` beside `rollback.json`.
-5. **Follow-ups**, in this order: run the generated `wandb_rename.py` with the project environment,
-   `<environment.name>/bin/python wandb_rename.py` (without, then with, `--apply`; `apply` prints
-   the path with the name from `sync.toml`): it finds each run by its old-hash tag, sets its display
-   name to the new label and swaps the old-hash tag for the new hash; re-render the listed plots
+5. **Follow-ups**, in this order: only when `apply` lists WandB renames (runs that logged to
+   WandB before tracking became offline-only; a new project has none), run the generated
+   `wandb_rename.py` with the project environment, `<environment.name>/bin/python
+   wandb_rename.py` (without, then with, `--apply`; `apply` prints the path with the name from
+   `sync.toml`): it finds each run by its old-hash tag, sets its display name to the new label
+   and swaps the old-hash tag for the new hash; re-render the listed plots
    (`visualizations`); **update EXPERIMENTS.md** through `experiments-tracking` from
    `followups.json` — the section preamble's `run_id version:` and params line, the new param
    columns, and each row's param values and label cell (`apply` only replaced the hash strings);

@@ -43,8 +43,10 @@ Do this when starting the command; afterwards it is usually too late.
    exit code instead of guessed.
 2. For rsync, add `--info=progress2 --no-inc-recursive` so the log carries one whole-transfer
    percentage and rsync's own ETA (`--kind rsync`).
-3. A `tqdm` bar or an `epoch a/b` / `step a/b` line is parsed automatically (`--kind log`). If
-   the log prints neither, give `--pattern` with named groups `done` and `total`.
+3. A `tqdm` bar or an `epoch a/b` / `step a/b` line is parsed automatically (`--kind log`); a
+   bare `NN%` counts only on a line that is just it or says `progress NN%` / `NN% done`, so a
+   metric such as `acc 93%` is never read as progress. If the log prints none of these, give
+   `--pattern` with named groups `done` and `total`.
 4. For a copy that prints nothing useful, such as `scp` or a cloud CLI, compare the destination
    size to the source (`--kind size`).
 5. Something on another machine goes in with `--host <ssh alias>`; reads use non-interactive ssh.

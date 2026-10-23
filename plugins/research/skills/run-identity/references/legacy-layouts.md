@@ -19,7 +19,7 @@ stop.
 All run-scoped surfaces call `run_id_path(..., layout=RUN_ID_PATH_LAYOUT, segments=RUN_ID_SEGMENTS)`
 (`segments` only for the segments layouts).
 
-| layout | run directory | run folder in `scripts/`, `logs/`; WandB run name; EXPERIMENTS.md `run_id` |
+| layout | run directory | run folder in `scripts/`, `logs/`; EXPERIMENTS.md `run_id`; an older run's WandB name |
 |---|---|---|
 | `segments-v2` | one directory per segment, e.g. `model=mlp/hidden=64-128/optim_params=b4c2e09f6dbe6b4b,seed=0/` | the same path (`run_id_name`) |
 | `segments-v1` | as `segments-v2`, pairs percent-encoded (`hidden=%5B64%2C128%5D`) | the same path |
@@ -34,8 +34,8 @@ All run-scoped surfaces call `run_id_path(..., layout=RUN_ID_PATH_LAYOUT, segmen
   A value with no such rendering (a space, `/`, a dict, an empty or nested list, a list item
   containing `-`) is refused by the helper and belongs in a hash group.
 - `run_id_flat` (`model=mlp,lr=1e-3,seed=0`) is the lossless identity with every param explicit;
-  it is recorded in `.run_id.json`, `RUN_ID_MAP.json`, and the WandB config under every legacy
-  layout. A legacy run keeps `wandb.init(name=run_id_name(...))`.
+  it is recorded in `.run_id.json` and `RUN_ID_MAP.json` under every legacy layout (and in the
+  WandB config of a legacy run that logged to WandB, named `run_id_name(...)` there).
 - EXPERIMENTS.md tables keep one column per identity param; segments layouts add a `run_id`
   column and one column per hash group, `hashed-v1` adds a `hash` column.
 - `guard_run_config`, `check_run_id_plan`, and `write_run_id_map` work as under `hashed-v2`, and

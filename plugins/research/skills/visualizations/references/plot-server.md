@@ -64,9 +64,8 @@ a systemd user service, on the machine where plots are rendered (`rig-4090`).
     `migrated vN → vM` badge. When the `VERSIONS` or `HISTORY` endpoint answers 404 (an older
     sandbox bind list, or a checkout without the tracked files), the page falls back to the
     `versions` and `history` copies embedded in the map.
-  - Each row can copy its hash or its full config JSON. Its WandB link appears when the config
-    records a WandB URL. **plots** opens the Plots view filtered to `plots/<experiment_path>/`:
-    plots select runs by hash inside the file, never in the path.
+  - Each row can copy its hash or its full config JSON. **plots** opens the Plots view filtered
+    to `plots/<experiment_path>/`: plots select runs by hash inside the file, never in the path.
   - Maps from older run_id layouts get a limited view: the run path or hash and the params
     recoverable from it.
   - The address bar carries `#v=runs&p=<project>&e=<experiment>&q=<filter>`; `#p=&f=` plot links

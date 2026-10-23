@@ -1,6 +1,6 @@
 {
   "name": "core",
-  "version": "5.0.0",
+  "version": "5.0.1",
   "description": "Always-on working discipline for every project: report status and ETA for long-running tasks when they finish, fail, or stall, and tag each project with its categories so domain plugins such as research load only where they belong.",
   "author": {
     "name": "Dan Solombrino",

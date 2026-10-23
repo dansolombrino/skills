@@ -71,7 +71,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "14.6.0")
+        self.assertEqual(manifest["version"], "14.7.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -1230,6 +1230,10 @@ class ResearchContractTests(unittest.TestCase):
         self.assertNotIn("wandb", skill.lower())
         self.assertIn("metrics.jsonl", skill)
         self.assertIn("MetricsWriter(", skill)
+        browser = (ROOT / "plugins/research/skills/visualizations/assets/plot-browser.html").read_text()
+        self.assertNotIn("wandb", browser.lower())
+        identity = (ROOT / "plugins/research/skills/run-identity/SKILL.md").read_text()
+        self.assertIn("only when `apply` lists WandB renames", identity)
 
 
     def test_dispatch_triggers_on_the_cluster_and_loads_its_reference_lazily(self) -> None:

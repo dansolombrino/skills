@@ -11,14 +11,14 @@
       "name": "core",
       "source": "./plugins/core",
       "description": "Always-on working discipline for every project: report status and ETA for long-running tasks when they finish, fail, or stall, and tag each project with its categories so domain plugins such as research load only where they belong.",
-      "version": "5.0.0",
+      "version": "5.0.1",
       "category": "Developer Tools"
     },
     {
       "name": "research",
       "source": "./plugins/research",
       "description": "Materialize reproducible experiments across verified GPU rigs: scaffold projects, provision exact environments, deploy tested revisions, dispatch GPU waves as a self-balancing pull queue, supervise them from the hub without an open chat, keep a fleet-wide GPU lane board, and visualize results.",
-      "version": "14.6.0",
+      "version": "14.7.0",
       "category": "Developer Tools"
     }
   ]

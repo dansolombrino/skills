@@ -61,7 +61,7 @@ def _component(value) -> str:
 
 
 def label(values, params) -> str:
-    """The readable `k=v,...` display label (WandB name and tags), in identity param order."""
+    """The readable `k=v,...` display label (EXPERIMENTS.md `label` column), in identity param order."""
     return ",".join(f"{_component(p)}={_component(values[p])}" for p in params)
 
 
