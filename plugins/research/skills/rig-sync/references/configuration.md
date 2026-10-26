@@ -192,6 +192,37 @@ what a killed remote produces) or 255 (ssh died), printing a `[retry]` note each
 idempotent, so a retry resumes from what already landed. Any other exit code is a real transfer
 error and is not retried.
 
+### Opt-in and tailnet fields
+
+`opt_in = true` marks a machine that is **offered, never used by default** — typically someone
+else's machine you may borrow, such as a lab's shared GPU boxes. Every command whose machine list
+is optional (`doctor`, `provision-env`, `status`, `collect` of a wave with no recorded pool)
+skips it unless it is named; `check-paths` lists an opt-in rig missing from `sync.toml` as an
+`offer`, not a gap. `rig-board` treats no card on it as ours (`owned_gpus` defaults to empty), and
+`sweep-supervisor register` refuses an opt-in lane whose cards lack a user grant in
+`gpu_grants.<rig>`. Declaring the rig in a project's `sync.toml` makes it available, not used.
+
+`network = "tailscale"` declares that the `ssh` alias is reached over a Tailscale tailnet. The
+alias stays a plain `~/.ssh/config` entry (Tailscale SSH or regular sshd alike); the field only
+adds diagnosis. `doctor` checks the peer is online in this host's `tailscale status --json`
+before any probe, and an ssh exit 255 to the rig names the cause: tailscale missing or stopped on
+this host, the alias's address unknown to the tailnet, the peer offline (with its last-seen
+time), or, when the peer is online, a Tailscale SSH check-mode session that needs one interactive
+`ssh <alias> true` to re-authenticate. A non-interactive run never waits on that browser check.
+
+```toml
+[machines.gladia-gauss]
+ssh = "gladia-gauss"
+hostname = "gauss"
+opt_in = true
+network = "tailscale"
+storage_roots = [{ path = "/home/<user>", system_disk = true, min_free_gb = 100 }]
+```
+
+A shared lab machine often has only its system disk, so the root says `system_disk = true` and
+sets a floor that leaves room for its other users. Omit `caches` there unless the user agrees to
+`provision-env` editing that account's shell startup files.
+
 ### `[machines.<rig>.caches]` — the machine environment
 
 This table is the **single source of truth for a rig's shared caches and scratch**: `HF_HOME`,

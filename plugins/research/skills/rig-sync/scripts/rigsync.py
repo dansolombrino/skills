@@ -60,9 +60,16 @@ class Machine:
     # `transfer_ssh` in the registry: a second ssh alias reaching the same filesystem, used by
     # `pull`/`push` artifact rsync only (a data mover); git, doctor, and probes keep using `ssh`.
     transfer_ssh: str | None = None
+    # `opt_in = true` in the registry: offered, never used by default. A command without an
+    # explicit machine list skips it, and a wave includes it only with the user's grant.
+    opt_in: bool = False
+    # `network = "tailscale"` in the registry: reached over a tailnet, so an ssh failure is
+    # diagnosed against `tailscale status` (this host down, peer offline) instead of a bare timeout.
+    network: str | None = None
 
 
 GPU_ACCESS_VALUES = ("ssh", "job")
+NETWORK_VALUES = ("tailscale",)
 
 
 @dataclass(frozen=True)
@@ -270,6 +277,15 @@ def load_config(root: Path, config_path: Path, registry_path: Path) -> Config:
             raise RigSyncError(
                 f"{registry_path}: machines.{name}.transfer_ssh must be a non-empty string"
             )
+        opt_in = registry_entry.get("opt_in", False)
+        if not isinstance(opt_in, bool):
+            raise RigSyncError(f"{registry_path}: machines.{name}.opt_in must be true or false")
+        network = registry_entry.get("network")
+        if network is not None and network not in NETWORK_VALUES:
+            raise RigSyncError(
+                f"{registry_path}: machines.{name}.network must be one of "
+                + ", ".join(repr(value) for value in NETWORK_VALUES)
+            )
         raw_caches = registry_entry.get("caches", {})
         if not isinstance(raw_caches, dict):
             raise RigSyncError(f"{registry_path}: machines.{name}.caches must be a table")
@@ -299,6 +315,8 @@ def load_config(root: Path, config_path: Path, registry_path: Path) -> Config:
             tuple(sorted(caches)),
             raw_gpus == "job",
             transfer_ssh,
+            opt_in,
+            network,
         )
 
     for group, entry in artifacts.items():
@@ -321,8 +339,13 @@ def load_config(root: Path, config_path: Path, registry_path: Path) -> Config:
     return Config(root=root, artifacts=artifacts, machines=machines, git=git)
 
 
+def default_machines(config: Config) -> list[str]:
+    """Every configured machine except the opt-in ones, which are used only when named."""
+    return [name for name, machine in config.machines.items() if not machine.opt_in]
+
+
 def selected_machines(config: Config, raw: str | None) -> list[Machine]:
-    names = list(config.machines) if not raw else [part for part in raw.split(",") if part]
+    names = default_machines(config) if not raw else [part for part in raw.split(",") if part]
     unknown = [name for name in names if name not in config.machines]
     if unknown:
         raise RigSyncError(f"unknown machine(s): {', '.join(unknown)}")
@@ -331,6 +354,59 @@ def selected_machines(config: Config, raw: str | None) -> list[Machine]:
 
 def ssh_base(machine: Machine) -> list[str]:
     return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", machine.ssh]
+
+
+def _ssh_hostname(alias: str) -> str | None:
+    """The HostName an ssh alias resolves to, per `ssh -G`; None when ssh cannot say."""
+    result = subprocess.run(["ssh", "-G", alias], capture_output=True)
+    for line in result.stdout.decode(errors="replace").splitlines():
+        key, _, value = line.partition(" ")
+        if key == "hostname" and value:
+            return value.strip()
+    return None
+
+
+def tailnet_problem(machine: Machine) -> str | None:
+    """Why a `network = "tailscale"` machine is unreachable over the tailnet, or None if it is up.
+
+    Read from this host's `tailscale status --json`: tailscale missing or stopped here, the peer
+    unknown to the tailnet, or the peer offline. None means the tailnet path is up, so an ssh
+    failure lies elsewhere (most often Tailscale SSH waiting for an interactive re-check).
+    """
+    if machine.network != "tailscale" or machine.local:
+        return None
+    if shutil.which("tailscale") is None:
+        return "tailscale is not installed on this host"
+    result = subprocess.run(["tailscale", "status", "--json"], capture_output=True)
+    try:
+        status = json.loads(result.stdout or b"{}")
+    except json.JSONDecodeError:
+        status = {}
+    state = status.get("BackendState")
+    if state != "Running":
+        return f"tailscale on this host is {state or 'not running'}; bring it up (`tailscale up`)"
+    target = _ssh_hostname(machine.ssh) or machine.ssh
+    for peer in (status.get("Peer") or {}).values():
+        names = {peer.get("HostName", "").lower(), peer.get("DNSName", "").split(".")[0].lower()}
+        if target in (peer.get("TailscaleIPs") or []) or target.lower() in names:
+            if peer.get("Online"):
+                return None
+            seen = peer.get("LastSeen") or "never"
+            return f"{peer.get('HostName') or target} is offline on the tailnet (last seen {seen})"
+    return f"{target} is not a peer on this host's tailnet"
+
+
+def _ssh_failure_hint(machine: Machine) -> str:
+    """Extra context for an ssh exit 255 on a tailnet machine; empty when there is none."""
+    if machine.network != "tailscale":
+        return ""
+    problem = tailnet_problem(machine)
+    if problem:
+        return f"\n{machine.name} (tailnet): {problem}"
+    return (
+        f"\n{machine.name} (tailnet): the peer is online; if it uses Tailscale SSH in check mode, "
+        f"run `ssh {machine.ssh} true` interactively once to re-authenticate"
+    )
 
 
 def run(
@@ -357,7 +433,13 @@ def remote(
 ) -> subprocess.CompletedProcess:
     if machine.local:
         return run(argv, input_bytes=input_bytes, check=check)
-    return run(ssh_base(machine) + [shlex.join(argv)], input_bytes=input_bytes, check=check)
+    command = ssh_base(machine) + [shlex.join(argv)]
+    result = run(command, input_bytes=input_bytes, check=False)
+    if check and result.returncode:
+        stderr = result.stderr.decode(errors="replace").strip()
+        hint = _ssh_failure_hint(machine) if result.returncode == 255 else ""
+        raise RigSyncError(f"command failed ({result.returncode}): {shlex.join(command)}\n{stderr}{hint}")
+    return result
 
 
 def require_git(config: Config) -> GitSettings:
@@ -1669,7 +1751,8 @@ def check_paths(config: Config, config_path: Path, registry_path: Path) -> None:
         repo = PurePosixPath(machine.repo_path)
         root = root_for(machine.storage_roots, repo)
         if root is not None:
-            print(f"OK {machine.name} path: {repo} under {root.path}")
+            offered = " (opt-in: used only when named)" if machine.opt_in else ""
+            print(f"OK {machine.name} path: {repo} under {root.path}{offered}")
             continue
         print(
             f"FAIL {machine.name} path: repo_path {repo} is not under any declared "
@@ -1678,7 +1761,11 @@ def check_paths(config: Config, config_path: Path, registry_path: Path) -> None:
         failures += 1
     if isinstance(registry_machines, dict):
         for name in sorted(set(registry_machines) - set(config.machines)):
-            print(f"note {name}: in the registry but not in {config_path.name}")
+            entry = registry_machines[name]
+            if isinstance(entry, dict) and entry.get("opt_in") is True:
+                print(f"offer {name}: opt-in rig, not in {config_path.name}; declare it only if the user wants it")
+            else:
+                print(f"note {name}: in the registry but not in {config_path.name}")
     if failures:
         raise RigSyncError(f"check-paths failed with {failures} declaration(s)")
 
@@ -1866,9 +1953,9 @@ def queue_runs(queue: dict) -> list[dict]:
 
 
 def wave_rigs(config: Config, queue: dict) -> list[Machine]:
-    """The rigs a wave ran on: its pool when the queue records one, else every configured machine."""
+    """The rigs a wave ran on: its pool when the queue records one, else every non-opt-in machine."""
     pool = queue.get("pool")
-    names = sorted(pool) if isinstance(pool, dict) and pool else list(config.machines)
+    names = sorted(pool) if isinstance(pool, dict) and pool else default_machines(config)
     unknown = [name for name in names if name not in config.machines]
     if unknown:
         raise RigSyncError(f"wave pool names machine(s) sync.toml does not declare: {', '.join(unknown)}")
@@ -2449,6 +2536,13 @@ def doctor(config: Config, machines: list[Machine]) -> None:
             print(f"FAIL hub Git remote: {exc}")
             failures += 1
     for machine in machines:
+        if machine.network == "tailscale" and not machine.local:
+            problem = tailnet_problem(machine)
+            if problem:
+                print(f"FAIL {machine.name} tailnet: {problem}")
+                failures += 1
+                continue
+            print(f"OK {machine.name} tailnet: peer online")
         if machine.hostname is not None:
             hostname_result = remote(machine, ["hostname"], check=False)
             observed = hostname_result.stdout.decode(errors="replace").strip()

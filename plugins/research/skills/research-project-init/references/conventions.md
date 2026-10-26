@@ -129,6 +129,7 @@ The canonical name is the ssh alias.
 | `rig-3090-ti` | 3090, 3090 ti, `rig-3090ti` | 1 | 0.5 | dedicated | support |
 | `rig-3080-ti` | 3080, 3080 ti, `rig-3080ti` | 1 | 0.5 | dedicated | support |
 | `behemoth` | pro 6000, 6000, bw, blackwell, `rig-6000-pro-blackwell`, `server-pro-6000-bw` | 8, only GPU 0 is ours | 2.0 | quota'd, small home | support |
+| `gladia-erdos`, `gladia-turing`, `gladia-shannon`, `gladia-gauss`, `gladia-fourier`, `gladia-lovelace` | erdos, turing, …, gladia, lab machines | 1–2 each (3090, 2080 Ti, 4080) | 0.5 per 3090, 0.25 per 2080 Ti, 0.75 per 4080 | system disk only, shared home | opt-in, over the lab tailnet |
 | `leonardo` | cineca, leonardo booster, slurm, hpc | 1 per job (A100 64 GB) | 1.0 per A100 | per-project quota, scratch auto-cleaned | Slurm target: `sweep-dispatch` → `references/cineca-slurm.md` |
 
 - **Weights** are nominal per-GPU priors (capacity = weight × free GPUs), used to balance waves
@@ -137,6 +138,10 @@ The canonical name is the ssh alias.
   for that one wave, quoted verbatim in the manifest's `gpu_grants.behemoth` and the script's
   `# GPU auth:` header (`supervisor.py register` and `board.py claim` refuse without it). Its
   disk is quota'd per user: check headroom with `quota`, not `df`.
+- **Opt-in rigs** (`opt_in = true` in the registry; the GLADIA lab machines) are offered, never
+  used by default: no card on them is ours, a command without an explicit machine list skips
+  them, and a wave runs there only on cards the user grants for that wave (`gpu_grants.<rig>`,
+  verbatim). They are other people's machines, reached over a tailnet (`network = "tailscale"`).
 - **leonardo** is a batch cluster: one run per job, one GPU, 8 cores, 128 GB unless the user says
   a run needs more; it is outside lane balancing. Access is a short-lived SSH certificate only the
   user can renew (`phone-bridge`). The project

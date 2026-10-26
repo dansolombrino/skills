@@ -98,6 +98,9 @@ class Rig:
     # On a shared rig only these cards are ours (`machines.<rig>.owned_gpus`, default gpu0); any
     # other card needs a per-wave user grant, and `claim` refuses it without one.
     owned_gpus: frozenset[int] = frozenset({0})
+    # `machines.<rig>.opt_in`: offered, never used by default. Nothing on it is ours unless
+    # `owned_gpus` says so, so `claim` needs a user grant for every other card.
+    opt_in: bool = False
 
 
 @dataclass(frozen=True)
@@ -169,10 +172,11 @@ def load_config(registry_path: Path) -> BoardConfig:
         if not isinstance(ssh, str) or not ssh:
             raise BoardError(f"{registry_path}: machines.{name}.ssh must be set")
         hostname = entry.get("hostname")
-        owned = entry.get("owned_gpus", [0])
-        if not isinstance(owned, list) or not owned or not all(isinstance(g, int) and not isinstance(g, bool) and g >= 0 for g in owned):
+        opt_in = entry.get("opt_in") is True
+        owned = entry.get("owned_gpus", [] if opt_in else [0])
+        if not isinstance(owned, list) or (not owned and not opt_in) or not all(isinstance(g, int) and not isinstance(g, bool) and g >= 0 for g in owned):
             raise BoardError(f"{registry_path}: machines.{name}.owned_gpus must be a non-empty list of GPU indices")
-        rigs[name] = Rig(name, ssh, hostname if isinstance(hostname, str) else None, name in shared, frozenset(owned))
+        rigs[name] = Rig(name, ssh, hostname if isinstance(hostname, str) else None, name in shared, frozenset(owned), opt_in)
     slurm_names = board.get("slurm", [])
     if not isinstance(slurm_names, list) or not all(isinstance(n, str) for n in slurm_names):
         raise BoardError(f"{registry_path}: board.slurm must be a list of machine names")
@@ -303,11 +307,11 @@ def claim(config: BoardConfig, args: argparse.Namespace) -> int:
     gpu = validate_gpu(args.gpu)
     if not WAVE_RE.fullmatch(args.wave):
         raise BoardError(f"wave must be YYYYMMDD-HHMMSS; got {args.wave!r}")
-    if rig.shared:
+    if rig.shared or rig.opt_in:
         foreign = gpu_indices(gpu) - rig.owned_gpus - set(getattr(args, "granted_gpus", None) or ())
         if foreign:
             raise BoardError(
-                f"{rig.name} is shared: gpu {sorted(foreign)} is not ours (owned: {sorted(rig.owned_gpus)}); "
+                f"{rig.name} is {'opt-in' if rig.opt_in else 'shared'}: gpu {sorted(foreign)} is not ours (owned: {sorted(rig.owned_gpus)}); "
                 "only a user grant for this wave allows it"
             )
     session = args.tmux_session or f"{args.project}_{args.experiment}_{args.wave}_{rig.name}_gpu{gpu}"
@@ -655,6 +659,7 @@ def parse_probe(rig: Rig, output: str) -> dict:
         "at": iso(now()),
         "reachable": True,
         "shared": rig.shared,
+        "opt_in": rig.opt_in,
         "boot_at": boot_at,
         "sessions": sessions,
         "gpus": gpus,
@@ -726,6 +731,7 @@ def unreachable_probe(rig: Rig, previous: dict | None) -> dict:
         "at": iso(now()),
         "reachable": False,
         "shared": rig.shared,
+        "opt_in": rig.opt_in,
         "boot_at": (previous or {}).get("boot_at"),
         "sessions": (previous or {}).get("sessions", []),
         "gpus": (previous or {}).get("gpus", []),
@@ -1535,12 +1541,14 @@ def snapshot(config: BoardConfig) -> dict:
             "at": None,
             "reachable": None,
             "shared": rig.shared,
+            "opt_in": rig.opt_in,
             "boot_at": None,
             "sessions": [],
             "gpus": [],
             "foreign": [],
         }
         probe.setdefault("foreign", [])
+        probe["opt_in"] = rig.opt_in
         probe["lanes"] = [lane for lane in lanes if lane.get("rig") == name]
         probe.setdefault("kind", "rig")
         probe.setdefault("gpu_probe_ok", None if probe.get("reachable") is None else bool(probe.get("gpus")))
@@ -1793,7 +1801,7 @@ def status(config: BoardConfig, args: argparse.Namespace) -> int:
     for rig in data["rigs"]:
         reach = "unreachable" if rig["reachable"] is False else ("never probed" if rig["reachable"] is None else f"probed {age(rig['at'])} ago")
         net = describe_net(rig.get("net")) if rig["reachable"] else None
-        print(f"\n{rig['rig']}  [{reach}]" + ("  shared" if rig.get("shared") else "") + (f"  {net}" if net else ""))
+        print(f"\n{rig['rig']}  [{reach}]" + ("  shared" if rig.get("shared") else "") + ("  opt-in" if rig.get("opt_in") else "") + (f"  {net}" if net else ""))
         if rig["reachable"] and rig.get("gpu_probe_ok") is False:
             print("  nvidia-smi failed on the rig: GPU state unknown")
         gpus = {g["index"]: g for g in rig.get("gpus", [])}
@@ -2101,7 +2109,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--project-root", required=True, help="absolute project root on the hub")
     p.add_argument("--runs-total", type=int, required=True)
     p.add_argument("--tmux-session", help="defaults to <project>_<experiment>_<wave>_<rig>_gpu<ids>")
-    p.add_argument("--granted-gpus", type=lambda v: sorted(gpu_indices(validate_gpu(v))), help="shared rig only: cards beyond owned_gpus the user granted for this wave, e.g. 3 or 3,4")
+    p.add_argument("--granted-gpus", type=lambda v: sorted(gpu_indices(validate_gpu(v))), help="shared or opt-in rig only: cards beyond owned_gpus the user granted for this wave, e.g. 3 or 3,4")
 
     p = sub.add_parser("refresh", help="update progress/ETA for a held lane (orchestrator tick)")
     p.add_argument("--rig", required=True)

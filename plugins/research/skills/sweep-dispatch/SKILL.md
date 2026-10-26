@@ -43,6 +43,12 @@ Each gate names what enforces it; a failure stops the wave and is reported as is
 - Read the fleet board first: `rig-board status --reconcile`. The pool is every lane of ours on the
   project's rigs (`sync.toml`), free or held; a held lane waits in the pool and starts when its
   holder releases it. Availability never comes from `nvidia-smi`.
+- An **opt-in** rig (`opt_in = true` in the registry, shown as `opt-in` on the board) is never in
+  the pool by default, even when `sync.toml` declares it. When building the pool, offer the free
+  cards the board shows on opt-in rigs in one line (rig, card, GPU model) and add one only on the
+  user's yes for this wave, recorded as `gpu_grants.<rig>` with their words verbatim (`register`
+  refuses an opt-in lane without it). A rig not yet in `sync.toml` needs its `repo_path` declared
+  and `rig-sync check-paths`/`prepare` first; say so rather than offering it as ready.
 - `behemoth` contributes gpu0. Another card needs the user's grant for this wave, written into
   the manifest as `gpu_grants.behemoth` with the user's words verbatim (`register` refuses
   otherwise).
@@ -71,7 +77,7 @@ scripts/NNN_exp/_lanes/wave_<wave_id>/lane.sh              # the loop every lane
 - The run folder is `run_id_path(...)`, the same `rid-<32 hex>` directory as in `evaluations/`.
   Materialize each run's exact checkpoint, evaluation, status, and final-artifact paths into its
   script and into the supervisor manifest.
-- The README records the wave's purpose, its pool and offload rigs, any `behemoth` grant verbatim,
+- The README records the wave's purpose, its pool and offload rigs, any `behemoth` or opt-in grant verbatim,
   and its **standing authorization**: inside the pool the supervisor may start, move, requeue, and
   steal this wave's own runs, resubmit or cancel its own not-yet-started jobs, fetch data into
   declared caches, and free checksum-verified checkpoints on offload rigs. That record is what

@@ -86,7 +86,8 @@ Set `RIGSYNC_REGISTRY` or pass `--registry` to use another registry.
 ## Supervisor hooks (owned by `sweep-supervisor`)
 
 - `sweep-dispatch` reads `status --reconcile` before building a pool; held and foreign
-  lanes are not free capacity.
+  lanes are not free capacity, and free cards on an `opt-in` rig are offers to put to the user,
+  never capacity to take.
 - The supervisor service `claim`s a lane immediately after it starts that lane's tmux session. A
   claim on a held lane exits 3: the lane stays out of the wave and the refusal is reported. A
   same-session claim is a re-claim (recovery relaunch).

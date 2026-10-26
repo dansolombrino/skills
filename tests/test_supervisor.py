@@ -220,6 +220,19 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(self.queue()["gpu_grants"]["peer"]["gpus"], [2])
 
+    def test_opt_in_rig_lanes_need_a_user_grant_for_every_card(self) -> None:
+        self.registry.write_text(self.registry.read_text().replace('ssh = "peer"\n', 'ssh = "peer"\nopt_in = true\n'))
+        pool = {"hub": {"lanes": ["0"]}, "peer": {"lanes": ["0"]}}
+        code, _out, err = self.cli("register", "--wave", WAVE, "--manifest", str(self.manifest(pool=pool)), "--dry-run")
+        self.assertNotEqual(code, 0)
+        self.assertIn("opt-in", err)
+        path = self.manifest(pool=pool)
+        payload = json.loads(path.read_text())
+        payload["gpu_grants"] = {"peer": {"gpus": [0], "user_words": "yes, use gauss gpu 0 too", "date": "2026-10-26"}}
+        path.write_text(json.dumps(payload))
+        code, _out, err = self.cli("register", "--wave", WAVE, "--manifest", str(path), "--dry-run")
+        self.assertEqual(code, 0, err)
+
     def queue(self) -> dict:
         return supervisor.Wave(self.hub, WAVE).load()
 

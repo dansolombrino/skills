@@ -509,6 +509,15 @@ def build_queue(manifest: dict, project_root: Path, config, settings: Settings, 
                 if indices & seen:
                     raise SupervisorError(f"manifest: pool.{rig}.lanes overlap on gpu {sorted(indices & seen)}")
                 seen |= indices
+            if machine.opt_in:
+                # an opt-in rig is offered, never assumed: every card it runs on is a user grant
+                ungranted = seen - set(grants.get(rig, {}).get("gpus", ()))
+                if ungranted:
+                    raise SupervisorError(
+                        f"manifest: {rig} is opt-in (offered, not used by default) and gpu "
+                        f"{sorted(ungranted)} has no user grant; ask the user and record their words "
+                        f"in `gpu_grants.{rig}`"
+                    )
             shared = board_config.rigs.get(rig) if board_config is not None else None
             if shared is not None and shared.shared:
                 foreign = seen - shared.owned_gpus - set(grants.get(rig, {}).get("gpus", ()))

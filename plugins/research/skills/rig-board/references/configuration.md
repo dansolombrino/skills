@@ -17,6 +17,10 @@ token  = "<output of board.py token>"                # optional; required for an
 reconcile_every = 120                                # seconds between rig probes by `serve`; 0 disables, minimum 10
 ```
 
+- An entry with `opt_in = true` (rig-sync's registry field) shows an `opt-in` pill and owns no
+  card by default (`owned_gpus = []`): `claim` there needs `--granted-gpus` for every card, and
+  its free cards are offers for `sweep-dispatch`, not pool capacity. List such rigs under `rigs`
+  so their cards are visible, and under `shared` when other people use them.
 - `rigs` must name existing `[machines.<rig>]` entries; each needs `ssh`. The entry whose
   `hostname` matches the current machine is probed locally, without self-SSH.
 - A Slurm target goes under `slurm`, never under `rigs`. The cluster has jobs, not lanes: the

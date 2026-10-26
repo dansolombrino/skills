@@ -198,6 +198,23 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(code, 0, out + err)
 
 
+    def test_opt_in_rig_owns_no_card_and_claims_only_granted_ones(self) -> None:
+        self.registry.write_text(
+            self.registry.read_text()
+            .replace('rigs = ["rig-4090", "behemoth"]', 'rigs = ["rig-4090", "behemoth", "gladia-gauss"]')
+            + '\n[machines.gladia-gauss]\nssh = "gladia-gauss"\nopt_in = true\n'
+        )
+        config = board.load_config(self.registry)
+        self.assertTrue(config.rigs["gladia-gauss"].opt_in)
+        self.assertEqual(config.rigs["gladia-gauss"].owned_gpus, frozenset())
+        self.assertFalse(config.rigs["behemoth"].opt_in)
+        session = "grokking_000_grokking_20260908-101500_gladia-gauss_gpu0"
+        code, out, err = self.claim(**{"--rig": "gladia-gauss", "--gpu": "0", "--tmux-session": session})
+        self.assertNotEqual(code, 0)
+        self.assertIn("is opt-in", out + err)
+        code, out, err = self.claim(**{"--rig": "gladia-gauss", "--gpu": "0", "--tmux-session": session, "--granted-gpus": "0"})
+        self.assertEqual(code, 0, out + err)
+
     def test_claim_refresh_release_round_trip(self) -> None:
         code, out, _ = self.claim()
         self.assertEqual(code, 0, out)

@@ -40,13 +40,15 @@ python3 "$RIGSYNC_SCRIPT" pull evaluations/000_exp --from rig-3090-ti --dry-run|
 ```
 
 Every write has a `--dry-run`. `rig-4090` is local when its name or hostname matches the current
-host; peers get bounded, non-interactive SSH.
+host; peers get bounded, non-interactive SSH. A rig with `opt_in = true` is used only when named:
+any command's default machine set skips it. On a `network = "tailscale"` rig an ssh failure names
+the tailnet cause (tailscale down here, peer offline, Tailscale SSH wanting a re-check).
 
 - `check-paths` — each `repo_path` sits under one of its rig's declared storage roots. Run it
   before the first remote step: it catches a misplaced path before anything is cloned there.
 - `repo-path` / `storage-env` — read a rig's project path and storage floor back; never retype
   them.
-- `doctor` — before dispatch: hostname identity, Git (2.17+ for worktrees), storage roots
+- `doctor` — before dispatch: tailnet reachability on a tailscale rig, hostname identity, Git (2.17+ for worktrees), storage roots
   resolved and mounted, quota headroom (`quota`, not `df` alone), shared cache values visible to a
   non-interactive shell, and no project `.env` redeclaring them.
 - `provision-env` — writes the rig's declared shared-cache variables into a marked block of

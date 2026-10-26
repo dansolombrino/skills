@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import io
 import subprocess
 import sys
@@ -1337,6 +1338,92 @@ class MachineEnvTests(unittest.TestCase):
             self.assertEqual(rigsync.transfer_alias(rig), "rig")
             # ssh probes keep using the login alias even when transfer_ssh is declared.
             self.assertEqual(rigsync.ssh_base(cluster)[-1], "cluster")
+
+    def opt_in_config(self, root: Path) -> rigsync.Config:
+        config = root / "sync.toml"
+        registry = root / "machines.toml"
+        write(
+            config,
+            """
+            version = 1
+            [artifacts.evaluations]
+            path = "evaluations"
+            depth = 2
+            [machines.rig]
+            repo_path = "/data/project"
+            [machines.lab]
+            repo_path = "/home/me/project"
+            """,
+        )
+        write(
+            registry,
+            """
+            [machines.rig]
+            ssh = "rig"
+            storage_root = "/data"
+            [machines.lab]
+            ssh = "lab"
+            opt_in = true
+            network = "tailscale"
+            storage_roots = [{ path = "/home/me", system_disk = true }]
+            [machines.lab2]
+            ssh = "lab2"
+            opt_in = true
+            """,
+        )
+        with mock.patch.object(rigsync.socket, "gethostname", return_value="elsewhere"):
+            return rigsync.load_config(root, config, registry)
+
+    def test_opt_in_rig_is_used_only_when_named(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            parsed = self.opt_in_config(Path(raw))
+            lab = parsed.machines["lab"]
+            self.assertTrue(lab.opt_in)
+            self.assertEqual(lab.network, "tailscale")
+            self.assertFalse(parsed.machines["rig"].opt_in)
+            self.assertEqual([m.name for m in rigsync.selected_machines(parsed, None)], ["rig"])
+            self.assertEqual([m.name for m in rigsync.selected_machines(parsed, "rig,lab")], ["rig", "lab"])
+            self.assertEqual([m.name for m in rigsync.wave_rigs(parsed, {})], ["rig"])
+            self.assertEqual([m.name for m in rigsync.wave_rigs(parsed, {"pool": {"lab": {}}})], ["lab"])
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rigsync.check_paths(parsed, Path(raw) / "sync.toml", Path(raw) / "machines.toml")
+            self.assertIn("opt-in: used only when named", out.getvalue())
+            self.assertIn("offer lab2: opt-in rig", out.getvalue())
+
+    def test_registry_rejects_bad_opt_in_and_network(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.opt_in_config(root)
+            registry = root / "machines.toml"
+            text = registry.read_text()
+            for bad, message in (('opt_in = true\nnetwork', 'opt_in = "yes"\nnetwork'), ('"tailscale"', '"zerotier"')):
+                registry.write_text(text.replace(bad, message, 1))
+                with self.assertRaises(rigsync.RigSyncError):
+                    rigsync.load_config(root, root / "sync.toml", registry)
+
+    def test_tailnet_problem_reads_tailscale_status(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            lab = self.opt_in_config(Path(raw)).machines["lab"]
+        status = {
+            "BackendState": "Running",
+            "Peer": {"k": {"HostName": "gauss", "DNSName": "gauss.tail.ts.net.", "TailscaleIPs": ["100.1.2.3"], "Online": False, "LastSeen": "2026-10-25T10:00:00Z"}},
+        }
+
+        def fake_run(command, **_kwargs):
+            if command[:2] == ["ssh", "-G"]:
+                return subprocess.CompletedProcess(command, 0, b"user me\nhostname 100.1.2.3\n", b"")
+            return subprocess.CompletedProcess(command, 0, json.dumps(status).encode(), b"")
+
+        with mock.patch.object(rigsync.shutil, "which", return_value="/usr/bin/tailscale"), mock.patch.object(rigsync.subprocess, "run", side_effect=fake_run):
+            self.assertIn("offline on the tailnet", rigsync.tailnet_problem(lab))
+            status["Peer"]["k"]["Online"] = True
+            self.assertIsNone(rigsync.tailnet_problem(lab))
+            self.assertIn("re-authenticate", rigsync._ssh_failure_hint(lab))
+            status["BackendState"] = "Stopped"
+            self.assertIn("tailscale up", rigsync.tailnet_problem(lab))
+        with mock.patch.object(rigsync.shutil, "which", return_value=None):
+            self.assertIn("not installed", rigsync.tailnet_problem(lab))
 
     def test_registry_rejects_unknown_gpus_value_and_empty_transfer_ssh(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
