@@ -31,6 +31,7 @@ import sys
 import threading
 import time
 import tomllib
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from http.cookies import SimpleCookie
@@ -55,7 +56,31 @@ HOP_BY_HOP = {
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer",
     "transfer-encoding", "upgrade", "proxy-connection",
 }
+ICON_TYPES = {".png": "image/png", ".svg": "image/svg+xml", ".ico": "image/x-icon", ".webp": "image/webp"}
 PAGE_PATH = Path(__file__).resolve().parents[1] / "assets" / "hub.html"
+NAV_PATH = PAGE_PATH.with_name("hub-nav.js")
+NAV_ROUTE = "/hub/nav.js"
+# The back-to-hub button goes into proxied pages only up to this size: a page is buffered to insert it.
+INJECT_MAX_BYTES = 4 * 1024 * 1024
+BODY_END = re.compile(rb"</body\s*>", re.IGNORECASE)
+
+
+def inject_nav(body: bytes, slug: str) -> bytes:
+    """Insert the hub's navigation script before the last </body> (or at the end)."""
+    tag = f'<script src="{NAV_ROUTE}" data-service="{slug}" defer></script>'.encode()
+    matches = list(BODY_END.finditer(body))
+    at = matches[-1].start() if matches else len(body)
+    return body[:at] + tag + body[at:]
+
+
+def gunzip_bounded(data: bytes, limit: int) -> bytes | None:
+    """Decompress a gzip body, or None when it is corrupt or larger than limit."""
+    inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    try:
+        out = inflater.decompress(data, limit)
+    except zlib.error:
+        return None
+    return None if inflater.unconsumed_tail or not inflater.eof else out
 
 
 class HubError(Exception):
@@ -71,6 +96,7 @@ class Service:
     url: str | None      # backend base URL (proxied under /<slug>/)
     link: str | None     # external URL (link-only card)
     health: str | None   # path probed on the backend; None disables the probe
+    nav: bool = True     # inject the back-to-hub button into this service's pages
 
 
 @dataclass(frozen=True)
@@ -81,6 +107,7 @@ class HubConfig:
     title: str
     public_url: str | None
     services: tuple[Service, ...]
+    icon: Path | None = None  # image file served as the favicon and the page mark
 
     def service(self, slug: str) -> Service | None:
         return next((s for s in self.services if s.slug == slug), None)
@@ -116,6 +143,13 @@ def load_config(path: Path) -> HubConfig:
     public_url = table.get("public_url")
     if public_url is not None and (not isinstance(public_url, str) or not public_url.startswith(("http://", "https://"))):
         raise HubError(f"{path}: hub.public_url must start with http:// or https://")
+    icon = table.get("icon")
+    if icon is not None:
+        if not isinstance(icon, str) or Path(icon).expanduser().suffix.lower() not in ICON_TYPES:
+            raise HubError(f"{path}: hub.icon must be the path of a {'/'.join(ICON_TYPES)} file")
+        icon = Path(icon).expanduser()
+        if not icon.is_file():
+            raise HubError(f"{path}: hub.icon {str(icon)!r} does not exist")
     raw = table.get("services", {})
     if not isinstance(raw, dict):
         raise HubError(f"{path}: hub.services must be a table of [hub.services.<name>] tables")
@@ -143,10 +177,13 @@ def load_config(path: Path) -> HubConfig:
         for key, value in texts.items():
             if not isinstance(value, str):
                 raise HubError(f"{where}: {key} must be a string")
-        services.append(Service(slug, texts["name"], texts["description"], texts["icon"], url, link, health or None))
+        nav = entry.get("nav", True)
+        if not isinstance(nav, bool):
+            raise HubError(f"{where}: nav must be true or false")
+        services.append(Service(slug, texts["name"], texts["description"], texts["icon"], url, link, health or None, nav))
     if not is_loopback(bind) and token is None:
         raise HubError(f"{path}: refusing hub.bind = {bind!r} without hub.token; set one (hub.py token) or bind 127.0.0.1")
-    return HubConfig(port, bind, token, title, public_url.rstrip("/") if public_url else None, tuple(services))
+    return HubConfig(port, bind, token, title, public_url.rstrip("/") if public_url else None, tuple(services), icon)
 
 
 def is_loopback(address: str) -> bool:
@@ -215,6 +252,7 @@ def services_json(config: HubConfig, health: Health) -> dict:
     return {
         "api_version": 1,
         "title": config.title,
+        "icon": config.icon is not None,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "services": [
             {
@@ -262,7 +300,7 @@ def strip_hub_cookie(raw: str) -> str:
 
 
 LOGIN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>{title} · sign in</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>{title} · sign in</title>{icon_link}
 <style>:root{{color-scheme:light dark;--bg:#f6f7f9;--card:#fff;--line:#e3e5e8;--text:#15171a;--muted:#6b7280;--accent:#2563eb}}
 @media (prefers-color-scheme:dark){{:root{{--bg:#0f1115;--card:#171a20;--line:#2a2f37;--text:#e8eaed;--muted:#9aa1ab;--accent:#5b8dff}}}}
 body{{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:16px;box-sizing:border-box}}
@@ -270,10 +308,21 @@ form{{background:var(--card);border:1px solid var(--line);border-radius:14px;pad
 h1{{font-size:18px;margin:0 0 4px}}p{{margin:0 0 18px;color:var(--muted);font-size:13px}}
 input{{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:transparent;color:inherit;font:inherit;margin-bottom:12px}}
 button{{width:100%;padding:10px;border:0;border-radius:8px;background:var(--accent);color:#fff;font:inherit;font-weight:600;cursor:pointer}}
-.err{{color:#dc2626;font-size:13px;margin:-6px 0 12px}}</style></head>
-<body><form method="get" action="{action}"><h1>{title}</h1><p>Paste the hub access token. This browser remembers it for a year.</p>
+.err{{color:#dc2626;font-size:13px;margin:-6px 0 12px}}.logo{{width:48px;height:48px;display:block;margin-bottom:12px}}</style></head>
+<body><form method="get" action="{action}">{icon_img}<h1>{title}</h1><p>Paste the hub access token. This browser remembers it for a year.</p>
 {error}<input name="token" type="password" autocomplete="current-password" placeholder="access token" autofocus required>
 <button type="submit">Open</button></form></body></html>"""
+
+
+def icon_href(config: HubConfig, root: str = "") -> str | None:
+    """The favicon URL with the file's mtime as a version, so a browser never keeps an old icon (or an old 404)."""
+    if config.icon is None:
+        return None
+    try:
+        version = int(config.icon.stat().st_mtime)
+    except OSError:
+        version = 0
+    return f"{root}favicon.ico?v={version}"
 
 
 def html_escape(text: str) -> str:
@@ -308,12 +357,20 @@ def make_handler(config: HubConfig, health: Health, access_log=None):
             if url.path == "/healthz":
                 self._send(200, "text/plain; charset=utf-8", b"ok\n")
                 return
+            if url.path == "/favicon.ico":  # public, so the sign-in page and the tab show it too
+                self._icon()
+                return
             if not self._authorized(url):
                 return
             parts = url.path.split("/", 2)  # "", first segment, rest
             first = parts[1] if len(parts) > 1 else ""
             if url.path in ("/", "/index.html"):
                 self._page()
+            elif url.path == NAV_ROUTE:
+                try:
+                    self._send(200, "text/javascript; charset=utf-8", NAV_PATH.read_bytes(), cache="no-cache")
+                except OSError:
+                    self._send(404, "text/plain; charset=utf-8", b"not found\n")
             elif url.path == "/api/services":
                 self._send(200, "application/json; charset=utf-8", json.dumps(services_json(config, health)).encode())
             elif (service := config.service(first)) is not None and service.url:
@@ -339,7 +396,12 @@ def make_handler(config: HubConfig, health: Health, access_log=None):
                 wants_html = "text/html" in self.headers.get("Accept", "") and self.command in ("GET", "HEAD")
                 if wants_html:
                     error = '<div class="err">That token is not valid.</div>' if token is not None else ""
-                    body = LOGIN_PAGE.format(title=html_escape(config.title), action=html_escape(url.path or "/"), error=error)
+                    href = icon_href(config, "/")
+                    body = LOGIN_PAGE.format(
+                        title=html_escape(config.title), action=html_escape(url.path or "/"), error=error,
+                        icon_link=f'<link rel="icon" href="{href}">' if href else "",
+                        icon_img=f'<img class="logo" src="{href}" alt="">' if href else "",
+                    )
                     self._send(401, "text/html; charset=utf-8", body.encode())
                 else:
                     self._send(401, "text/plain; charset=utf-8", b"service-hub: access token required (?token=, Authorization: Bearer, or the hub cookie)\n")
@@ -355,7 +417,15 @@ def make_handler(config: HubConfig, health: Health, access_log=None):
 
         def _page(self) -> None:
             try:
-                body = PAGE_PATH.read_text(encoding="utf-8").replace("__HUB_TITLE__", html_escape(config.title)).encode()
+                href = icon_href(config)
+                body = (
+                    PAGE_PATH.read_text(encoding="utf-8")
+                    .replace("__HUB_TITLE__", html_escape(config.title))
+                    .replace("__HUB_ICON__", href or "data:,")
+                    .replace("__HUB_MARK_CLASS__", "mark img" if href else "mark")
+                    .replace("__HUB_MARK__", f'<img src="{href}" alt="">' if href else "·")
+                    .encode()
+                )
             except OSError:
                 body = b"service-hub: assets/hub.html is missing; /api/services still answers\n"
                 self._send(200, "text/plain; charset=utf-8", body)
@@ -417,6 +487,8 @@ def make_handler(config: HubConfig, health: Health, access_log=None):
                 self._send(502, "text/plain; charset=utf-8", f"service-hub: {service.name} is not answering ({exc})\n".encode())
                 return
             try:
+                if self._wants_nav(service) and self._send_with_nav(service, response):
+                    return
                 self.send_response(response.status, response.reason)
                 for key, value in response.getheaders():
                     low = key.lower()
@@ -437,6 +509,39 @@ def make_handler(config: HubConfig, health: Health, access_log=None):
             finally:
                 conn.close()
                 self.close_connection = True
+
+        def _wants_nav(self, service: Service) -> bool:
+            """Only top-level page loads get the button, never a frame, a fetch or an asset."""
+            if not service.nav or self.command != "GET":
+                return False
+            dest = self.headers.get("Sec-Fetch-Dest")
+            return dest == "document" if dest else "text/html" in self.headers.get("Accept", "")
+
+        def _send_with_nav(self, service: Service, response) -> bool:
+            """Send an HTML page with the hub button added; False (nothing sent, body unread) when it does not apply."""
+            ctype = response.getheader("Content-Type", "")
+            encoding = (response.getheader("Content-Encoding") or "identity").lower()
+            length = response.getheader("Content-Length")
+            if response.status != 200 or not ctype.startswith("text/html") or encoding not in ("identity", "gzip"):
+                return False
+            if length is None or not length.isdigit() or int(length) > INJECT_MAX_BYTES:
+                return False
+            raw = response.read()
+            page = raw if encoding == "identity" else gunzip_bounded(raw, INJECT_MAX_BYTES)
+            body = inject_nav(page, service.slug) if page is not None else raw
+            self.send_response(response.status, response.reason)
+            for key, value in response.getheaders():
+                low = key.lower()
+                if low in HOP_BY_HOP or low == "content-length" or (page is not None and low == "content-encoding"):
+                    continue
+                if low == "set-cookie":
+                    value = re.sub(r"(?i)(;\s*path=)/(?=;|$)", rf"\1/{service.slug}/", value)
+                self.send_header(key, value)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+            return True
 
         def _tunnel(self, service: Service, backend, target: str, headers: list[tuple[str, str]]) -> None:
             """WebSocket and other Upgrade requests: replay the handshake, then pipe bytes both ways."""
@@ -475,11 +580,21 @@ def make_handler(config: HubConfig, health: Health, access_log=None):
                 self.send_header("Set-Cookie", cookie)
             self.end_headers()
 
-        def _send(self, code: int, ctype: str, body: bytes) -> None:
+        def _icon(self) -> None:
+            try:
+                body = config.icon.read_bytes() if config.icon else None
+            except OSError:
+                body = None
+            if body is None:
+                self._send(404, "text/plain; charset=utf-8", b"no icon\n")
+                return
+            self._send(200, ICON_TYPES[config.icon.suffix.lower()], body, cache="public, max-age=3600")
+
+        def _send(self, code: int, ctype: str, body: bytes, cache: str = "no-store") -> None:
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", cache)
             self.end_headers()
             if self.command != "HEAD":
                 self.wfile.write(body)

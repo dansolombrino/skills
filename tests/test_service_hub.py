@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import importlib.util
 import socket
 import sys
@@ -43,6 +44,17 @@ class Backend(BaseHTTPRequestHandler):
             self.send_header("Set-Cookie", "app=1; Path=/; HttpOnly")
             self.send_header("Content-Length", "0")
             self.end_headers()
+            return
+        if self.path in ("/page", "/page.gz"):
+            body = b"<html><body><h1>app</h1></body></html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            if self.path.endswith(".gz"):
+                body = gzip.compress(body)
+                self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if self.headers.get("Upgrade"):
             self.send_response(101)
@@ -127,6 +139,32 @@ class ConfigTests(unittest.TestCase):
             with self.subTest(why), self.assertRaises(hub.HubError):
                 self.load(text if text.startswith("[hub]") else "[hub]\n" + text)
 
+    def test_icon_is_validated_and_served_without_the_token(self) -> None:
+        with self.assertRaises(hub.HubError):
+            self.load('[hub]\nicon = "/nope/icon.png"\n')
+        with self.assertRaises(hub.HubError):
+            self.load('[hub]\nicon = "/etc/hostname"\n')
+        icon = Path(self.tmp.name) / "icon.png"
+        icon.write_bytes(b"\x89PNG fake")
+        config = self.load(f'[hub]\ntoken = "{TOKEN}"\nicon = "{icon}"\n')
+        self.assertEqual(config.icon, icon)
+        server = start(ThreadingHTTPServer(("127.0.0.1", 0), hub.make_handler(config, hub.Health(config))))
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        with mock.patch.object(hub, "is_loopback", return_value=False):
+            with OPENER.open(base + "/favicon.ico", timeout=5) as response:
+                self.assertEqual((response.headers["Content-Type"], response.read()), ("image/png", b"\x89PNG fake"))
+            request = urllib.request.Request(base + "/", headers={"Accept": "text/html"})
+            with self.assertRaises(urllib.error.HTTPError) as denied:
+                OPENER.open(request, timeout=5)
+            self.assertIn(b'<link rel="icon" href="/favicon.ico?v=', denied.exception.read())
+            page = urllib.request.Request(base + "/", headers={"Cookie": f"{hub.COOKIE_NAME}={TOKEN}"})
+            with OPENER.open(page, timeout=5) as response:
+                html = response.read()
+            self.assertIn(b'rel="icon" href="favicon.ico?v=', html)  # in the HTML itself, not set later by script
+            self.assertNotIn(b"__HUB_", html)
+
     def test_empty_health_disables_the_probe(self) -> None:
         config = self.load('[hub]\n[hub.services.x]\nurl = "http://127.0.0.1:1"\nhealth = ""\n')
         self.assertIsNone(config.services[0].health)
@@ -145,6 +183,7 @@ class LiveHubTests(unittest.TestCase):
             services=(
                 hub.Service("board", "Board", "lanes", "", f"http://127.0.0.1:{cls.backend.server_address[1]}", None, "/healthz"),
                 hub.Service("dead", "Dead", "", "", f"http://127.0.0.1:{dead}", None, "/healthz"),
+                hub.Service("raw", "Raw", "", "", f"http://127.0.0.1:{cls.backend.server_address[1]}", None, None, nav=False),
                 hub.Service("ide", "IDE", "", "", None, "http://127.0.0.1:9", None),
             ),
         )
@@ -211,6 +250,35 @@ class LiveHubTests(unittest.TestCase):
         code, headers, _ = self.authed("/board/go")
         self.assertEqual((code, headers["Location"]), (302, "/board/landed"))
         self.assertIn("Path=/board/", headers["Set-Cookie"])
+
+    def test_page_loads_get_the_back_to_hub_button(self) -> None:
+        tag = b'<script src="/hub/nav.js" data-service="board" defer></script></body>'
+        for path in ("/board/page", "/board/page.gz"):
+            code, headers, body = self.authed(path, headers={"Sec-Fetch-Dest": "document", "Accept-Encoding": "gzip"})
+            self.assertEqual(code, 200, path)
+            self.assertIn(tag, body, path)
+            self.assertNotIn("Content-Encoding", headers)
+            self.assertEqual(int(headers["Content-Length"]), len(body))
+        # Without fetch metadata, an HTML Accept marks a page load.
+        self.assertIn(tag, self.authed("/board/page", headers={"Accept": "text/html"})[2])
+        # Frames, fetches, opted-out services and non-HTML stay byte-for-byte.
+        for path, headers in (
+            ("/board/page", {"Sec-Fetch-Dest": "iframe", "Accept": "text/html"}),
+            ("/board/page", {"Sec-Fetch-Dest": "empty"}),
+            ("/raw/page", {"Sec-Fetch-Dest": "document"}),
+            ("/board/x", {"Sec-Fetch-Dest": "document"}),
+        ):
+            self.assertNotIn(b"nav.js", self.authed(path, headers=headers)[2], (path, headers))
+        code, _, gz = self.authed("/board/page.gz", headers={"Sec-Fetch-Dest": "empty"})
+        self.assertEqual(gzip.decompress(gz), b"<html><body><h1>app</h1></body></html>")
+        code, headers, script = self.authed("/hub/nav.js")
+        self.assertEqual(code, 200)
+        self.assertIn(b"service-hub-nav", script)
+
+    def test_nav_injection_bounds(self) -> None:
+        self.assertEqual(hub.inject_nav(b"no body tag", "x"), b'no body tag<script src="/hub/nav.js" data-service="x" defer></script>')
+        self.assertIsNone(hub.gunzip_bounded(gzip.compress(b"a" * 1000), 100))
+        self.assertIsNone(hub.gunzip_bounded(b"not gzip", 100))
 
     def test_post_body_is_forwarded(self) -> None:
         self.assertEqual(self.authed("/board/echo", method="POST", data=b"hello")[2], b"hello")

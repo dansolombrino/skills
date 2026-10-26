@@ -11,7 +11,8 @@ runs it.
 port       = 40970                        # default 40970
 bind       = "0.0.0.0"                    # default 127.0.0.1 (this machine only)
 token      = "<output of hub.py token>"   # required whenever bind is not loopback
-title      = "rig-4090"                   # landing-page title; default: the hostname
+title      = "Service Hub"                # page, tab and sign-in title; default: the hostname
+icon       = "~/.config/rigsync/hub-icon.png"   # optional .png/.svg/.ico/.webp: tab icon and page logo
 public_url = "http://<public address>:40970"   # optional; `url` also prints the public URL
 
 [hub.services.board]                      # served at /board/
@@ -20,12 +21,16 @@ description = "GPU lanes across the fleet, the Slurm queue, and every supervised
 icon        = "🖥️"                         # an emoji or a short text; default: the name's initial
 url         = "http://127.0.0.1:40971"    # the backend, on loopback
 health      = "/healthz"                  # probed for the up/down dot; default /healthz, "" disables
+nav         = true                        # add the back-to-hub button to its pages; default true
 
 [hub.services.ide]                        # link-only: a card that opens its own URL
 name = "IDE"
 link = "http://<address>:6769"
 ```
 
+- `icon` is served at `/favicon.ico` without a token (the sign-in page shows it too), so use an
+  image you are happy to show to anyone who reaches the port. Without it the page shows the
+  title's initial.
 - Services appear on the page in registry order.
 - A service name is lowercase letters, digits and `-`, at most 32 characters, and not one of the
   hub's own paths (`api`, `healthz`, `hub`, `login`, `index.html`, `favicon.ico`).
@@ -33,6 +38,20 @@ link = "http://<address>:6769"
   `link` (any `http(s)://` URL, opened in a new tab; its dot shows whether the host's port accepts a
   connection).
 - A health answer below HTTP 500 counts as up, so a backend that answers 401 is up.
+
+## Back-to-hub button
+
+The hub adds one `<script src="/hub/nav.js">` before `</body>` of every page a proxied service
+serves (`assets/hub-nav.js`): a round button in the bottom-right corner that opens a switcher
+with the landing page and every service, the current one marked, each with its up/down dot. Esc
+closes it; "Move to the left" moves it to the other corner, remembered per browser. It lives in a
+shadow root, so neither the page's styles nor its own leak across.
+
+Only top-level page loads get it (`Sec-Fetch-Dest: document`, or an HTML `Accept` from browsers
+without fetch metadata): never frames, `fetch` calls, assets, non-200 answers, or HTML larger than
+4 MB (a plot opened alone keeps its streamed, compressed transfer). A gzip page is decompressed to
+insert the tag and sent uncompressed. Set `nav = false` on a service whose pages must stay
+byte-for-byte.
 
 ## Backend contract
 

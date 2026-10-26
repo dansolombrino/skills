@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__HUB_TITLE__</title>
-<link id="favicon" rel="icon" href="data:,">
+<link id="favicon" rel="icon" href="__HUB_ICON__">
 <style>
   :root {
     color-scheme: light;
@@ -42,6 +42,8 @@
 
   header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 24px; }
   .mark { width: 40px; height: 40px; border-radius: 11px; background: var(--accent); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 18px; flex: none; }
+  .mark.img { background: none; border-radius: 0; }
+  .mark img { width: 100%; height: 100%; object-fit: contain; }
   .head { flex: 1 1 220px; min-width: 0; }
   h1 { font-size: 22px; line-height: 1.2; margin: 0; letter-spacing: -.01em; }
   .sub { color: var(--muted); font-size: 13px; margin-top: 2px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
@@ -90,7 +92,7 @@
 <body>
 <div class="wrap">
   <header>
-    <div class="mark" id="mark">·</div>
+    <div class="__HUB_MARK_CLASS__" id="mark">__HUB_MARK__</div>
     <div class="head">
       <h1 id="title">__HUB_TITLE__</h1>
       <div class="sub"><span class="sum" id="sum">loading…</span><span id="age"></span></div>
@@ -139,7 +141,7 @@
     const allUp = up === total;
     $("sum").innerHTML = `<span class="pill ${allUp ? "up" : up ? "unknown" : "down"}"><span class="dot"></span>${up} of ${total} up</span>`;
     document.title = (allUp ? "" : `(${total - up} down) `) + data.title;
-    $("mark").textContent = data.title.trim().charAt(0).toUpperCase() || "·";
+    if (!data.icon) $("mark").textContent = data.title.trim().charAt(0).toUpperCase() || "·";
     if (!total) { $("grid").innerHTML = `<div class="empty">No services yet. Add a <code>[hub.services.&lt;name&gt;]</code> table to the registry and restart the hub.</div>`; return; }
     if (!visible.length) { $("grid").innerHTML = `<div class="empty">No service matches “${esc(q)}”.</div>`; return; }
     $("grid").innerHTML = visible.map((s, i) => {

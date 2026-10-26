@@ -15,9 +15,12 @@ description: Run one web entry point per machine that lists every hosted web ser
   `/<service>/`. Request bodies, streaming responses, gzip, `ETag`/304 and WebSocket upgrades pass
   through; `Location` headers and cookie paths are rewritten under the prefix; a dead backend
   answers 502 with the service's name.
+- Every proxied page gets a floating back-to-hub button that opens a service switcher
+  (`assets/hub-nav.js`; `nav = false` turns it off per service).
 - A **link** service is a card that opens its own URL, for apps that cannot live under a path
   prefix.
-- `/api/services` is the JSON behind the page; `/healthz` answers `ok` without a token.
+- `/api/services` is the JSON behind the page; `/healthz` answers `ok` and `/favicon.ico` serves
+  the optional `[hub] icon`, both without a token.
 
 Configuration, install and the backend contract: [references/configuration.md](references/configuration.md).
 
