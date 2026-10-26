@@ -111,6 +111,16 @@ depth      = 4                                  # optional; how deep checkouts s
 
 The server refuses to start on a non-loopback `bind` without a `token`.
 
+## Behind service-hub
+
+The browser page uses relative URLs, so the server also works under a path prefix such as
+`http://<host>:<hub port>/plots/` through the machine's `service-hub` gateway: a plot is then at
+`/plots/<absolute file path>`. Set `bind = "127.0.0.1"` (the gateway reaches it on loopback, and
+the server trusts loopback clients, so it must not stay reachable from the network), set
+`public_url = "http://<public address>:<hub port>/plots"` so `url` prints hub links, re-run the
+sandboxed install (it copies `bind` into the system config), and add a `[hub.services.plots]`
+table whose `url` is `http://127.0.0.1:<port>`. The gateway's token then guards every plot.
+
 ## Access
 
 - **From this machine or through an SSH connection to it** (`127.0.0.1`): no token. A loopback

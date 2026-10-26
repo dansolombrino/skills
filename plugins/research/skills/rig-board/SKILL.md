@@ -144,9 +144,11 @@ count rides in the tab label and the page title. Every number is the supervisor'
 token rules.
 
 Install it as a user service on the hub per the configuration
-reference; the URL is `http://<hub address>:<port>`. With `[board] token` set, the page and
-the API require that token (query once, then a cookie); require it before exposing the port
-beyond the LAN.
+reference; the URL is `http://<hub address>:<port>`, or `http://<hub address>:<hub port>/board/`
+behind the machine's `service-hub` gateway (the page uses relative URLs, so it works under that
+prefix; the board then listens on `127.0.0.1`). With `[board] token` set, the page and
+the API require that token from network clients (query once, then a cookie); loopback clients,
+including the gateway, need none. Require a token before exposing the port beyond the LAN.
 
 ## Hard limits
 

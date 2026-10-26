@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -1957,6 +1958,13 @@ def presented_token(handler: BaseHTTPRequestHandler, url) -> tuple[str | None, b
     return None, False
 
 
+def is_loopback(address: str) -> bool:
+    try:
+        return ipaddress.ip_address(address.split("%", 1)[0]).is_loopback
+    except ValueError:
+        return False
+
+
 def make_handler(config: BoardConfig, state: dict | None = None):
     serve_state = state if state is not None else {}
 
@@ -1971,7 +1979,9 @@ def make_handler(config: BoardConfig, state: dict | None = None):
                 self._send(200, "text/plain; charset=utf-8", b"ok\n")
                 return
             set_cookie = None
-            if config.token is not None:
+            # A loopback client is already on the hub (a shell, an SSH tunnel, or the service-hub
+            # gateway, which checks its own token before proxying), so it needs no token.
+            if config.token is not None and not is_loopback(self.client_address[0]):
                 token, from_query = presented_token(self, url)
                 if token is None or not hmac.compare_digest(token, config.token):
                     self._send(401, "text/plain; charset=utf-8", DENIED)

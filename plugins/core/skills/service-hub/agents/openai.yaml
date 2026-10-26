@@ -1,0 +1,4 @@
+interface:
+  display_name: "Service Hub"
+  short_description: "One port and landing page for every hosted web service"
+  default_prompt: "Use $service-hub to put this machine's web services behind one entry point and tell me each service's URL."

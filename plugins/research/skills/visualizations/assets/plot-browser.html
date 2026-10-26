@@ -365,7 +365,7 @@
   }
 
   async function loadProjects() {
-    const data = await getJSON("/api/projects");
+    const data = await getJSON("api/projects");
     state.projects = data.projects;
     $("host").textContent = data.host;
     document.title = "Plots · " + data.host;
@@ -390,9 +390,11 @@
   }
 
   async function loadFiles(keepSeen) {
-    const data = await getJSON("/api/files?project=" + encodeURIComponent(state.project));
+    const data = await getJSON("api/files?project=" + encodeURIComponent(state.project));
     const before = state.seen;
-    state.files = data.files;
+    // Plot URLs are absolute file paths; resolve them against this page so the browser also
+    // works behind a gateway path prefix (/plots/...).
+    state.files = data.files.map((f) => ({ ...f, url: f.url.replace(/^\/+/, "") }));
     const seenKey = "seen:" + state.project;
     const persisted = store.get(seenKey, null);
     if (!keepSeen) state.seen = persisted || Object.fromEntries(state.files.map((f) => [f.path, f.mtime]));
@@ -552,7 +554,7 @@
   // <base>, ahead of Plotly, so every plot here has the same reader controls; the file is untouched.
   const load = { token: 0, controller: null, timer: null, showTimer: null, drawStart: 0, blobUrl: null, bytes: null };
   let shellSource = null;
-  const getShell = () => shellSource || (shellSource = fetch("/plot-shell.js", { credentials: "same-origin", cache: "no-cache" })
+  const getShell = () => shellSource || (shellSource = fetch("plot-shell.js", { credentials: "same-origin", cache: "no-cache" })
     .then((r) => (r.ok ? r.text() : "")).catch(() => "").then((t) => { if (!t) shellSource = null; return t; }));
   function asFrameDocument(bytes, url, shell) {
     const text = new TextDecoder("utf-8").decode(bytes);
@@ -929,7 +931,7 @@
 
   // ── loading
   async function getRunFile(kind) {
-    const url = "/api/runs?" + new URLSearchParams({ project: state.project, experiment: runs.experiment, file: kind });
+    const url = "api/runs?" + new URLSearchParams({ project: state.project, experiment: runs.experiment, file: kind });
     const r = await fetch(url, { credentials: "same-origin", cache: "no-cache" });  // revalidates by ETag
     if (r.status === 401) throw new Error("auth");
     if (r.status === 404) return undefined;  // VERSIONS/HISTORY fall back to the map's embedded copies
@@ -938,7 +940,7 @@
   }
   const expStamp = (x) => x ? x.path + "|" + Object.entries(x.files).map(([k, f]) => k + ":" + f.mtime + ":" + f.size).join(",") : "";
   async function loadExperiments() {
-    const data = await getJSON("/api/experiments?project=" + encodeURIComponent(state.project));
+    const data = await getJSON("api/experiments?project=" + encodeURIComponent(state.project));
     runs.project = data.project;
     runs.experiments = data.experiments;
     const sel = $("experiment");

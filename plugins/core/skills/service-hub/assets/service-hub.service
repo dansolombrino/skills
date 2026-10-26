@@ -1,0 +1,12 @@
+[Unit]
+Description=service-hub: one token-gated entry point for every web service on this machine
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 __HUB_PY__ serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

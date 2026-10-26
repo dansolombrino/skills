@@ -718,8 +718,9 @@ class BoardTests(unittest.TestCase):
         handler = board.make_handler(config)
 
         class Fake(handler):  # type: ignore[misc,valid-type]
-            def __init__(self, path: str, headers: dict[str, str] | None = None) -> None:
+            def __init__(self, path: str, headers: dict[str, str] | None = None, client: str = "203.0.113.5") -> None:
                 self.path = path
+                self.client_address = (client, 40000)
                 self.headers = headers or {}
                 self.wfile = io.BytesIO()
                 self.headers_sent: list[tuple[str, str]] = []
@@ -764,6 +765,11 @@ class BoardTests(unittest.TestCase):
         by_bearer = Fake("/api/board", {"Authorization": f"Bearer {token}"})
         by_bearer.do_GET()
         self.assertEqual(by_bearer.code, 200)
+        for client in ("127.0.0.1", "::1"):  # a shell, an SSH tunnel or the service-hub gateway
+            local = Fake("/api/board", client=client)
+            local.do_GET()
+            self.assertEqual(local.code, 200, client)
+            self.assertNotIn("Set-Cookie", dict(local.headers_sent))
 
     def test_registry_rejects_a_short_token(self) -> None:
         self.registry.write_text(self.registry.read_text().replace("[board]\n", '[board]\ntoken = "short"\n', 1))
@@ -799,8 +805,8 @@ class BoardTests(unittest.TestCase):
         page.do_GET()
         self.assertEqual(page.code, 200)
         body = page.wfile.getvalue()
-        self.assertIn(b"/api/board", body)
-        self.assertIn(b"/api/history", body)
+        self.assertIn(b"api/board", body)
+        self.assertIn(b"api/history", body)
         self.assertTrue(board.VIEWER_PATH.is_file(), board.VIEWER_PATH)
         self.assertEqual(body, board.VIEWER_PATH.read_bytes())
         with mock.patch.object(board, "VIEWER_PATH", board.VIEWER_PATH.with_name("missing.html")):
@@ -969,7 +975,7 @@ class BoardTests(unittest.TestCase):
 
     def test_viewer_has_the_experiments_tab(self) -> None:
         page = board.VIEWER_PATH.read_text()
-        for needle in ('data-tab="experiments"', "/api/experiments", "hashchange", "localStorage"):
+        for needle in ('data-tab="experiments"', "api/experiments", "hashchange", "localStorage"):
             self.assertIn(needle, page)
 
 

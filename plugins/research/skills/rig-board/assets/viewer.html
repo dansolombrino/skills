@@ -404,7 +404,7 @@ function draw(){if(!last)return;const nowMs=Date.now();drawHeader(last,nowMs);
 
 // ── history ──
 let histData=null,histAt=0;
-async function loadHistory(){try{const r=await fetch("/api/history?hours=24"+tokenQ(),{cache:"no-store"});if(!r.ok)throw new Error(r.status);histData=await r.json();histAt=Date.now()}catch(e){histData={events:[],error:String(e)}}}
+async function loadHistory(){try{const r=await fetch("api/history?hours=24"+tokenQ(),{cache:"no-store"});if(!r.ok)throw new Error(r.status);histData=await r.json();histAt=Date.now()}catch(e){histData={events:[],error:String(e)}}}
 function evText(e){const where=e.rig?`${e.rig}${e.gpu!=null?" gpu"+e.gpu:""}`:"";const s=e.session?`<code>${esc(e.session)}</code>`:"";
   switch(e.event){case "claim":return `claimed ${s}`;case "reclaim":return `re-claimed (recovery) ${s}`;case "adopt":return `adopted live session ${s}`;case "release":return `released: ${esc(e.reason||"")} ${s}`;case "interrupted":return `interrupted: rig rebooted ${e.boot_at?abs(e.boot_at):""} ${s}`;case "refresh":return `refresh · ${esc(e.active_run||"")}`;case "reconcile":return (e.changes||[]).map(esc).join("<br>");default:return esc(JSON.stringify(e))}}
 async function drawHistory(){const sec=$("hist");sec.hidden=!ui.hist||ui.tab!=="fleet";$("histbtn").classList.toggle("on",ui.hist);if(sec.hidden)return;if(!histData||Date.now()-histAt>30000)await loadHistory();const nowMs=Date.now();
@@ -555,14 +555,14 @@ function drawExp(){updateTabBadge();if(ui.tab!=="experiments")return;const d=las
 function tokenQ(){const q=new URLSearchParams(location.search).get("token");return q?"&token="+encodeURIComponent(q):""}
 function setBanner(kind,html){const b=$("banner");if(!html){b.hidden=true;return}b.hidden=false;b.className="banner "+kind;b.innerHTML=html}
 async function fetchBoard(){
-  try{const r=await fetch("/api/board?_="+Date.now()+tokenQ(),{cache:"no-store"});
+  try{const r=await fetch("api/board?_="+Date.now()+tokenQ(),{cache:"no-store"});
     if(r.status===401){denied();return}
     if(!r.ok)throw new Error(r.status+" "+r.statusText);const d=await r.json();last=d;lastOk=Date.now();diffAndNotify(d);setBanner("",null);$("dot").className="dot live";draw();if(ui.hist&&Date.now()-histAt>30000)drawHistory()}
   catch(e){$("dot").className="dot down";setBanner("bad",`Board unavailable: ${esc(e.message)}${last?` · showing the last good read from ${esc(abs(last.generated_at))}`:""}`);if(last)draw()}}
 function denied(){setBanner("bad","Access token required. Open the page once as <code>/?token=&lt;token&gt;</code> (from <code>[board] token</code> in the registry); it is then remembered by a cookie.");$("dot").className="dot down"}
 // background: the fleet tab still reads the experiments every 30 s, for the warning count in the tab label and title
 async function fetchExp(background){
-  try{const r=await fetch(`/api/experiments?hours=${ui.ewin}&_=${Date.now()}${tokenQ()}`,{cache:"no-store"});
+  try{const r=await fetch(`api/experiments?hours=${ui.ewin}&_=${Date.now()}${tokenQ()}`,{cache:"no-store"});
     if(r.status===401){if(!background)denied();return}
     if(!r.ok)throw new Error(r.status+" "+r.statusText);lastExp=await r.json();expAt=Date.now();
     if(!background){lastOk=Date.now();setBanner("",null);$("dot").className="dot live";drawExp()}else updateTabBadge()}

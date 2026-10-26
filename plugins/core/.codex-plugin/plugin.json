@@ -1,7 +1,7 @@
 {
   "name": "core",
-  "version": "5.0.1",
-  "description": "Always-on working discipline for every project: report status and ETA for long-running tasks when they finish, fail, or stall, and tag each project with its categories so domain plugins such as research load only where they belong.",
+  "version": "5.1.0",
+  "description": "Always-on working discipline for every project: report status and ETA for long-running tasks when they finish, fail, or stall, and tag each project with its categories so domain plugins such as research load only where they belong, and put every web service a machine hosts behind one token-gated entry point.",
   "author": {
     "name": "Dan Solombrino",
     "email": "dansolombrino@gmail.com",
@@ -12,13 +12,15 @@
     "project-init",
     "project-categories",
     "progress",
-    "eta"
+    "eta",
+    "service-hub",
+    "reverse-proxy"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Core",
-    "shortDescription": "Progress updates and project tags",
-    "longDescription": "Skills that belong in every project. Watch transfers, downloads, runs, and other long-running tasks and report their status and ETA when something changes, or on request. Tag a project with its categories in .project.toml and generate each host's per-project plugin enablement from it, so domain plugins such as research load only in the projects that use them.",
+    "shortDescription": "Progress updates, project tags, service hub",
+    "longDescription": "Skills that belong in every project. Watch transfers, downloads, runs, and other long-running tasks and report their status and ETA when something changes, or on request. Tag a project with its categories in .project.toml and generate each host's per-project plugin enablement from it, so domain plugins such as research load only in the projects that use them. Put every web service a machine hosts behind one token-gated port with a landing page and a /<service>/ route each.",
     "developerName": "Dan Solombrino",
     "category": "Developer Tools",
     "capabilities": [

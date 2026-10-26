@@ -71,7 +71,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "14.7.0")
+        self.assertEqual(manifest["version"], "14.8.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -154,7 +154,7 @@ class ResearchContractTests(unittest.TestCase):
             self.assertIn(act, shell)
         self.assertIn('for (const name of ["newPlot", "react"])', shell)
         # Older plots get it from the server; plot keys still reach the browser from inside a frame.
-        self.assertIn('fetch("/plot-shell.js"', browser)
+        self.assertIn('fetch("plot-shell.js"', browser)
         self.assertIn("window.__plotShell", browser)
         self.assertIn("plot-shell-key", browser)
         self.assertIn("plot-shell-key", shell)

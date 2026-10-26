@@ -375,7 +375,7 @@ def index_page(config: PlotsConfig, projects: list[Path]) -> bytes:
             when = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
             rel = path.relative_to(project / PLOTS_DIR).as_posix()
             rows.append(
-                f'<tr><td><a href="{html.escape(quote(path.as_posix()))}">{html.escape(rel)}</a></td>'
+                f'<tr><td><a href="{html.escape(quote(path.as_posix().lstrip('/')))}">{html.escape(rel)}</a></td>'
                 f"<td>{when}</td><td class=n>{human_size(stat.st_size)}</td></tr>"
             )
         body = "".join(rows) or '<tr><td colspan=3 class=empty>no HTML plots yet</td></tr>'

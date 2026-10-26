@@ -148,13 +148,23 @@ systemctl --user status rig-board.service --no-pager
 Then open `http://<hub LAN address>:8765` (or the hub's private overlay address). The page is
 read-only.
 
+### Behind service-hub
+
+To serve the board at `http://<hub>:<hub port>/board/` through the machine's `service-hub`
+gateway, set `port` to a free loopback port and `bind = "127.0.0.1"`, restart the unit, and add
+a `[hub.services.board]` table whose `url` is `http://127.0.0.1:<that port>`. The page's requests
+are relative, so they stay under `/board/`. The gateway checks its own token first; the board
+then sees only loopback clients, which need no board token.
+
 ### Access token
 
-With `[board] token` set, every path except `/healthz` answers 401 unless the request carries
+With `[board] token` set, every path except `/healthz` answers 401 to a network client unless
+the request carries
 the token as `?token=<token>`, an `X-Board-Token` header, or `Authorization: Bearer <token>`.
 Opening the page once with `?token=` sets an HttpOnly cookie for a year, so the bookmark is
 `http://<address>:<port>/?token=<token>` and later visits need nothing. Generate one with
-`board.py token` and restart the service after changing the registry. Without a token the
+`board.py token` and restart the service after changing the registry. A loopback client (a
+shell on the hub, an SSH tunnel, or the `service-hub` gateway) needs no token. Without a token the
 server prints `OPEN` at startup; never forward such a port from a router. The token travels in
 clear over plain HTTP, so treat it as a shared secret for your own devices, and rotate it by
 replacing the registry value.

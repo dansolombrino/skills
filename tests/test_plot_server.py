@@ -405,9 +405,9 @@ class LiveServerTest(Fixture):
         code, body, _ = self.get(base + "/")
         self.assertEqual(code, 200)
         self.assertEqual(body, plot_server.BROWSER_PATH.read_bytes())
-        self.assertIn(b"/api/files", body)
+        self.assertIn(b"api/files", body)
         self.assertIn(b"/api/runs", body)
-        self.assertIn(b"/api/experiments", body)
+        self.assertIn(b"api/experiments", body)
         self.assertIn(b"000_x/plot_loss/loss.html", self.get(base + "/plain")[1])
         code, body, _ = self.get(base + "/api/projects")
         projects = json.loads(body)["projects"]
