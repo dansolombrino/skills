@@ -103,9 +103,12 @@ Set `RIGSYNC_REGISTRY` or pass `--registry` to use another registry.
 
 ## Viewer
 
-`serve` is a stdlib HTTP server. `/` is the read-only page (`assets/viewer.html`): a fleet
-strip (free / held / foreign / issues / silent / Slurm counts, each a click-to-filter), the
-soonest lane ETA, probe age and next-probe countdown, then one card per rig (headed by uptime,
+`serve` is a stdlib HTTP server. `/` is the read-only page (`assets/viewer.html`): the count of
+verified free GPUs (cards on a rig that answered its latest probe; free cards on an unreachable
+rig are counted apart and shown as "last known free"), a rack with one slot per physical card
+grouped by machine (state colour, utilization fill; a click jumps to that rig), the soonest
+lane ETA, one clickable line per issue (interrupted, silent, unreachable, budget), filter chips
+(free / held / foreign / issues / Slurm counts), probe age and next-probe countdown, then one card per rig (headed by uptime,
 load, and the rig's download / upload rate in MB/s sampled at probe time) with one row per
 GPU (free with model, VRAM and utilization gauges; running / claimed / silent / interrupted /
 unreachable lanes with holder, wave, run, the run's live progress, heartbeat and linear run
@@ -115,10 +118,11 @@ process, memory and age; a collapsed list of stray sessions), a Slurm card that 
 jobs into groups (running / pending / completed / failed counts with their share of everything
 submitted in the accounting window, a stacked bar, end-time window, earliest pending start,
 shared configuration, per job the varying part of the name) with the account budgets above the
-queue and footnotes for the nightly lag and the accounting unit, a filter box, state chips, free-first sort, light/dark
-theme, optional browser notifications on lane changes, and a "history" panel of the last 24 h.
-The tab title and favicon carry the free count. The page refresh period is a toolbar selector
-(1 s to 5 min, default 5 s, remembered per browser, `?every=` for one visit); it re-reads the
+queue and footnotes for the nightly lag and the accounting unit, a filter box, free-first sort, and a
+History tab (`/#history`) of the last 24 h. Light/dark theme, browser notifications on lane
+changes and the refresh period sit in the Settings menu. Fonts load from Google Fonts and fall
+back to system fonts offline. The tab title and favicon carry the verified free count. The page
+refresh period (1 s to 5 min, default 5 s, remembered per browser, `?every=` for one visit) re-reads the
 board files only, so any setting is cheap, while the rig probe period is the server's
 `reconcile_every` (see the configuration reference). Polling pauses while the pointer is over a
 card or text is selected, and a lost server shows the last good read as stale. `/api/board`
@@ -134,7 +138,8 @@ and the ones finished in the last 24 h / 48 h / 7 days in a collapsed section be
 wave ETA as a clock time with its countdown, done / total with a stacked bar (done, failed,
 running, queued, excluded), time since launch, supervisor-cycle and agent-tick ages; every run in flight with its own progress bar, step count,
 heartbeat and run ETA, always shown; one row per
-rig (GPUs or cluster jobs, runs done, when it falls free, which finishes last); prominent warnings
+rig (GPUs or cluster jobs, runs done, when it falls free drawn against the wave's finish, which
+finishes last); prominent warnings
 (stale, blocked or down lanes, failed runs, open questions with their id and text, expiring
 certificates, a supervisor that stopped cycling, a follow-up that ended without a report); the
 wave's `analyze` / `fix` follow-ups with their reports and clickable links; and, on expand, the
