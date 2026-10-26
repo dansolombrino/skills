@@ -120,7 +120,7 @@ submitted in the accounting window, a stacked bar, end-time window, earliest pen
 shared configuration, per job the varying part of the name) with the account budgets above the
 queue and footnotes for the nightly lag and the accounting unit, a filter box, free-first sort, and a
 History tab (`/#history`) of the last 24 h. Light/dark theme, browser notifications on lane
-changes and the refresh period sit in the Settings menu. Fonts load from Google Fonts and fall
+changes and the refresh period sit in the Settings menu. Fonts (Geist and Geist Mono) load from Google Fonts and fall
 back to system fonts offline. The tab title and favicon carry the verified free count. The page
 refresh period (1 s to 5 min, default 5 s, remembered per browser, `?every=` for one visit) re-reads the
 board files only, so any setting is cheap, while the rig probe period is the server's
