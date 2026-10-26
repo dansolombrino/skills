@@ -65,9 +65,13 @@ INJECT_MAX_BYTES = 4 * 1024 * 1024
 BODY_END = re.compile(rb"</body\s*>", re.IGNORECASE)
 
 
-def inject_nav(body: bytes, slug: str) -> bytes:
-    """Insert the hub's navigation script before the last </body> (or at the end)."""
-    tag = f'<script src="{NAV_ROUTE}" data-service="{slug}" defer></script>'.encode()
+def inject_nav(body: bytes, slug: str, icon: str = "") -> bytes:
+    """Insert the hub's navigation script before the last </body> (or at the end).
+
+    The service's icon rides along so the script can make it the tab icon without a round trip.
+    """
+    icon_attr = f' data-icon="{html_escape(icon)}"' if icon else ""
+    tag = f'<script src="{NAV_ROUTE}" data-service="{slug}"{icon_attr} defer></script>'.encode()
     matches = list(BODY_END.finditer(body))
     at = matches[-1].start() if matches else len(body)
     return body[:at] + tag + body[at:]
@@ -528,7 +532,7 @@ def make_handler(config: HubConfig, health: Health, access_log=None):
                 return False
             raw = response.read()
             page = raw if encoding == "identity" else gunzip_bounded(raw, INJECT_MAX_BYTES)
-            body = inject_nav(page, service.slug) if page is not None else raw
+            body = inject_nav(page, service.slug, service.icon) if page is not None else raw
             self.send_response(response.status, response.reason)
             for key, value in response.getheaders():
                 low = key.lower()

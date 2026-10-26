@@ -5,6 +5,7 @@
   if (window.top !== window || document.getElementById("service-hub-nav")) return;
   const script = document.currentScript;
   const current = script && script.dataset.service;
+  const emoji = script && script.dataset.icon;
   const store = { get(k, d) { try { return localStorage.getItem("service-hub:" + k) ?? d; } catch { return d; } }, set(k, v) { try { localStorage.setItem("service-hub:" + k, v); } catch {} } };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
@@ -90,6 +91,27 @@
   document.addEventListener("click", (e) => { if (!e.composedPath().includes(host)) setOpen(false); });
   // Capture phase, so the page's own Escape handler does not also fire while the menu is open.
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && menu.classList.contains("open")) { e.stopPropagation(); setOpen(false); fab.focus(); } }, true);
+
+  // The service's emoji from the hub becomes the tab icon, the same one the switcher and the
+  // landing page show. A page that rewrites its own icon later (the board does, every refresh)
+  // is put back by the observer.
+  if (emoji) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><text x="32" y="54" font-size="54" text-anchor="middle">${esc(emoji)}</text></svg>`;
+    const href = "data:image/svg+xml," + encodeURIComponent(svg);
+    const apply = () => {
+      const links = document.querySelectorAll('link[rel~="icon"]');
+      if (!links.length) {
+        const link = document.createElement("link");
+        link.rel = "icon";
+        document.head.appendChild(link);
+        link.setAttribute("href", href);
+        return;
+      }
+      links.forEach((link) => { if (link.getAttribute("href") !== href) link.setAttribute("href", href); });
+    };
+    apply();
+    new MutationObserver(apply).observe(document.head, { subtree: true, childList: true, attributes: true, attributeFilter: ["href", "rel"] });
+  }
 
   document.body.appendChild(host);
   load();

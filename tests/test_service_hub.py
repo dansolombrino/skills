@@ -277,6 +277,7 @@ class LiveHubTests(unittest.TestCase):
 
     def test_nav_injection_bounds(self) -> None:
         self.assertEqual(hub.inject_nav(b"no body tag", "x"), b'no body tag<script src="/hub/nav.js" data-service="x" defer></script>')
+        self.assertIn('data-icon="&quot;📈"'.encode(), hub.inject_nav(b"<body></body>", "x", '"📈'))
         self.assertIsNone(hub.gunzip_bounded(gzip.compress(b"a" * 1000), 100))
         self.assertIsNone(hub.gunzip_bounded(b"not gzip", 100))
 

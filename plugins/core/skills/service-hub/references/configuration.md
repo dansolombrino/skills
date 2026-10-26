@@ -44,7 +44,8 @@ link = "http://<address>:6769"
 The hub adds one `<script src="/hub/nav.js">` before `</body>` of every page a proxied service
 serves (`assets/hub-nav.js`): a round button in the bottom-right corner that opens a switcher
 with the landing page and every service, the current one marked, each with its up/down dot. Esc
-closes it; "Move to the left" moves it to the other corner, remembered per browser. It lives in a
+closes it; "Move to the left" moves it to the other corner, remembered per browser. A service
+with an `icon` also gets that emoji as its tab icon, kept even when the page rewrites its own. It lives in a
 shadow root, so neither the page's styles nor its own leak across.
 
 Only top-level page loads get it (`Sec-Fetch-Dest: document`, or an HTML `Accept` from browsers
