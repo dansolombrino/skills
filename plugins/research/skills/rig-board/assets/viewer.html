@@ -77,7 +77,7 @@ small.stamp{font-size:13px}
 .answer .of{font-size:16px;color:var(--muted);margin-top:14px}
 .answer .of b{color:var(--ink);font-weight:600}
 .answer .of+.of{font-size:14px;margin-top:4px}
-.rack{display:flex;flex-wrap:wrap;gap:20px 24px;align-items:flex-end;min-width:0}
+.rack{display:flex;flex-wrap:wrap;gap:24px 48px;align-items:flex-end;min-width:0}
 .bay{display:flex;flex-direction:column;gap:8px;min-width:0;cursor:pointer;background:none;border:0;padding:0;border-radius:8px;text-align:left}
 .bay:hover{background:none}
 .bay:hover .slots{border-color:var(--ink)}
@@ -89,8 +89,8 @@ small.stamp{font-size:13px}
 .slot.bad{--c:var(--bad);background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--bad) 30%,var(--panel)) 0 3px,var(--panel) 3px 6px)}
 .slot.unknown{--c:var(--unk);box-shadow:inset 0 0 0 1.5px var(--rule2);background:var(--sunk)}
 .slot.unknown::after{content:"";position:absolute;inset:0;background:repeating-linear-gradient(0deg,transparent 0 5px,var(--rule2) 5px 6px)}
-.slot.job{width:10px;height:10px;border-radius:50%}
-.slot.job.pending{--c:var(--pend);background:var(--panel)}
+.slot.jobdot{width:10px;height:10px;border-radius:50%}
+.slot.jobdot.pending{--c:var(--pend);background:var(--panel)}
 .slots.cluster{flex-wrap:wrap;width:auto;max-width:130px;align-content:flex-end;height:64px;padding:8px}
 .bayn{font-size:13px;color:var(--muted);font-weight:500;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
 .bay.down .bayn{color:var(--bad)}
@@ -121,9 +121,23 @@ small.stamp{font-size:13px}
 
 /* ── rig cards ── */
 #main{padding-bottom:16px}
+.group{margin-bottom:24px}
+.grh{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 20px;width:100%;margin:0 0 20px;padding:16px 0 14px;background:none;border:0;border-bottom:1px solid var(--rule);border-radius:0;text-align:left;font-weight:400}
+.grh:hover{background:none}
+.grh:hover .chev{border-color:var(--ink)}
+.grt{font-size:24px;font-weight:600;letter-spacing:-.96px;line-height:32px}
+.grs{display:flex;flex-wrap:wrap;gap:4px 18px;font-size:14px;color:var(--muted)}
+.grs b{font-weight:600;color:var(--ink)}
+.chev{margin-left:auto;align-self:center;width:9px;height:9px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(-45deg);transition:transform .15s}
+.chev.open{transform:rotate(45deg)}
+.rgroup{display:flex;flex-direction:column;gap:10px;min-width:0}
+.rgl{font-size:13px;font-weight:600;color:var(--ink)}
+.rbays{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end}
 .wides{display:grid;gap:24px;margin-bottom:24px}
 .cols{columns:3 400px;column-gap:24px}
 .cols>.rig{break-inside:avoid;margin:0 0 24px;display:inline-block;width:100%}
+.cols.row{columns:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,400px),1fr));gap:24px;align-items:start;margin-bottom:24px}
+.cols.row>.rig{margin:0;display:block}
 .rig{background:var(--panel);border:1px solid var(--rule);border-radius:12px;box-shadow:var(--shadow);min-width:0;scroll-margin-top:84px;overflow:hidden}
 .rig.flash{animation:flash 1.2s ease-out}
 @keyframes flash{0%{box-shadow:0 0 0 3px var(--accent)}100%{box-shadow:0 0 0 3px transparent}}
@@ -299,16 +313,16 @@ details.fin[open]>summary{margin-bottom:20px}
 .wmeta{display:flex;flex-wrap:wrap;gap:4px 20px;color:var(--muted);font-size:13px;margin-top:14px}
 .wmeta b{color:var(--ink);font-weight:600}
 .warns{display:grid;border-radius:10px;overflow:hidden;border:1px solid var(--rule)}
-.warn{display:flex;gap:14px;align-items:baseline;padding:12px 16px;font-size:14px;background:transparent;min-width:0;--c:var(--warn);border-bottom:1px solid var(--rule);position:relative}
-.warn:last-child{border-bottom:0}
-.warn::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--c)}
-.warn.bad{--c:var(--bad)}
-.warn .wk{color:var(--c);font-weight:600;white-space:nowrap;min-width:84px}
-.warn .wb{min-width:0;overflow-wrap:anywhere;flex:1}
-.warn summary{color:var(--ink);font-size:14px;list-style:none}
-.warn summary::-webkit-details-marker{display:none}
-.warn details:not([open]) .wtext{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-.warn .mw{color:var(--muted);font-size:13px;margin-top:6px}
+.warns>.warn{display:flex;gap:14px;align-items:baseline;padding:12px 16px;font-size:14px;background:transparent;min-width:0;--c:var(--warn);border-bottom:1px solid var(--rule);position:relative}
+.warns>.warn:last-child{border-bottom:0}
+.warns>.warn::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--c)}
+.warns>.warn.bad{--c:var(--bad)}
+.warns>.warn .wk{color:var(--c);font-weight:600;white-space:nowrap;min-width:84px}
+.warns>.warn .wb{min-width:0;overflow-wrap:anywhere;flex:1}
+.warns>.warn summary{color:var(--ink);font-size:14px;list-style:none}
+.warns>.warn summary::-webkit-details-marker{display:none}
+.warns>.warn details:not([open]) .wtext{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.warns>.warn .mw{color:var(--muted);font-size:13px;margin-top:6px}
 .qid{font-family:"Geist Mono",ui-monospace,monospace;font-size:12px;font-weight:600;padding:1px 6px;border-radius:5px;background:var(--c);color:var(--panel);margin-right:8px}
 .wave .gpu{padding:16px 0 16px 18px;border-bottom:1px solid var(--rule)}
 .wave .gpu:last-child{border-bottom:0}
@@ -414,7 +428,7 @@ const reduced=matchMedia("(prefers-reduced-motion: reduce)").matches;
 // ── state ──
 const EVERY_CHOICES=[1,2,5,10,30,60,300];
 function pickEvery(v){v=Number(v);return EVERY_CHOICES.includes(v)?v:5}
-const ui={q:"",states:new Set(store.get("states",[])),freeFirst:store.get("freeFirst",true),notify:store.get("notify",false),theme:store.get("theme",null),every:pickEvery(new URLSearchParams(location.search).get("every")||store.get("every",5))};
+const ui={q:"",states:new Set(store.get("states",[])),collapsed:new Set(store.get("collapsed",[])),freeFirst:store.get("freeFirst",true),notify:store.get("notify",false),theme:store.get("theme",null),every:pickEvery(new URLSearchParams(location.search).get("every")||store.get("every",5))};
 let last=null,lastOk=0,prevLanes=null,hover=false,open=new Set(),fetching=false;
 
 // ── theme ──
@@ -430,8 +444,10 @@ $("notif").onclick=async()=>{if(!ui.notify&&"Notification"in window&&Notificatio
 document.addEventListener("click",e=>{const p=$("prefs");if(p.open&&!p.contains(e.target))p.open=false});
 function toggleState(s){ui.states.has(s)?ui.states.delete(s):ui.states.add(s);store.set("states",[...ui.states]);draw()}
 $("tiles").onclick=e=>{const t=e.target.closest("[data-s]");if(t)toggleState(t.dataset.s)};
-function jumpTo(rig){const el=document.getElementById("rig-"+rig);if(!el)return;el.scrollIntoView({behavior:reduced?"auto":"smooth",block:"start"});el.classList.remove("flash");void el.offsetWidth;el.classList.add("flash")}
+function jumpTo(rig){const k=groupKeyOf(rig);if(k&&ui.collapsed.has(k)){ui.collapsed.delete(k);store.set("collapsed",[...ui.collapsed]);draw()}const el=document.getElementById("rig-"+rig);if(!el)return;el.scrollIntoView({behavior:reduced?"auto":"smooth",block:"start"});el.classList.remove("flash");void el.offsetWidth;el.classList.add("flash")}
 $("rack").onclick=e=>{const b=e.target.closest("[data-rig]");if(b)jumpTo(b.dataset.rig)};
+$("main").addEventListener("click",e=>{const h=e.target.closest(".grh");if(!h)return;const k=h.dataset.grp;ui.collapsed.has(k)?ui.collapsed.delete(k):ui.collapsed.add(k);store.set("collapsed",[...ui.collapsed]);draw()});
+function groupKeyOf(rig){if(last&&(last.slurm||[]).some(c=>c.rig===rig))return "g/__slurm";const g=fleetGroups((last&&last.rigs)||[]).find(g=>g.rigs.some(r=>r.rig===rig));return g?"g/"+g.key:null}
 $("issues").onclick=e=>{const b=e.target.closest("[data-rig]");if(b)jumpTo(b.dataset.rig)};
 document.addEventListener("mouseover",e=>{hover=!!e.target.closest(".rig, .wave, .hist table")});
 document.addEventListener("mouseout",e=>{if(!e.relatedTarget||!e.relatedTarget.closest||!e.relatedTarget.closest(".rig, .wave, .hist table"))hover=false});
@@ -448,6 +464,14 @@ function rigCats(rig){const c=new Set();if(rig.kind==="slurm"){c.add("slurm");if
   if((rig.free_gpus||[]).length)c.add("free");if((rig.lanes||[]).length)c.add("held");if((rig.foreign||[]).length)c.add("foreign");
   if(rig.reachable===false||rig.gpu_probe_ok===false||(rig.lanes||[]).some(l=>["interrupted","silent","unreachable"].includes(laneState(l))))c.add("issues");return c}
 function visible(rig){if(!rigMatches(rig,ui.q))return false;if(!ui.states.size)return true;const c=rigCats(rig);for(const s of ui.states)if(c.has(s))return true;return false}
+// Machines group by the name stem before the first "-" when two or more share it
+// (lab-a, lab-b → "lab-*"); any other machine is a group of its own. Bigger groups first.
+function fleetGroups(rigs){const stem=r=>String(r.rig).split("-")[0];const n=new Map();for(const r of rigs)if(String(r.rig).includes("-"))n.set(stem(r),(n.get(stem(r))||0)+1);
+  const g=new Map();for(const r of rigs){const k=(n.get(stem(r))||0)>1?stem(r):r.rig;if(!g.has(k))g.set(k,{key:k,stem:k!==r.rig,rigs:[]});g.get(k).rigs.push(r)}
+  const cards=x=>x.rigs.reduce((s,r)=>s+(r.gpus||[]).length,0);return [...g.values()].sort((a,b)=>cards(b)-cards(a)||a.key.localeCompare(b.key))}
+function groupStats(rigs){const ok=r=>r.reachable!==false&&r.gpu_probe_ok!==false;const sum=f=>rigs.reduce((n,r)=>n+f(r),0);
+  const gpus=sum(r=>(r.gpus||[]).length),free=sum(r=>ok(r)?(r.free_gpus||[]).length:0),held=sum(r=>(r.lanes||[]).reduce((m,l)=>m+gpuIdx(l.gpu).length,0)),foreign=sum(r=>(r.foreign||[]).length),issues=rigs.filter(r=>rigCats(r).has("issues")).length;
+  return [`<span>${rigs.length} machine${rigs.length===1?"":"s"}</span>`,`<span>${gpus} GPU${gpus===1?"":"s"}</span>`,`<span><b class="c-done">${free}</b> free</span>`,held?`<span><b class="c-run">${held}</b> held</span>`:"",foreign?`<span><b style="color:var(--foreign)">${foreign}</b> someone else</span>`:"",issues?`<span><b class="c-fail">${issues}</b> with issues</span>`:""].join("")}
 // One state per physical card, for the rack.
 function slotStates(rig){const out=new Map();const gpus=rig.gpus||[];const down=rig.reachable===false||rig.gpu_probe_ok===false;
   for(const g of gpus)out.set(g.index,{st:down?"unknown":"unknown",g});
@@ -461,14 +485,14 @@ function drawHeader(d,nowMs){const s=d.summary||{};$("stamp").innerHTML=`Board r
   const down=r=>r.reachable===false||r.gpu_probe_ok===false;const free=(d.rigs||[]).filter(r=>!down(r)).reduce((n,r)=>n+(r.free_gpus||[]).length,0);const stale=(s.free||0)-free;
   const issuesN=(s.interrupted||0)+(s.unreachable_rigs||0)+((s.budget_alerts||[]).length)+(s.silent||0);
   $("answer").innerHTML=`<div class="n ${free?"":"none"}">${free}</div><div class="of">GPUs free of <b>${esc(s.gpus??"?")}</b></div>${stale>0?`<div class="of" title="free at the last probe, but the rig did not answer the latest one">+${stale} last known free on unreachable rigs</div>`:""}`;
-  // rack: every card in the fleet, grouped by machine
-  const rigs=[...(d.rigs||[])];
-  $("rack").innerHTML=rigs.map(r=>{const down=r.reachable===false;const sl=slotStates(r);
+  // rack: every card in the fleet, by machine, machines by group
+  const bay=(r,g)=>{const down=r.reachable===false;const sl=slotStates(r);
     const cells=sl.map(([i,x])=>{const u=x.g&&x.g.utilization!=null?x.g.utilization/100:0;const who=x.l?`${x.l.project} / ${x.l.experiment}`:x.st==="foreign"?((x.g&&x.g.processes||[]).map(p=>p.user).join(", ")||"another user"):x.st;
       return `<span class="slot ${x.st}" style="--u:${u}" title="${esc(r.rig)} GPU ${i}: ${esc(who)}${x.g?` (${x.g.utilization??"?"}% util)`:""}"><i></i></span>`}).join("")||`<span class="slot unknown" title="no GPUs reported"></span>`;
-    return `<button class="bay ${down?"down":""} ${r.opt_in?"optin":""}" data-rig="${esc(r.rig)}" title="${esc(r.rig)}${r.opt_in?" (opt-in)":""}${down?" (unreachable)":""}"><span class="slots">${cells}</span><span class="bayn">${esc(r.rig)}</span></button>`}).join("")+
-    (d.slurm||[]).map(c=>{const jobs=c.jobs||[];const pips=jobs.slice(0,40).map(j=>`<span class="slot job ${j.state==="RUNNING"?"held":j.state==="PENDING"?"pending":"unknown"}" title="${esc(j.job_id)} ${esc(j.state)}"></span>`).join("");
-      return `<button class="bay ${c.reachable===false?"down":""}" data-rig="${esc(c.rig)}" title="${esc(c.rig)}: ${c.running||0} running, ${c.pending||0} pending"><span class="slots cluster">${pips||`<span class="stamp" style="font-size:11px">idle</span>`}</span><span class="bayn">${esc(c.rig)} ${c.running||0}+${c.pending||0}</span></button>`}).join("");
+    return `<button class="bay ${down?"down":""} ${r.opt_in?"optin":""}" data-rig="${esc(r.rig)}" title="${esc(r.rig)}${r.opt_in?" (opt-in)":""}${down?" (unreachable)":""}"><span class="slots">${cells}</span><span class="bayn">${esc(g.stem?r.rig.slice(g.key.length+1):r.rig)}</span></button>`};
+  $("rack").innerHTML=fleetGroups(d.rigs||[]).map(g=>`<div class="rgroup"><div class="rgl">${esc(g.stem?g.key+"-*":g.key)}</div><div class="rbays">${g.rigs.map(r=>bay(r,g)).join("")}</div></div>`).join("")+
+    ((d.slurm||[]).length?`<div class="rgroup"><div class="rgl">Slurm clusters</div><div class="rbays">`:"")+(d.slurm||[]).map(c=>{const jobs=c.jobs||[];const pips=jobs.slice(0,40).map(j=>`<span class="slot jobdot ${j.state==="RUNNING"?"held":j.state==="PENDING"?"pending":"unknown"}" title="${esc(j.job_id)} ${esc(j.state)}"></span>`).join("");
+      return `<button class="bay ${c.reachable===false?"down":""}" data-rig="${esc(c.rig)}" title="${esc(c.rig)}: ${c.running||0} running, ${c.pending||0} pending"><span class="slots cluster">${pips||`<span class="stamp" style="font-size:11px">idle</span>`}</span><span class="bayn">${esc(c.rig)} ${c.running||0}+${c.pending||0}</span></button>`}).join("")+((d.slurm||[]).length?`</div></div>`:"");
   const nf=s.next_free;
   $("next").innerHTML=nf?`<span class="lbl">Next to free</span><b>${esc(nf.rig)} GPU ${esc(nf.gpu)}</b><span>${esc(nf.project)} <span class="stamp">/ ${esc(nf.experiment)}</span></span><span>${until(nf.eta,nowMs)}</span>${nf.eta_basis?`<small class="stamp">${esc(nf.eta_basis)}</small>`:""}`:(s.held?`<span class="lbl">No held lane has reported an ETA yet.</span>`:`<span class="lbl">Nothing is held on the board.</span>`);
   // the things to act on, one line each
@@ -608,10 +632,19 @@ function hms(s){if(!s)return null;const p=String(s).split("-");let days=0,t=p[0]
 function draw(){if(!last)return;const nowMs=Date.now();drawHeader(last,nowMs);if(ui.tab!=="fleet")return;
   const rigs=[...(last.rigs||[])];const size=r=>(r.gpus||[]).length;const busy=r=>(r.lanes||[]).length+(r.foreign||[]).length;
   if(ui.freeFirst)rigs.sort((a,b)=>{const fa=(a.free_gpus||[]).length>0,fb=(b.free_gpus||[]).length>0;if(fa!==fb)return fa?-1:1;return size(b)-size(a)||busy(b)-busy(a)});else rigs.sort((a,b)=>busy(b)-busy(a)||size(b)-size(a));
-  const main=$("main");main.innerHTML="";const wides=document.createElement("div");wides.className="wides";const cols=document.createElement("div");cols.className="cols";
-  let shown=0;for(const r of rigs.filter(visible)){const c=rigCard(r,nowMs);(c.classList.contains("wide")?wides:cols).appendChild(c);shown++}
-  for(const c of last.slurm||[])if(visible(c)){cols.appendChild(slurmCard(c,nowMs));shown++}
-  if(wides.children.length)main.appendChild(wides);if(cols.children.length)main.appendChild(cols);
+  const main=$("main");main.innerHTML="";let shown=0;
+  const section=(key,title,stats,cards)=>{if(!cards.length)return;shown+=cards.length;const shut=ui.collapsed.has(key);
+    const sec=document.createElement("section");sec.className="group";
+    sec.innerHTML=`<button class="grh" data-grp="${esc(key)}" aria-expanded="${!shut}" title="${shut?"Show":"Hide"} this group"><span class="grt">${esc(title)}</span><span class="grs">${stats}</span><span class="chev ${shut?"":"open"}"></span></button>`;
+    if(!shut){const wides=document.createElement("div");wides.className="wides";const cols=document.createElement("div");cols.className="cols";
+      // column flow balances heights, which strands a short group in one column; three or fewer cards sit in a row
+      if(cards.filter(c=>!c.classList.contains("wide")).length<=3)cols.classList.add("row");
+      for(const c of cards)(c.classList.contains("wide")?wides:cols).appendChild(c);if(wides.children.length)sec.appendChild(wides);if(cols.children.length)sec.appendChild(cols)}
+    main.appendChild(sec)};
+  for(const g of fleetGroups(rigs)){const st=groupStats(g.rigs);
+    section("g/"+g.key,g.stem?g.key+"-*":g.key,st,g.rigs.filter(visible).map(r=>rigCard(r,nowMs)))}
+  const cl=last.slurm||[];
+  section("g/__slurm","Slurm clusters",`<span>${cl.length} cluster${cl.length===1?"":"s"}</span><span><b class="c-run">${cl.reduce((n,c)=>n+(c.running||0),0)}</b> running</span><span><b class="c-q">${cl.reduce((n,c)=>n+(c.pending||0),0)}</b> pending</span>`,cl.filter(visible).map(c=>slurmCard(c,nowMs)));
   if(!shown)main.innerHTML=`<div class="empty">Nothing matches the current filter.</div>`;
   $("foot").textContent=`Board read ${abs(last.generated_at)}, api v${last.api_version||1}, page refreshes every ${ui.every>=60?ui.every/60+" min":ui.every+" s"}`}
 

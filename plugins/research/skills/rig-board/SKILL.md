@@ -103,26 +103,25 @@ Set `RIGSYNC_REGISTRY` or pass `--registry` to use another registry.
 
 ## Viewer
 
-`serve` is a stdlib HTTP server. `/` is the read-only page (`assets/viewer.html`): the count of
-verified free GPUs (cards on a rig that answered its latest probe; free cards on an unreachable
-rig are counted apart and shown as "last known free"), a rack with one slot per physical card
-grouped by machine (state colour, utilization fill; a click jumps to that rig), the soonest
-lane ETA, one clickable line per issue (interrupted, silent, unreachable, budget), filter chips
-(free / held / foreign / issues / Slurm counts), probe age and next-probe countdown, then one card per rig (headed by uptime,
-load, and the rig's download / upload rate in MB/s sampled at probe time) with one row per
-GPU (free with model, VRAM and utilization gauges; running / claimed / silent / interrupted /
-unreachable lanes with holder, wave, run, the run's live progress, heartbeat and linear run
-ETA read from its `.status.json` on the rig plus the last line of the tmux pane, the
-orchestrator's wave ETA, held-since, orchestrator age and copy buttons for `tmux attach` and the project path; foreign cards with the owning user,
-process, memory and age; a collapsed list of stray sessions), a Slurm card that folds sweep
-jobs into groups (running / pending / completed / failed counts with their share of everything
-submitted in the accounting window, a stacked bar, end-time window, earliest pending start,
-shared configuration, per job the varying part of the name) with the account budgets above the
-queue and footnotes for the nightly lag and the accounting unit, a filter box, free-first sort, and a
-History tab (`/#history`) of the last 24 h. Light/dark theme, browser notifications on lane
-changes and the refresh period sit in the Settings menu. Fonts (Geist and Geist Mono) load from Google Fonts and fall
-back to system fonts offline. The tab title and favicon carry the verified free count. The page
-refresh period (1 s to 5 min, default 5 s, remembered per browser, `?every=` for one visit) re-reads the
+`serve` is a stdlib HTTP server. `/` is the read-only page (`assets/viewer.html`): the verified
+free GPU count (free cards on an unreachable rig count apart, as "last known free"), a rack of
+one slot per card (state colour, utilization fill; click jumps to the rig), the soonest lane
+ETA, one clickable line per issue, filter chips, probe age and next-probe countdown. Machines
+are grouped in the rack and below it: names sharing the stem before the first `-` form one group
+(`lab-a`, `lab-b` → `lab-*`), other machines stand alone, bigger groups first, Slurm targets last;
+each group heading carries its counts and collapses on click. Each rig card (uptime, load,
+MB/s down / up at probe time) has one row per GPU: free with model, VRAM and gauges; a lane with
+holder, wave, run, the run's live progress, heartbeat and linear ETA from its `.status.json`
+plus the tmux pane's last line, the orchestrator's wave ETA, held-since, orchestrator age and
+copy buttons for `tmux attach` and the project path; a foreign card with user, process, memory
+and age; stray sessions collapsed. The Slurm card folds sweep jobs into groups (running /
+pending / completed / failed shares of the accounting window, stacked bar, end-time window,
+earliest pending start, shared configuration, per-job varying name) under the account budgets,
+with footnotes for the nightly lag and accounting unit. A filter box, free-first sort and a
+History tab (`/#history`, last 24 h) complete it; theme, notifications on lane changes and the
+refresh period are in Settings. Fonts (Geist, Geist Mono) come from Google Fonts, system fonts
+offline. Title and favicon carry the verified free count. The refresh period (1 s to 5 min,
+default 5 s, remembered per browser, `?every=` for one visit) re-reads the
 board files only, so any setting is cheap, while the rig probe period is the server's
 `reconcile_every` (see the configuration reference). Polling pauses while the pointer is over a
 card or text is selected, and a lost server shows the last good read as stale. `/api/board`
