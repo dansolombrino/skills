@@ -1,6 +1,6 @@
 ---
 name: sweep-supervisor
-description: Supervise a dispatched Research 2.0 wave from the hub with no chat needed - a hub service feeds each GPU lane from one pull queue, relaunches lanes after a rig fault, offloads and collects, keeps the fleet board current, pushes notices to the user's phone, and wakes a fresh unattended agent on every event that needs judgment (a failure, a stale heartbeat, an idle lane at the tail) to diagnose, move runs, fetch data, or ask without blocking; it then runs the follow-ups a wave leads to (plots and journal when it finishes, fix-and-redispatch of a deterministic engineering error). Use when a wave is running or about to be launched, when the user asks for a wave's status, ETA, or warnings, to follow a wave from a chat, to rebalance GPUs, to recover after a crash or reboot, to answer a supervisor question, or when woken as the unattended supervisor agent for a tick or a phone message. Do not use to design, generate, or authorize a wave (sweep-dispatch), or for fleet-wide GPU occupancy across projects (rig-board).
+description: Supervise a dispatched Research 2.0 wave from the hub with no chat needed - a hub service feeds each GPU lane from one pull queue, relaunches lanes after a rig fault, offloads and collects, keeps the fleet board current, pushes notices to the user, and wakes a fresh unattended agent on every event that needs judgment (a failure, a stale heartbeat, an idle lane at the tail) to diagnose, move runs, fetch data, or ask without blocking; it then runs the follow-ups a wave leads to (plots and journal when it finishes, fix-and-redispatch of a deterministic engineering error). Use when a wave is running or about to be launched, when the user asks for a wave's status, ETA, or warnings, to follow a wave from a chat, to rebalance GPUs, to recover after a crash or reboot, to answer a supervisor question, or when woken as the unattended supervisor agent for a tick. Do not use to design, generate, or authorize a wave (sweep-dispatch), or for fleet-wide GPU occupancy across projects (rig-board).
 ---
 
 # sweep-supervisor
@@ -45,7 +45,7 @@ python3 "$SUPERVISOR" followups                               # every follow-up,
 | evaluations | `rig-sync collect` from every pool rig to the hub | settle a `collect-failed` identity mismatch with the user | — |
 | tracking | fleet board claim/refresh/release, snapshot, status table | EXPERIMENTS.md (single writer during a wave), `decide` log, journal | status on request |
 | after the wave | `finish`: prune every machine, queue the `analyze` follow-up; run follow-ups one per project | queue a `fix` follow-up for a deterministic engineering error | — |
-| the user | push notices (`notify_command`): wave finished, failures, rig down, blocked lane, certificate expiring; hand a phone message to its agent | `ask` without blocking; `say` | relay `answer` |
+| the user | push notices (`notify_command`): wave finished, failures, rig down, blocked lane, certificate expiring | `ask` without blocking; `say` | relay `answer` |
 
 The queue is ordered once by dispatch. A lane holds at most one run in flight plus one buffered,
 so a fast card simply takes more runs: a wrong initial estimate corrects itself, and an unstarted
@@ -104,12 +104,6 @@ work requests that same profile.
   `say`, and every follow-up report — identical notices at most once an hour, across waves. Its
   `{context}` names the wave and the agent session that wrote, and marks failed runs and a rig down
   silent (the supervisor is on them).
-- **Conversations.** A phone message (`tell`) goes before any tick of its
-  wave to the session that wrote the message it replies to, else the one that last spoke to the
-  user, resumed through `resume_command` (else a fresh agent). The turn also handles new events; a
-  finished wave can still be talked to. The agent answers with `say`, the only way its words reach
-  the phone; a status line under the message tracks the turn (`✗` with its log). The phone's words are the user's: they grant
-  what Authority reserves, quoted in `--reason "user: ..."` or `--user-words`.
 - **Certificates.** A rig's `ssh_cert` (a cluster login certificate, such as Leonardo's 12-hour
   one) is watched: a notice an hour before it expires and one when it does, and a `⚠` line. Renewal
   is the user's 2FA, so it is never an `ask`; the service resumes the rig the cycle it answers.
@@ -154,7 +148,7 @@ the wave's `fix` and `analyze` follow-ups. A user-granted `behemoth` card is par
 whole wave. **Leonardo:** core-hours are not a gate; there is no cap unless the user set one, and a
 `budget-cap` event (only possible then) is reported, not asked.
 
-**Reserved for the user**, asked with `ask` while the status quo holds (or granted in their own words from the phone): any rig, card, or budget
+**Reserved for the user**, asked with `ask` while the status quo holds (or granted in their own words): any rig, card, or budget
 outside the pool; a `behemoth` card without a grant for this wave; anything of another project or
 user; deleting anything `offload` and `prune` do not cover; cancelling or superseding runs outside
 the standing authorization (another wave's runs, a supersede, a running Slurm job); a run_id

@@ -84,7 +84,7 @@ scripts. New experiments identify runs by a versioned `rid-<32 hex>` hash (`hash
 reference. `EXPERIMENTS.md` holds run state and `JOURNAL.md` holds the narrative.
 
 A dispatched wave needs no chat. The hub's `sweep-supervisor` service feeds and recovers it, waits
-for GPUs another wave holds instead of leaving them out, pushes notices to a phone through
+for GPUs another wave holds instead of leaving them out, pushes notices through
 `notify_command` (finished, failures, rig down, a Leonardo certificate about to expire), and when
 the wave finishes prunes it and runs an unattended follow-up that renders its plots under the full
 plot contract and journals the results. A deterministic engineering error found mid-wave is fixed

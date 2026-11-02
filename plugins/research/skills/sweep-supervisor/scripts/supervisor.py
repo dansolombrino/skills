@@ -107,7 +107,7 @@ URGENT_EVENTS = frozenset(
         "lane-idle-tail",
     }
 )
-# What reaches the user's phone (`notify_command`) without any chat open. `ask` always does too.
+# What reaches the user (`notify_command`) without any chat open. `ask` always does too.
 NOTIFY_EVENTS = frozenset({"wave-terminal", "rig-down", "recovery-blocked", "cert-expiring", "cert-expired", "submit-failed"})
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
@@ -138,8 +138,6 @@ class AgentProfile:
     command: tuple[str, ...]
     model: str
     effort: str
-    resume: tuple[str, ...] = ()  # continues a recorded session with a new prompt: the phone talks to the agent that wrote
-    session_regex: str | None = None  # finds the session id in the log of a `command` that cannot be given one
 
 
 @dataclass(frozen=True)
@@ -222,26 +220,13 @@ def load_settings(registry_path: Path) -> Settings:
         if not isinstance(raw_agent, dict):
             raise SupervisorError(f"{registry_path}: [supervisor.agent] must be a table")
         command = _agent_command(raw_agent, "command", registry_path, ("prompt",))
-        resume = _agent_command(raw_agent, "resume_command", registry_path, ("prompt", "session")) if "resume_command" in raw_agent else ()
-        session_regex = raw_agent.get("session_regex")
-        if session_regex is not None:
-            try:
-                if not isinstance(session_regex, str) or re.compile(session_regex).groups != 1:
-                    raise re.error("needs exactly one group")
-            except re.error as exc:
-                raise SupervisorError(f"{registry_path}: supervisor.agent.session_regex must be a regex with one group (the id): {exc}") from None
-        if resume and not session_regex and not any("{session}" in part for part in command):
-            raise SupervisorError(
-                f"{registry_path}: supervisor.agent.resume_command needs the session of every run: put {{session}} in "
-                "command (an executable that takes a preset id) or declare session_regex (one that prints its id)"
-            )
         model = raw_agent.get("model")
         effort = raw_agent.get("effort")
         if not isinstance(model, str) or not model:
             raise SupervisorError(f"{registry_path}: supervisor.agent.model is required; it is never defaulted")
         if effort not in EFFORT_VALUES:
             raise SupervisorError(f"{registry_path}: supervisor.agent.effort must be one of {', '.join(EFFORT_VALUES)}")
-        agent = AgentProfile(command, model, effort, resume, session_regex)
+        agent = AgentProfile(command, model, effort)
     notify = table.get("notify_command")
     notify_command = _string_list(notify, f"{registry_path}: supervisor.notify_command") if notify is not None else ()
     if notify_command and not any("{text}" in part for part in notify_command):
@@ -2016,43 +2001,17 @@ def agent_prompt(wave: Wave, reason: str) -> str:
     )
 
 
-def chat_prompt(wave: Wave, messages: list[dict], resumed: bool) -> str:
-    """The user's words from the phone, for the session that last spoke to them (or a fresh one)."""
-    lines = []
-    for item in messages:
-        about = f" (answering your question {item['question']})" if item.get("question") else ""
-        lines.append(f"«{item['text']}»{about}")
-    head = (
-        "" if resumed else
-        f"Use the sweep-supervisor skill for wave {wave.wave_id} of the research project in the current directory. "
-        f"State directory: {wave.dir}. "
-    )
-    return head + (
-        f"The user wrote to you from the phone about wave {wave.wave_id}: " + " ".join(lines) + ". "
-        + ("Time has passed since your last turn: " if resumed else "")
-        + "read the supervisor's ledger and snapshot first, and handle any new events there as a tick would. "
-        "Act on the message as the sweep-supervisor skill allows. These are the user's own words: they grant what its "
-        "Authority section reserves for the user, so quote them in the --reason (\"user: ...\") or --user-words of every "
-        "command they authorize. When they answer an open question, record that with the supervisor's answer command. "
-        f"Reply with the supervisor's `say --wave {wave.wave_id} --text \"...\"`: it is the only way your words reach "
-        "the user. Keep it short plain text: what you did or found, or the one thing you need to know. Never wait for a "
-        "reply; record every decision with decide, then finish."
-    )
-
-
-def agent_argv(profile: AgentProfile, prompt: str, resume: str | None = None) -> tuple[list[str], str | None]:
-    """The argv for one agent run and the session it will have: `resume_command` on a recorded session,
-    else `command` with a fresh id when it takes one (`{session}`), else unknown until its log says."""
-    session = resume or (str(uuid.uuid4()) if any("{session}" in part for part in profile.command) else None)
-    template = profile.resume if resume else profile.command
+def agent_argv(profile: AgentProfile, prompt: str) -> tuple[list[str], str | None]:
+    """The argv for one agent run and the session it will have: a fresh id when `command` takes one
+    (`{session}`), else None."""
+    session = str(uuid.uuid4()) if any("{session}" in part for part in profile.command) else None
     substitutions = {"prompt": prompt, "model": profile.model, "effort": profile.effort, "session": session or ""}
-    return [part.format(**substitutions) for part in template], session
+    return [part.format(**substitutions) for part in profile.command], session
 
 
-def run_agent(wave: Wave, profile: AgentProfile, prompt: str, log_path: Path, timeout: int, header: str,
-              resume: str | None = None) -> tuple[str, str | None]:
+def run_agent(wave: Wave, profile: AgentProfile, prompt: str, log_path: Path, timeout: int, header: str) -> tuple[str, str | None]:
     """One headless agent run in the project root, logged; returns (outcome, session id or None)."""
-    command, session = agent_argv(profile, prompt, resume)
+    command, session = agent_argv(profile, prompt)
     environment = {**os.environ, "SWEEP_SUPERVISOR_MODEL": profile.model, "SWEEP_SUPERVISOR_EFFORT": profile.effort}
     if session:
         environment["SWEEP_SUPERVISOR_SESSION"] = session
@@ -2066,25 +2025,11 @@ def run_agent(wave: Wave, profile: AgentProfile, prompt: str, log_path: Path, ti
             outcome = f"timed out after {timeout}s"
         except OSError as exc:
             outcome = f"could not start: {exc}"
-    if session is None and profile.session_regex:
-        with contextlib.suppress(OSError):
-            if match := re.search(profile.session_regex, log_path.read_text(errors="replace")):
-                session = match.group(1)
     return outcome, session
 
 
-def spoke_since(wave: Wave, started: datetime) -> bool:
-    """Whether an agent reached the user (`say` or `ask`) since `started`."""
-    return any(
-        record.get("event") in ("say", "ask") and (parse_iso(record.get("at")) or started) >= started
-        for record in wave.ledger()
-    )
-
-
-def wake(wave: Wave, settings: Settings, reason: str, chat: list[tuple[Path, dict]] | None = None) -> int:
-    """Run one headless agent on this wave. Single-flight: a tick in progress is never doubled.
-    With `chat` (phone messages), the run resumes the session the user is talking to when the profile
-    can (`resume_command`), and always ends with a reply reaching the phone."""
+def wake(wave: Wave, settings: Settings, reason: str) -> int:
+    """Run one headless agent on this wave. Single-flight: a tick in progress is never doubled."""
     profile = require_agent(settings)
     wave.agent_logs.mkdir(parents=True, exist_ok=True)
     lock = (wave.dir / "agent.lock").open("a+")
@@ -2100,40 +2045,16 @@ def wake(wave: Wave, settings: Settings, reason: str, chat: list[tuple[Path, dic
             runtime = wave.runtime()
             runtime["agent_tick_started_at"] = iso(started)
             wave.save_runtime(runtime)
-        messages = [record for _path, record in chat or []]
-        for path, record in chat or []:
-            board.write_json(path, {**record, "status": "running", "started_at": iso(started)})
-        target = None
-        if messages and profile.resume:
-            target = next((m["session"] for m in messages if m.get("session")), None) or runtime.get("chat_session") or runtime.get("agent_session")
-        prompt = chat_prompt(wave, messages, resumed=bool(target)) if messages else agent_prompt(wave, reason)
         stamp = started.strftime("%Y%m%d-%H%M%S")
-        log_path = wave.agent_logs / (f"{stamp}-chat.log" if messages else f"{stamp}.log")
-        if messages:
-            receipt(settings, wave, messages, f"🤖 working since {started.strftime('%H:%M')} "
-                    + ("(resuming its conversation)" if target else "(a fresh agent)"))
-        outcome, session = run_agent(wave, profile, prompt, log_path, settings.agent_timeout, f"{iso(started)} reason: {reason}", target)
-        if messages and target and outcome != "exit 0" and not outcome.startswith("timed out") and not spoke_since(wave, started):
-            # the recorded session could not be resumed (expired, moved): the same words to a fresh agent
-            outcome, session = run_agent(wave, profile, chat_prompt(wave, messages, resumed=False), log_path.with_name(f"{stamp}-chat-fresh.log"),
-                                         settings.agent_timeout, f"{iso(started)} reason: {reason} (fresh: resuming {target} failed)")
-        spoke = spoke_since(wave, started)
+        log_path = wave.agent_logs / f"{stamp}.log"
+        outcome, session = run_agent(wave, profile, agent_prompt(wave, reason), log_path, settings.agent_timeout, f"{iso(started)} reason: {reason}")
         with WaveLock(wave):
             runtime = wave.runtime()
             runtime.update(agent_ticked_at=iso(now()), agent_last_result=outcome, agent_last_log=str(log_path))
             if session:
                 runtime["agent_session"] = session
-                if spoke or messages:
-                    runtime["chat_session"] = session  # where the user's next plain message goes
             wave.save_runtime(runtime)
             wave.log("agent-tick", reason=reason, outcome=outcome, model=profile.model, effort=profile.effort, session=session)
-        for path, record in chat or []:
-            board.write_json(path, {**record, "status": "done" if outcome == "exit 0" else "failed", "outcome": outcome,
-                                    "session": session, "ended_at": iso(now()), "log": str(log_path)})
-        if messages:
-            took = humanize((now() - started).total_seconds())
-            receipt(settings, wave, messages, f"✓ answered in {took}" if spoke else
-                    f"✗ ended without answering ({outcome}, after {took}) · log {log_path}")
         print(f"[wake] wave {wave.wave_id}: {outcome} ({log_path})")
         return 0 if outcome == "exit 0" else 1
     finally:
@@ -2142,8 +2063,8 @@ def wake(wave: Wave, settings: Settings, reason: str, chat: list[tuple[Path, dic
 
 
 def wake_due(wave: Wave, settings: Settings) -> str | None:
-    """Why an agent tick is due now, or None. Events are read from the ledger, so an answer typed in
-    a chat and a failure seen while a tick was still running both count."""
+    """Why an agent tick is due now, or None. Events are read from the ledger, so an answer recorded
+    meanwhile and a failure seen while a tick was still running both count."""
     runtime = wave.runtime()
     cursor = parse_iso(runtime.get("agent_tick_started_at"))
     urgent = sorted(
@@ -2167,8 +2088,8 @@ SILENT_EVENTS = frozenset({"rig-down", "run-failed"})
 
 def notice_context(wave: Wave | None, kind: str, *, session: str | None = None, question: str | None = None,
                    body: str | None = None, silent: bool = False, project: str | None = None) -> dict:
-    """What a notice is about, for a sink that keeps waves apart and routes the user's replies back
-    (`{context}` in `notify_command`, JSON): the wave, the agent session that wrote it, the question."""
+    """What a notice is about, for a sink that keeps waves apart (`{context}` in `notify_command`,
+    JSON): the wave, the agent session that wrote it, the question."""
     context: dict = {"kind": kind, "silent": silent}
     if wave is not None:
         context.update(project=project or wave.project_root.name, root=str(wave.project_root), wave=wave.wave_id)
@@ -2176,16 +2097,6 @@ def notice_context(wave: Wave | None, kind: str, *, session: str | None = None, 
         if value:
             context[key] = value
     return context
-
-
-def receipt(settings: Settings, wave: Wave, messages: list[dict], line: str) -> None:
-    """Where the user's phone messages stand (`📨 received` is the bridge's, then working, answered or
-    failed with its log): one line the bridge keeps editing under the user's message, ending with the
-    message id, so anything that went wrong can be looked up on the hub."""
-    ids = [message["id"] for message in messages]
-    body = f"{line} · id {ids[-1]}"
-    context = {**notice_context(wave, "receipt", body=body, silent=True), "receipts": ids}
-    notify(settings, f"{wave.project_root.name} wave {wave.wave_id}: {body}", context)
 
 
 def notify(settings: Settings, text: str, context: dict | None = None) -> None:
@@ -2198,7 +2109,7 @@ def notify(settings: Settings, text: str, context: dict | None = None) -> None:
 
 
 def event_notice(wave: Wave, record: dict) -> str | None:
-    """The body of one notice for the user's phone, or None when the event is not worth one; a wave's
+    """The body of one notice for the user, or None when the event is not worth one; a wave's
     notices are prefixed with its name by the caller. Certificate notices name no wave, so two waves
     on one cluster send one notice."""
     event, at = record.get("event"), now()
@@ -2353,24 +2264,19 @@ def run_followup(path: Path, settings: Settings) -> None:
     board.write_json(path, record)
     with contextlib.suppress(OSError):
         wave.log("followup-ended", id=record["id"], kind=record["kind"], outcome=outcome, session=session)
-    if session:
-        with contextlib.suppress(OSError), WaveLock(wave):
-            runtime = wave.runtime()
-            runtime["chat_session"] = session  # a reply to its report continues this follow-up's conversation
-            wave.save_runtime(runtime)
     if record["status"] != "done" or not record.get("report"):
         body = f"follow-up {record['kind']} {outcome} without a report; log {log_path}"
         notify(settings, f"{record['project']} wave {record['wave_id']}: {body}", notice_context(wave, "followup", session=session, body=body, project=record["project"]))
 
 
-def start_followups(board_config, settings: Settings, threads: dict[str, threading.Thread], busy: frozenset[str] = frozenset()) -> None:
-    """Start every pending follow-up whose project has none running and no phone conversation in
-    progress (`busy`): two agents never commit in one checkout at once."""
+def start_followups(board_config, settings: Settings, threads: dict[str, threading.Thread]) -> None:
+    """Start every pending follow-up whose project has none running: two agents never commit in one
+    checkout at once."""
     for path, record in followup_records(board_config):
         if record.get("status") != "pending":
             continue
         key = str(record.get("project_root"))
-        if key in busy or (key in threads and threads[key].is_alive()):
+        if key in threads and threads[key].is_alive():
             continue
         thread = threading.Thread(target=run_followup, args=(path, settings), daemon=True)
         threads[key] = thread
@@ -2442,27 +2348,22 @@ def serve(board_config, settings: Settings) -> int:
     require_agent(settings)
     print(f"[serve] {Path(__file__).resolve()}: cycle every {settings.cycle_every}s, agent tick every {settings.tick_every}s", flush=True)
     wakers: dict[str, threading.Thread] = {}
-    chatting: dict[str, threading.Thread] = {}  # project root -> its phone conversation in progress
     followups: dict[str, threading.Thread] = {}
     sent: dict[str, float] = {}
     requeue_interrupted_followups(board_config)
-    requeue_interrupted_chats(board_config)
 
     def alive(threads: dict[str, threading.Thread], key: str) -> bool:
         return key in threads and threads[key].is_alive()
 
-    def start(wave: Wave, reason: str, chat: list[tuple[Path, dict]] | None = None) -> None:
-        thread = threading.Thread(target=wake, args=(wave, settings, reason, chat), daemon=True)
+    def start(wave: Wave, reason: str) -> None:
+        thread = threading.Thread(target=wake, args=(wave, settings, reason), daemon=True)
         wakers[wave.wave_id] = thread
-        if chat:
-            chatting[str(wave.project_root)] = thread
         thread.start()
 
     try:
         while True:
             busy = any(thread.is_alive() for thread in (*wakers.values(), *followups.values()))
             maybe_self_update(settings, busy)
-            chats = pending_chats(board_config)
             for wave in active_waves(board_config):
                 try:
                     outcome = cycle_wave(wave, board_config, settings)
@@ -2472,17 +2373,9 @@ def serve(board_config, settings: Settings) -> int:
                 notify_events(wave, settings, outcome["events"], sent)
                 if alive(wakers, wave.wave_id):
                     continue
-                # a phone message is answered first, by the agent the user is talking to; it handles new events too
-                chat = chats.pop((str(wave.project_root), wave.wave_id), None)
-                if chat and not alive(followups, str(wave.project_root)):
-                    start(wave, "phone message", chat)
-                elif reason := wake_due(wave, settings):
+                if reason := wake_due(wave, settings):
                     start(wave, reason)
-            for (root, wave_id), chat in chats.items():  # a finished wave, still talked to about its results
-                if not alive(wakers, wave_id) and not alive(followups, root) and not alive(chatting, root):
-                    with contextlib.suppress(SupervisorError):
-                        start(Wave(Path(root), wave_id), "phone message", chat)
-            start_followups(board_config, settings, followups, frozenset(root for root in chatting if alive(chatting, root)))
+            start_followups(board_config, settings, followups)
             time.sleep(settings.cycle_every)
     except KeyboardInterrupt:
         return 0
@@ -2718,10 +2611,6 @@ def ask(wave: Wave, settings: Settings, args: argparse.Namespace) -> int:
                       "answer": None, "session": session})
         wave.save_questions(items)
         wave.log("ask", id=identifier, text=args.text, session=session)
-        if session:
-            runtime = wave.runtime()
-            runtime["chat_session"] = session
-            wave.save_runtime(runtime)
     body = f"❓ [{identifier}] {args.text} — until you answer: {args.meanwhile}"
     notify(settings, f"{wave.project_root.name} wave {wave.wave_id}: {body}", notice_context(wave, "ask", session=session, question=identifier, body=body))
     print(f"[ask] {identifier}: {args.text}")
@@ -2748,78 +2637,14 @@ def answer(wave: Wave, args: argparse.Namespace) -> int:
 
 
 def say(wave: Wave, settings: Settings, args: argparse.Namespace) -> int:
-    """An agent's words to the user, in the wave's thread on the phone; a reply continues this session."""
+    """An agent's words to the user, pushed through `notify_command`."""
     session = os.environ.get("SWEEP_SUPERVISOR_SESSION")
     text = args.text.strip()
     with WaveLock(wave):
         wave.log("say", text=text, session=session)
-        if session:
-            runtime = wave.runtime()
-            runtime["chat_session"] = session
-            wave.save_runtime(runtime)
     notify(settings, f"{wave.project_root.name} wave {wave.wave_id}: {text}", notice_context(wave, "say", session=session, body=text))
     print("[say] sent" if settings.notify_command else "[say] recorded; no notify_command reaches the user")
     return 0
-
-
-# ───────────────────────────── the user's messages from the phone ─────────────────────────────
-#
-# A message typed on the phone (`tell`, run by the phone bridge) waits in the board's index until the
-# service can give it to an agent of its wave: the session that wrote the message it replies to, else
-# the one that last spoke to the user, resumed when the profile can (`resume_command`). Kept outside
-# the wave's state so a finished wave can still be talked to about its results.
-
-
-def chat_dir(board_config) -> Path:
-    return index_dir(board_config) / "chat"
-
-
-def chat_records(board_config) -> list[tuple[Path, dict]]:
-    directory = chat_dir(board_config)
-    if not directory.is_dir():
-        return []
-    return [(path, record) for path in sorted(directory.glob("*.json")) if (record := board.read_json(path))]
-
-
-def tell(wave: Wave, board_config, args: argparse.Namespace) -> int:
-    if not wave.queue_path.exists():
-        raise SupervisorError(f"wave {wave.wave_id} is not registered here: {wave.queue_path}")
-    text = args.text.strip()
-    if not text:
-        raise SupervisorError("an empty message")
-    if args.question:
-        with contextlib.suppress(SupervisorError):  # already answered: the words still reach the agent
-            record_answer(wave, args.question, text)
-    at = now()
-    identifier = f"{at.strftime('%Y%m%d-%H%M%S-%f')}"  # sorts in arrival order
-    record = {
-        "id": identifier, "project": wave.project_root.name, "project_root": str(wave.project_root), "wave_id": wave.wave_id,
-        "text": text, "session": args.session, "question": args.question, "status": "pending", "created_at": iso(at),
-    }
-    board.write_json(chat_dir(board_config) / f"{identifier}.json", record)
-    wave.log("user-message", id=identifier, text=text, session=args.session, question=args.question)
-    print(f"[tell] {identifier}: queued for wave {wave.wave_id}")
-    return 0
-
-
-def pending_chats(board_config) -> dict[tuple[str, str], list[tuple[Path, dict]]]:
-    """Waiting messages per (project root, wave): the oldest one's target session and every later
-    message to that same session, so a burst of lines becomes one turn."""
-    grouped: dict[tuple[str, str], list[tuple[Path, dict]]] = {}
-    for path, record in chat_records(board_config):
-        if record.get("status") != "pending":
-            continue
-        key = (str(record.get("project_root")), str(record.get("wave_id")))
-        batch = grouped.setdefault(key, [])
-        if not batch or batch[0][1].get("session") == record.get("session"):
-            batch.append((path, record))
-    return grouped
-
-
-def requeue_interrupted_chats(board_config) -> None:
-    for path, record in chat_records(board_config):
-        if record.get("status") == "running":
-            board.write_json(path, {**record, "status": "pending"})
 
 
 def decide(wave: Wave, settings: Settings, args: argparse.Namespace) -> int:
@@ -2965,12 +2790,8 @@ def build_parser() -> argparse.ArgumentParser:
     answer_p = wave_parser("answer")
     answer_p.add_argument("--id", required=True)
     answer_p.add_argument("--text", required=True)
-    say_p = wave_parser("say", help="an agent's reply to the user, pushed to the wave's thread on the phone")
+    say_p = wave_parser("say", help="an agent's words to the user, pushed through notify_command")
     say_p.add_argument("--text", required=True)
-    tell_p = wave_parser("tell", help="the user's message from the phone, for the agent of this wave (run by the phone bridge)")
-    tell_p.add_argument("--text", required=True)
-    tell_p.add_argument("--session", help="the agent session that wrote the message being replied to")
-    tell_p.add_argument("--question", help="the open question being replied to; recorded as its answer")
     decide_p = wave_parser("decide")
     decide_p.add_argument("text")
     followup_p = wave_parser("followup", help="queue unattended work this wave leads to: analyze its results, or fix and redispatch")
@@ -3000,8 +2821,6 @@ def main(argv: list[str] | None = None) -> int:
             print(f"OK agent profile: {profile.model}/{profile.effort}")
             print(f"OK board root: {board_config.root}")
             print(f"OK cycle every {settings.cycle_every}s, agent tick every {settings.tick_every}s")
-            print("OK phone replies resume the agent's session" if profile.resume else
-                  "NOTE no resume_command: a phone reply reaches a fresh agent, without the conversation so far")
             return 0
         if args.command == "serve":
             return serve(board_config, settings)
@@ -3074,8 +2893,6 @@ def main(argv: list[str] | None = None) -> int:
             return answer(wave, args)
         if args.command == "say":
             return say(wave, settings, args)
-        if args.command == "tell":
-            return tell(wave, board_config, args)
         if args.command == "decide":
             return decide(wave, settings, args)
         if args.command == "wake":
