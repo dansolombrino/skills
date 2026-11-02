@@ -1,0 +1,4 @@
+interface:
+  display_name: "Behemoth GPU Niceness"
+  short_description: "Rank behemoth users by the GPU time they used"
+  default_prompt: "Use $behemoth-gpu-niceness to show who used the most of behemoth's GPU time this week."

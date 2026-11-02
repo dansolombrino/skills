@@ -1,7 +1,7 @@
 {
   "name": "core",
-  "version": "5.2.1",
-  "description": "Always-on working discipline for every project: report status and ETA for long-running tasks when they finish, fail, or stall, and tag each project with its categories so domain plugins such as research load only where they belong, and put every web service a machine hosts behind one token-gated entry point.",
+  "version": "5.3.0",
+  "description": "Always-on working discipline for every project: report status and ETA for long-running tasks when they finish, fail, or stall, and tag each project with its categories so domain plugins such as research load only where they belong, put every web service a machine hosts behind one token-gated entry point, and keep a shareable per-user GPU niceness counter for the shared behemoth box.",
   "author": {
     "name": "Dan Solombrino",
     "email": "dansolombrino@gmail.com",
@@ -14,13 +14,14 @@
     "progress",
     "eta",
     "service-hub",
-    "reverse-proxy"
+    "reverse-proxy",
+    "gpu-usage"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Core",
-    "shortDescription": "Progress updates, project tags, service hub",
-    "longDescription": "Skills that belong in every project. Watch transfers, downloads, runs, and other long-running tasks and report their status and ETA when something changes, or on request. Tag a project with its categories in .project.toml and generate each host's per-project plugin enablement from it, so domain plugins such as research load only in the projects that use them. Put every web service a machine hosts behind one token-gated port with a landing page and a /<service>/ route each.",
+    "shortDescription": "Progress updates, project tags, service hub, GPU niceness",
+    "longDescription": "Skills that belong in every project. Watch transfers, downloads, runs, and other long-running tasks and report their status and ETA when something changes, or on request. Tag a project with its categories in .project.toml and generate each host's per-project plugin enablement from it, so domain plugins such as research load only in the projects that use them. Put every web service a machine hosts behind one token-gated port with a landing page and a /<service>/ route each, and share single pages through scoped read-only guest tokens. Count who holds the shared behemoth GPUs and how busy they keep them, on a shareable niceness page.",
     "developerName": "Dan Solombrino",
     "category": "Developer Tools",
     "capabilities": [

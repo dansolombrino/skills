@@ -21,6 +21,8 @@ description: Run one web entry point per machine that lists every hosted web ser
   prefix.
 - `/api/services` is the JSON behind the page; `/healthz` answers `ok` and `/favicon.ico` serves
   the optional `[hub] icon`, both without a token.
+- A **guest** token (`[hub.guests.<name>]`) opens only the services it lists, read-only, so one
+  page can be shared with other people: no landing page, no switcher, 404 on everything else.
 
 Configuration, install and the backend contract: [references/configuration.md](references/configuration.md).
 
@@ -36,6 +38,9 @@ Configuration, install and the backend contract: [references/configuration.md](r
 - The hub refuses a non-loopback `bind` without a token. The token travels in clear over plain
   HTTP: treat it as a secret for your own devices, and rotate it by replacing the registry value
   and restarting the service.
+- To share a service with other people, give them a guest link (`hub.py share <guest>`), never
+  the hub token. A guest is limited to GET/HEAD on its services, gets no WebSocket upgrades, and
+  its requests reach the backend with `X-Hub-Guest: <name>` (a client-sent one is dropped).
 
 ## Commands
 
@@ -43,6 +48,7 @@ Configuration, install and the backend contract: [references/configuration.md](r
 python3 scripts/hub.py status [--json]      # probe every service; exit 1 if any is down
 python3 scripts/hub.py url <service> [path] # local and public hub URL of a service (or a path under it)
 python3 scripts/hub.py token                # a fresh access token
+python3 scripts/hub.py share <guest>        # the link that opens a guest's services, token included
 python3 scripts/hub.py serve [--port N] [--bind ADDR] [--quiet]   # what the service runs
 ```
 
@@ -63,4 +69,6 @@ Report each service's hub URL from `hub.py url`, never a raw backend port.
 - Never proxy a backend that still listens on the network: it would stay reachable around the hub.
 - Never set `bind` to a non-loopback address without a token, and never forward the hub port from
   a router without one.
+- Never give a guest a service that writes, runs commands, or trusts loopback for more than it
+  shows; guest access is read-only at the hub, but GET handlers with side effects would still run.
 - The hub reports and forwards; it never changes a backend's data.

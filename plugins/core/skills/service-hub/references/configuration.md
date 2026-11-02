@@ -26,6 +26,10 @@ nav         = true                        # add the back-to-hub button to its pa
 [hub.services.ide]                        # link-only: a card that opens its own URL
 name = "IDE"
 link = "http://<address>:6769"
+
+[hub.guests.lab]                          # a token for other people: these services only, read-only
+token    = "<output of hub.py token>"     # >= 32 characters, unlike hub.token and every other guest's
+services = ["board"]                      # proxied services only; the first is where / sends them
 ```
 
 - `icon` is served at `/favicon.ico` without a token (the sign-in page shows it too), so use an
@@ -38,6 +42,23 @@ link = "http://<address>:6769"
   `link` (any `http(s)://` URL, opened in a new tab; its dot shows whether the host's port accepts a
   connection).
 - A health answer below HTTP 500 counts as up, so a backend that answers 401 is up.
+
+## Guests
+
+A guest token is for sharing one or a few services with people who must not reach the rest of
+the hub. With it a client:
+
+- reaches only `/<service>/...` of the listed services, with GET and HEAD (405 otherwise, and for
+  WebSocket upgrades);
+- is redirected from `/` to its first service, and never sees the landing page,
+  `/api/services`, the back-to-hub button or its switcher; every other path answers the same
+  `404 not found`, which names nothing;
+- is forwarded with `X-Hub-Guest: <name>`, so a backend can tell guests apart (a client-sent
+  header of that name is always dropped).
+
+`hub.py share <guest>` prints `<public_url>/<service>/?token=<guest token>` per service. Guests
+need `hub.token` to be set. Revoke one by deleting its table (or rotating its token) and
+restarting the hub; the access log shows its requests as `auth=guest:<name>`.
 
 ## Back-to-hub button
 
@@ -90,7 +111,7 @@ the service after editing `[hub]`: `systemctl --user restart service-hub.service
 ## Access log
 
 Each request is one stderr line, in the journal of the unit:
-`<client> <method> <path> <status> auth=<loopback|token|missing|REJECTED|open>`. The query
+`<client> <method> <path> <status> auth=<loopback|token|guest:<name>|missing|REJECTED|open>`. The query
 string is never logged, so a `?token=` never lands there.
 
 ```bash

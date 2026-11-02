@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>GPU Niceness</title>
+<link rel="stylesheet" href="app.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<main>
+  <header class="top">
+    <div>
+      <h1 id="title">GPU niceness</h1>
+      <p class="sub" id="summary">Who used the most GPU time.</p>
+    </div>
+    <div class="seg" role="group" aria-label="Time window">
+      <button type="button" data-window="24h">24 h</button>
+      <button type="button" data-window="7d">7 d</button>
+      <button type="button" data-window="30d">30 d</button>
+      <button type="button" data-window="all">All</button>
+    </div>
+  </header>
+
+  <section class="card">
+    <table id="board">
+      <thead><tr>
+        <th scope="col" class="rank">#</th>
+        <th scope="col">User</th>
+        <th scope="col" class="num">GPU-hours</th>
+        <th scope="col" class="bar-col">Share of GPU time</th>
+      </tr></thead>
+      <tbody></tbody>
+      <tfoot></tfoot>
+    </table>
+  </section>
+
+  <p class="foot" id="foot">Every 60 s the GPUs are sampled; a user uses a GPU while one of their processes holds memory on it, and a GPU shared by several users is split by the memory each holds. Only usernames are recorded: never process names, commands or paths.</p>
+</main>
+</body>
+</html>

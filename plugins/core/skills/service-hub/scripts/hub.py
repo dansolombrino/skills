@@ -5,14 +5,16 @@
 answers under its own path prefix, http://<host>:<port>/<service>/..., forwarded to a backend
 that listens on loopback only. Link-only services are cards that open their own URL. The hub
 checks one access token (query once, then a cookie) before anything reaches a backend, so a
-backend that trusts loopback clients is never exposed by the proxy. Configuration is the [hub]
-table of the machines registry; see references/configuration.md.
+backend that trusts loopback clients is never exposed by the proxy. A guest token opens only the
+services it names, read-only, and never the landing page or the other services. Configuration is
+the [hub] table of the machines registry; see references/configuration.md.
 
 Subcommands:
   serve   run the gateway (the service runs this)
   status  probe every service and print the table the landing page shows
   url     print the hub URL of a service, optionally with a path below it
   token   print a fresh access token
+  share   print the link that opens a guest's services (token included)
 """
 
 from __future__ import annotations
@@ -46,6 +48,8 @@ DEFAULT_HEALTH = "/healthz"
 COOKIE_NAME = "service_hub_token"
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 RESERVED = {"api", "healthz", "hub", "favicon.ico", "index.html", "login"}
+GUEST_HEADER = "X-Hub-Guest"   # set on requests a guest token made; never passed through from a client
+GUEST_METHODS = ("GET", "HEAD")
 HEALTH_TTL_S = 5.0
 HEALTH_TIMEOUT_S = 2.0
 CONNECT_TIMEOUT_S = 5.0
@@ -104,6 +108,14 @@ class Service:
 
 
 @dataclass(frozen=True)
+class Guest:
+    """A token that opens only `services`, read-only (GET/HEAD), with no landing page or switcher."""
+    name: str
+    token: str
+    services: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class HubConfig:
     port: int
     bind: str
@@ -112,9 +124,24 @@ class HubConfig:
     public_url: str | None
     services: tuple[Service, ...]
     icon: Path | None = None  # image file served as the favicon and the page mark
+    guests: tuple[Guest, ...] = ()
 
     def service(self, slug: str) -> Service | None:
         return next((s for s in self.services if s.slug == slug), None)
+
+    def guest(self, name: str) -> Guest | None:
+        return next((g for g in self.guests if g.name == name), None)
+
+    def identify(self, token: str) -> tuple[str, Guest | None] | None:
+        """("owner", None), ("guest", guest) or None; every candidate is compared in constant time."""
+        presented = token.encode()
+        found = None
+        if self.token is not None and hmac.compare_digest(presented, self.token.encode()):
+            found = ("owner", None)
+        for guest in self.guests:
+            if hmac.compare_digest(presented, guest.token.encode()) and found is None:
+                found = ("guest", guest)
+        return found
 
 
 def registry_path(arg: str | None) -> Path:
@@ -187,7 +214,36 @@ def load_config(path: Path) -> HubConfig:
         services.append(Service(slug, texts["name"], texts["description"], texts["icon"], url, link, health or None, nav))
     if not is_loopback(bind) and token is None:
         raise HubError(f"{path}: refusing hub.bind = {bind!r} without hub.token; set one (hub.py token) or bind 127.0.0.1")
-    return HubConfig(port, bind, token, title, public_url.rstrip("/") if public_url else None, tuple(services), icon)
+    guests = load_guests(path, table.get("guests", {}), token, {s.slug: s for s in services})
+    return HubConfig(port, bind, token, title, public_url.rstrip("/") if public_url else None, tuple(services), icon, guests)
+
+
+def load_guests(path: Path, raw: object, owner: str | None, services: dict[str, Service]) -> tuple[Guest, ...]:
+    if not isinstance(raw, dict):
+        raise HubError(f"{path}: hub.guests must be a table of [hub.guests.<name>] tables")
+    if raw and owner is None:
+        raise HubError(f"{path}: hub.guests need hub.token too: without it the whole hub is open on loopback")
+    guests, seen = [], {owner}
+    for name, entry in raw.items():
+        where = f"{path}: hub.guests.{name}"
+        if not SLUG.match(name) or not isinstance(entry, dict):
+            raise HubError(f"{where}: the name must be lowercase letters, digits and '-', and the value a table")
+        token = entry.get("token")
+        if not isinstance(token, str) or len(token) < 32:
+            raise HubError(f"{where}: token must be a string of at least 32 characters (hub.py token)")
+        if token in seen:
+            raise HubError(f"{where}: token must differ from hub.token and from every other guest's")
+        seen.add(token)
+        allowed = entry.get("services")
+        if not isinstance(allowed, list) or not allowed or not all(isinstance(x, str) for x in allowed):
+            raise HubError(f"{where}: services must be a non-empty list of service names")
+        for slug in allowed:
+            if slug not in services:
+                raise HubError(f"{where}: no service named {slug!r}")
+            if not services[slug].url:
+                raise HubError(f"{where}: {slug!r} is a link card; a guest can only be given proxied services")
+        guests.append(Guest(name, token, tuple(dict.fromkeys(allowed))))
+    return tuple(guests)
 
 
 def is_loopback(address: str) -> bool:
@@ -341,6 +397,7 @@ def make_handler(config: HubConfig, health: Health, access_log=None):
         server_version = "service-hub"
         sys_version = ""
         auth = "-"
+        guest: Guest | None = None
 
         def log_message(self, *args: object) -> None:
             pass
@@ -368,7 +425,9 @@ def make_handler(config: HubConfig, health: Health, access_log=None):
                 return
             parts = url.path.split("/", 2)  # "", first segment, rest
             first = parts[1] if len(parts) > 1 else ""
-            if url.path in ("/", "/index.html"):
+            if self.guest is not None:
+                self._guest_dispatch(url, parts, first)
+            elif url.path in ("/", "/index.html"):
                 self._page()
             elif url.path == NAV_ROUTE:
                 try:
@@ -387,6 +446,21 @@ def make_handler(config: HubConfig, health: Health, access_log=None):
             else:
                 self._send(404, "text/plain; charset=utf-8", f"service-hub: no service named {first!r}\n".encode())
 
+        def _guest_dispatch(self, url, parts: list[str], first: str) -> None:
+            """A guest reaches its own services, read-only; everything else is a 404 that names nothing."""
+            guest = self.guest
+            if url.path in ("/", "/index.html"):
+                self._redirect(f"/{guest.services[0]}/")
+            elif first in guest.services and (service := config.service(first)) is not None:
+                if self.command not in GUEST_METHODS or self.headers.get("Upgrade"):
+                    self._send(405, "text/plain; charset=utf-8", b"service-hub: read-only access\n")
+                elif len(parts) == 2:
+                    self._redirect(f"/{first}/" + (f"?{url.query}" if url.query else ""))
+                else:
+                    self._proxy(service, "/" + parts[2], url.query)
+            else:
+                self._send(404, "text/plain; charset=utf-8", b"service-hub: not found\n")
+
         def _authorized(self, url) -> bool:
             if is_loopback(self.client_address[0]):
                 self.auth = "loopback"
@@ -395,7 +469,8 @@ def make_handler(config: HubConfig, health: Health, access_log=None):
                 self.auth = "open"
                 return True
             token, from_query = presented_token(self, url.query)
-            if token is None or not hmac.compare_digest(token.encode(), config.token.encode()):
+            who = config.identify(token) if token is not None else None
+            if who is None:
                 self.auth = "missing" if token is None else "REJECTED"
                 wants_html = "text/html" in self.headers.get("Accept", "") and self.command in ("GET", "HEAD")
                 if wants_html:
@@ -410,7 +485,8 @@ def make_handler(config: HubConfig, health: Health, access_log=None):
                 else:
                     self._send(401, "text/plain; charset=utf-8", b"service-hub: access token required (?token=, Authorization: Bearer, or the hub cookie)\n")
                 return False
-            self.auth = "token"
+            self.guest = who[1]
+            self.auth = f"guest:{self.guest.name}" if self.guest else "token"
             if from_query and self.command in ("GET", "HEAD"):
                 # Remember the token and take it out of the address bar, history and backend logs.
                 rest = strip_token(url.query)
@@ -441,9 +517,9 @@ def make_handler(config: HubConfig, health: Health, access_log=None):
             out = []
             for key, value in self.headers.items():
                 low = key.lower()
-                if low in HOP_BY_HOP or low in connection_tokens or low in ("host", "x-hub-token"):
+                if low in HOP_BY_HOP or low in connection_tokens or low in ("host", "x-hub-token", GUEST_HEADER.lower()):
                     continue
-                if low == "authorization" and config.token and value == f"Bearer {config.token}":
+                if low == "authorization" and value.startswith("Bearer ") and config.identify(value[7:].strip()):
                     continue
                 if low == "cookie":
                     value = strip_hub_cookie(value)
@@ -457,6 +533,8 @@ def make_handler(config: HubConfig, health: Health, access_log=None):
                 ("X-Forwarded-Proto", "http"),
                 ("X-Forwarded-Prefix", f"/{service.slug}"),
             ]
+            if self.guest is not None:
+                out.append((GUEST_HEADER, self.guest.name))
             return out
 
         def _rewrite_location(self, service: Service, value: str) -> str:
@@ -515,8 +593,8 @@ def make_handler(config: HubConfig, health: Health, access_log=None):
                 self.close_connection = True
 
         def _wants_nav(self, service: Service) -> bool:
-            """Only top-level page loads get the button, never a frame, a fetch or an asset."""
-            if not service.nav or self.command != "GET":
+            """Only top-level page loads get the button, never a frame, a fetch or an asset; never a guest's."""
+            if not service.nav or self.command != "GET" or self.guest is not None:
                 return False
             dest = self.headers.get("Sec-Fetch-Dest")
             return dest == "document" if dest else "text/html" in self.headers.get("Accept", "")
@@ -618,6 +696,8 @@ def cmd_serve(config: HubConfig, args: argparse.Namespace) -> int:
     server = ThreadingHTTPServer((bind, args.port or config.port), make_handler(config, health, log))
     server.daemon_threads = True
     guard = "token required off this machine" if config.token else "OPEN (loopback only)"
+    if config.guests:
+        guard += "; guests: " + ", ".join(f"{g.name} -> {'/'.join(g.services)}" for g in config.guests)
     names = ", ".join(f"/{s.slug}/" if s.url else f"{s.slug} (link)" for s in config.services) or "no services yet"
     print(f"[serve] service-hub on http://{server.server_address[0]}:{server.server_address[1]}  ({guard})  {names}", flush=True)
     try:
@@ -654,6 +734,17 @@ def cmd_url(config: HubConfig, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_share(config: HubConfig, args: argparse.Namespace) -> int:
+    guest = config.guest(args.guest)
+    if guest is None:
+        known = ", ".join(g.name for g in config.guests) or "none: add a [hub.guests.<name>] table"
+        raise HubError(f"no guest named {args.guest!r}; known: {known}")
+    base = config.public_url or f"http://127.0.0.1:{config.port}"
+    for slug in guest.services:
+        print(f"{base}/{slug}/?token={guest.token}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--registry", help="machines registry (default: $RIGSYNC_REGISTRY or ~/.config/rigsync/machines.toml)")
@@ -668,13 +759,15 @@ def main(argv: list[str] | None = None) -> int:
     url.add_argument("service")
     url.add_argument("path", nargs="?", default="")
     sub.add_parser("token", help="print a fresh access token")
+    share = sub.add_parser("share", help="the link that opens a guest's services")
+    share.add_argument("guest")
     args = parser.parse_args(argv)
     if args.command == "token":
         print(secrets.token_urlsafe(32))
         return 0
     try:
         config = load_config(registry_path(args.registry))
-        return {"serve": cmd_serve, "status": cmd_status, "url": cmd_url}[args.command](config, args)
+        return {"serve": cmd_serve, "status": cmd_status, "url": cmd_url, "share": cmd_share}[args.command](config, args)
     except HubError as exc:
         print(f"service-hub: {exc}", file=sys.stderr)
         return 2

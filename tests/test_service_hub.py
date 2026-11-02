@@ -15,6 +15,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 HUB = ROOT / "plugins/core/skills/service-hub/scripts/hub.py"
 TOKEN = "t" * 24
+GUEST = "g" * 40
 
 
 def load_hub():
@@ -134,6 +135,7 @@ class ConfigTests(unittest.TestCase):
             "backend with a path": '[hub.services.x]\nurl = "http://127.0.0.1:1/sub"\n',
             "https backend": '[hub.services.x]\nurl = "https://127.0.0.1:1"\n',
             "relative health": '[hub.services.x]\nurl = "http://127.0.0.1:1"\nhealth = "healthz"\n',
+            "guest without owner token": f'[hub.services.x]\nurl = "http://127.0.0.1:1"\n[hub.guests.lab]\ntoken = "{GUEST}"\nservices = ["x"]\n',
         }
         for why, text in bad.items():
             with self.subTest(why), self.assertRaises(hub.HubError):
@@ -165,6 +167,27 @@ class ConfigTests(unittest.TestCase):
             self.assertIn(b'rel="icon" href="favicon.ico?v=', html)  # in the HTML itself, not set later by script
             self.assertNotIn(b"__HUB_", html)
 
+    def test_guest_rejections(self) -> None:
+        owner = "o" * 40
+        head = f'[hub]\ntoken = "{owner}"\n[hub.services.x]\nurl = "http://127.0.0.1:1"\n[hub.services.ide]\nlink = "http://a.test"\n'
+        bad = {
+            "short guest token": f'token = "{"s" * 20}"\nservices = ["x"]\n',
+            "owner token reused": f'token = "{owner}"\nservices = ["x"]\n',
+            "unknown service": f'token = "{GUEST}"\nservices = ["nope"]\n',
+            "link service": f'token = "{GUEST}"\nservices = ["ide"]\n',
+            "no services": f'token = "{GUEST}"\nservices = []\n',
+        }
+        for why, text in bad.items():
+            with self.subTest(why), self.assertRaises(hub.HubError):
+                self.load(head + "[hub.guests.lab]\n" + text)
+        with self.assertRaises(hub.HubError):
+            self.load(head + f'[hub.guests.a]\ntoken = "{GUEST}"\nservices = ["x"]\n[hub.guests.b]\ntoken = "{GUEST}"\nservices = ["x"]\n')
+        config = self.load(head + f'[hub.guests.lab]\ntoken = "{GUEST}"\nservices = ["x", "x"]\n')
+        self.assertEqual(config.guests, (hub.Guest("lab", GUEST, ("x",)),))
+        self.assertEqual(config.identify(GUEST), ("guest", config.guests[0]))
+        self.assertEqual(config.identify(owner), ("owner", None))
+        self.assertIsNone(config.identify("x" * 40))
+
     def test_empty_health_disables_the_probe(self) -> None:
         config = self.load('[hub]\n[hub.services.x]\nurl = "http://127.0.0.1:1"\nhealth = ""\n')
         self.assertIsNone(config.services[0].health)
@@ -186,6 +209,7 @@ class LiveHubTests(unittest.TestCase):
                 hub.Service("raw", "Raw", "", "", f"http://127.0.0.1:{cls.backend.server_address[1]}", None, None, nav=False),
                 hub.Service("ide", "IDE", "", "", None, "http://127.0.0.1:9", None),
             ),
+            guests=(hub.Guest("lab", GUEST, ("raw",)),),
         )
         cls.server = start(ThreadingHTTPServer(("127.0.0.1", 0), hub.make_handler(cls.config, hub.Health(cls.config))))
         cls.base = f"http://127.0.0.1:{cls.server.server_address[1]}"
@@ -319,6 +343,51 @@ class LiveHubTests(unittest.TestCase):
         self.assertEqual(Backend.seen[-1]["path"], "/ws")
 
 
+    def guest(self, path: str, **kwargs):
+        headers = {"Cookie": f"{hub.COOKIE_NAME}={GUEST}", **kwargs.pop("headers", {})}
+        return self.get(path, headers=headers, **kwargs)
+
+    def test_guest_query_token_becomes_a_cookie(self) -> None:
+        code, headers, _ = self.get(f"/raw/?token={GUEST}")
+        self.assertEqual((code, headers["Location"]), (303, "/raw/"))
+        self.assertIn(f"{hub.COOKIE_NAME}={GUEST}; Path=/; HttpOnly", headers["Set-Cookie"])
+
+    def test_guest_reaches_only_its_services_read_only(self) -> None:
+        code, _, body = self.guest("/raw/api/x?y=1")
+        self.assertEqual((code, body), (200, b"path=/api/x?y=1"))
+        seen = Backend.seen[-1]["headers"]
+        self.assertEqual(seen["X-Hub-Guest"], "lab")
+        self.assertNotIn("Cookie", seen)
+        self.assertEqual(self.guest("/raw")[1]["Location"], "/raw/")
+        self.assertEqual(self.guest("/")[1]["Location"], "/raw/")  # the landing page is never shown
+        Backend.seen.clear()
+        for path in ("/board/", "/board/api/board", "/api/services", "/hub/nav.js", "/ide", "/dead/", "/nope/"):
+            code, _, body = self.guest(path)
+            self.assertEqual((code, body), (404, b"service-hub: not found\n"), path)
+        self.assertEqual(self.guest("/raw/x", method="POST", data=b"a")[0], 405)
+        self.assertEqual(self.get("/raw/x", headers={"Authorization": f"Bearer {GUEST}"})[0], 200)
+        self.assertNotIn("Authorization", Backend.seen[-1]["headers"])
+        self.assertEqual(len(Backend.seen), 1)
+
+    def test_guest_pages_get_no_switcher_and_clients_cannot_forge_the_guest_header(self) -> None:
+        self.guest("/raw/page", headers={"Sec-Fetch-Dest": "document"})
+        code, _, body = self.authed("/board/page", headers={"X-Hub-Guest": "lab"})
+        self.assertNotIn("X-Hub-Guest", Backend.seen[-1]["headers"])
+        nav_config = hub.HubConfig(0, "127.0.0.1", TOKEN, "t", None, (self.config.services[0],),
+                                   guests=(hub.Guest("lab", GUEST, ("board",)),))
+        server = start(ThreadingHTTPServer(("127.0.0.1", 0), hub.make_handler(nav_config, hub.Health(nav_config))))
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        request = urllib.request.Request(f"http://127.0.0.1:{server.server_address[1]}/board/page",
+                                         headers={"Cookie": f"{hub.COOKIE_NAME}={GUEST}", "Sec-Fetch-Dest": "document"})
+        with OPENER.open(request, timeout=5) as response:
+            self.assertNotIn(b"nav.js", response.read())
+
+    def test_guest_cannot_upgrade(self) -> None:
+        code, _, _ = self.guest("/raw/ws", headers={"Upgrade": "websocket", "Connection": "Upgrade"})
+        self.assertEqual(code, 405)
+
+
 class LoopbackTests(unittest.TestCase):
     def test_loopback_detection(self) -> None:
         self.assertTrue(hub.is_loopback("127.0.0.1"))
@@ -335,6 +404,20 @@ class LoopbackTests(unittest.TestCase):
         with redirect_stdout(out):
             hub.cmd_url(config, hub.argparse.Namespace(service="plots", path="/mnt/p/plots/a.html"))
         self.assertIn("public: http://pub.test:40970/plots/mnt/p/plots/a.html", out.getvalue())
+
+    def test_share_command(self) -> None:
+        import io
+        from contextlib import redirect_stdout
+
+        config = hub.HubConfig(40970, "0.0.0.0", TOKEN, "r", "http://pub.test:40970",
+                               (hub.Service("nice", "Nice", "", "", "http://127.0.0.1:1", None, "/healthz"),),
+                               guests=(hub.Guest("lab", GUEST, ("nice",)),))
+        out = io.StringIO()
+        with redirect_stdout(out):
+            hub.cmd_share(config, hub.argparse.Namespace(guest="lab"))
+        self.assertEqual(out.getvalue(), f"http://pub.test:40970/nice/?token={GUEST}\n")
+        with self.assertRaises(hub.HubError):
+            hub.cmd_share(config, hub.argparse.Namespace(guest="other"))
 
 
 if __name__ == "__main__":
