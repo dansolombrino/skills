@@ -1,0 +1,4 @@
+interface:
+  display_name: "CINECA Login"
+  short_description: "Automate Leonardo SSH certificate renewal"
+  default_prompt: "Use $cineca-login to renew the CINECA Leonardo SSH certificate, check its status, set up automatic renewal with a systemd timer, or integrate certificate renewal into $sweep-supervisor."

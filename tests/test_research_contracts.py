@@ -71,7 +71,7 @@ class ResearchContractTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "16.0.0")
+        self.assertEqual(manifest["version"], "16.1.0")
         claude_manifest = json.loads(
             (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
         )
@@ -93,10 +93,11 @@ class ResearchContractTests(unittest.TestCase):
             path.parent.name
             for path in (ROOT / "plugins/research/skills").glob("*/SKILL.md")
         }
-        self.assertEqual(len(skill_names), 11)
+        self.assertEqual(len(skill_names), 12)
         self.assertEqual(
             skill_names,
             {
+                "cineca-login",
                 "environment-sync",
                 "experiment-design",
                 "experiments-tracking",
@@ -1277,6 +1278,7 @@ FENCE = re.compile(r"^```.*?^```", re.MULTILINE | re.DOTALL)
 
 # Byte budgets: slightly above the slimmed sizes, so a file cannot silently regrow.
 SIZE_BUDGETS = {
+    "cineca-login/SKILL.md": 4_500,
     "environment-sync/SKILL.md": 8_500,
     "experiment-design/SKILL.md": 6_500,
     "experiments-tracking/SKILL.md": 7_500,

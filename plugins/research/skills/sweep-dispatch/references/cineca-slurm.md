@@ -27,8 +27,10 @@ Dispatch to Leonardo happens **from rig-4090**, like every other target. The hub
 login node with the ssh alias `leonardo` and the data movers with `leonardo-dm`; both use the
 key `~/.ssh/id_leonardo` plus a certificate `~/.ssh/id_leonardo-cert.pub` issued by CINECA's
 smallstep CA (`https://sshproxy.hpc.cineca.it`) through the `cineca-hpc` OIDC provisioner. The
-certificate is valid for 12 hours and is obtained interactively in a browser, so **the agent can
-never issue it**. It is issued on the user's laptop and copied to the hub.
+certificate is valid for 12 hours. When `cineca-login` is set up (credentials file and
+`oathtool` installed — see that skill's `references/setup.md`), **the agent can renew it
+non-interactively**. When it is not set up, the certificate requires a browser and the agent
+cannot issue it.
 (access: https://docs.hpc.cineca.it/general/access.html)
 
 **Precondition, before any Leonardo command in a session** — check the certificate on the hub:
@@ -39,8 +41,15 @@ ssh -o BatchMode=yes -o ConnectTimeout=20 leonardo true
 ```
 
 If the file is missing, the `Valid:` window does not contain the current time, or the probe fails,
-stop and print exactly this block for the user to paste on the laptop, then wait. Nothing else
-in the wave may proceed until the probe succeeds:
+**first try automatic renewal** via `cineca-login`:
+
+```bash
+bash /path/to/cineca-login/scripts/cineca_renew.sh
+```
+
+If `cineca-login` is not set up or the script fails, fall back to the manual flow — stop and
+print exactly this block for the user to paste on the laptop, then wait. Nothing else in the
+wave may proceed until the probe succeeds:
 
 ```bash
 cineca-login   # = step ssh certificate <user> ~/.ssh/id_leonardo --provisioner cineca-hpc --no-password --insecure -f
