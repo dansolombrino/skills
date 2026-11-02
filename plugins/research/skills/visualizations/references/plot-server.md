@@ -31,7 +31,10 @@ a systemd user service, on the machine where plots are rendered (`rig-4090`).
   newest-first list, a filter box, and the selected plot beside it with its breadcrumb, render time,
   size, reload, copy-link, download and open-alone buttons. Download (or `d`) saves the plot file
   exactly as rendered, under its leaf name, ready to send to someone. The list hides and shows
-  from the header button or `b`. Opening a plot shows a progress panel: the download (MB of the uncompressed size,
+  from the header button or `b`. While the projects or a project's plot list load (first open,
+  switching project, rescan) a bar sweeps under the header, the rescan icon spins, and the list and
+  main pane show placeholders, the first scan with its elapsed seconds; the silent 30 s refresh shows
+  none of this. Opening a plot shows a progress panel: the download (MB of the uncompressed size,
   percent, speed, time left), then the browser drawing it (elapsed time). The page downloads the
   file once and hands those bytes to the plot frame, with a `<base>` so the plot's relative links
   still resolve on the server; the base is marked so the plot's own download buttons leave it

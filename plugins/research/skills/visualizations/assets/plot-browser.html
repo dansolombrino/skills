@@ -42,6 +42,24 @@
   .picker select { width: 100%; appearance: none; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 34px 7px 10px; cursor: pointer; text-overflow: ellipsis; }
   .picker::after { content: ""; position: absolute; right: 13px; top: 50%; width: 7px; height: 7px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: translateY(-70%) rotate(45deg); pointer-events: none; }
   header .spacer { flex: 1; }
+  /* Busy: while projects or a project's plots load, a bar sweeps under the header and the rescan
+     icon spins. It fades in after 150 ms, so fast loads do not flash. */
+  header { position: relative; }
+  .busybar { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; overflow: hidden; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .busybar::before { content: ""; position: absolute; top: 0; bottom: 0; width: 30%; background: var(--accent); animation: sweep 1.1s ease-in-out infinite; }
+  body.busy .busybar { opacity: 1; transition-delay: .15s; }
+  body.busy #refresh .icon { animation: spin .9s linear infinite; }
+  body.busy { cursor: progress; }
+  #refresh:disabled { cursor: progress; opacity: .7; }
+  .picker select:disabled { cursor: progress; color: var(--muted); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .boot { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; color: var(--muted); }
+  .boot .b-title { color: var(--text); font-weight: 600; font-size: 15px; }
+  .boot .b-sub { font-size: 12px; font-variant-numeric: tabular-nums; }
+  .spinner { width: 28px; height: 28px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+  .skel { height: 12px; margin: 10px 12px; border-radius: 6px; background: linear-gradient(90deg, var(--hover) 25%, var(--line) 50%, var(--hover) 75%); background-size: 200% 100%; animation: shimmer 1.3s linear infinite; }
+  @keyframes shimmer { from { background-position: 200% 0; } to { background-position: 0 0; } }
+  @media (prefers-reduced-motion: reduce) { .skel, .busybar::before { animation: none; } .busybar::before { width: 100%; opacity: .5; } }
 
   .layout { flex: 1; display: flex; min-height: 0; }
   aside { width: var(--sidebar); min-width: 220px; max-width: 70vw; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: var(--panel); }
@@ -208,7 +226,7 @@
 <header>
   <button id="menu" aria-label="Show or hide the plot list" title="Show or hide the plot list  (b)"><svg class="icon"><use href="#i-menu"/></svg></button>
   <span class="brand">Projects</span>
-  <div class="picker"><select id="project" aria-label="Project"></select></div>
+  <div class="picker"><select id="project" aria-label="Project" disabled><option>Loading projects…</option></select></div>
   <div class="seg" id="views" role="group" aria-label="Plots or runs">
     <button id="view-plots" aria-pressed="true" title="Plots of this project">Plots</button>
     <button id="view-runs" aria-pressed="false" title="Runs: hash ↔ params of each experiment">Runs</button>
@@ -216,6 +234,7 @@
   <span class="spacer"></span>
   <button id="refresh" title="Rescan projects and plots"><svg class="icon"><use href="#i-reload"/></svg></button>
   <span class="host" id="host"></span>
+  <div class="busybar" aria-hidden="true"></div>
 </header>
 
 <div class="layout" id="plots-view">
@@ -238,7 +257,7 @@
         <button id="collapse">Collapse all</button>
       </div>
     </div>
-    <div id="list" role="tree" tabindex="-1"></div>
+    <div id="list" role="tree" tabindex="-1" aria-busy="true"><div class="skel" style="width:62%"></div><div class="skel" style="width:78%"></div><div class="skel" style="width:54%"></div><div class="skel" style="width:70%"></div><div class="skel" style="width:46%"></div></div>
   </aside>
   <div class="divider" id="divider" aria-hidden="true"></div>
   <main>
@@ -269,7 +288,7 @@
           </ol>
         </div>
       </div>
-      <div class="welcome" id="welcome"></div>
+      <div class="welcome" id="welcome"><div class="boot" role="status" aria-live="polite"><div class="spinner"></div><div class="b-title">Loading projects…</div><div class="b-sub">Scanning the project folders for plots</div></div></div>
     </div>
   </main>
 </div>
@@ -352,6 +371,44 @@
     return r.json();
   }
 
+  // Busy feedback for loads the user started (first load, project switch, rescan); the silent
+  // 30 s background refresh does not use it. While busy the header bar sweeps, the rescan button
+  // spins and is disabled, and after 150 ms the list and welcome pane show placeholders.
+  let busyCount = 0;
+  async function busy(fn, placeholder) {
+    if (!busyCount++) { document.body.classList.add("busy"); document.body.setAttribute("aria-busy", "true"); $("refresh").disabled = true; }
+    const timer = placeholder ? setTimeout(placeholder, 150) : null;
+    try { return await fn(); }
+    finally {
+      clearTimeout(timer);
+      $("list").removeAttribute("aria-busy");
+      if (!--busyCount) { document.body.classList.remove("busy"); document.body.removeAttribute("aria-busy"); $("refresh").disabled = false; }
+    }
+  }
+  const skeleton = () => [62, 78, 54, 70, 46].map((w) => '<div class="skel" style="width:' + w + '%"></div>').join("");
+  function bootHtml(title, sub) {
+    return '<div class="boot" role="status" aria-live="polite"><div class="spinner"></div><div class="b-title">' + esc(title) +
+      '</div><div class="b-sub">' + esc(sub) + "</div></div>";
+  }
+  // Placeholder while a project's plot list loads; the welcome pane only when no plot is open.
+  function showProjectLoading(id) {
+    const p = state.projects.find((x) => x.id === id);
+    $("list").innerHTML = skeleton();
+    $("list").setAttribute("aria-busy", "true");
+    $("count").textContent = "loading…";
+    if ($("frame").hidden) { $("welcome").hidden = false; $("welcome").innerHTML = bootHtml("Loading " + (p ? p.name : "project") + "…", p ? p.count + (p.count === 1 ? " plot" : " plots") : ""); }
+  }
+  // The first scan of the project folders can take a few seconds: count them on the boot card.
+  function bootTicker() {
+    const t0 = Date.now();
+    const id = setInterval(() => {
+      const sub = document.querySelector("#welcome .boot .b-sub");
+      const s = Math.round((Date.now() - t0) / 1000);
+      if (sub && s >= 2) sub.textContent = "Scanning the project folders for plots · " + s + " s";
+    }, 1000);
+    return () => clearInterval(id);
+  }
+
   function errorHtml(err) {
     const msg = err.message === "auth"
       ? "This server needs its access token. Open this page once as <code>?token=&lt;token&gt;</code>; a cookie remembers it afterwards."
@@ -376,6 +433,7 @@
       byRoot.get(p.root).push(p);
     }
     sel.innerHTML = "";
+    sel.disabled = false;
     for (const [root, list] of byRoot) {
       const group = document.createElement("optgroup");
       group.label = root;
@@ -429,6 +487,7 @@
   const matches = (f, q) => !q || f.path.toLowerCase().includes(q);
 
   function render(reveal = false) {
+    if ($("list").hasAttribute("aria-busy")) { $("count").textContent = "loading…"; return; }  // placeholder stays until the list arrives
     const q = state.filter.trim().toLowerCase();
     const shown = state.files.filter((f) => matches(f, q));
     $("count").textContent = q ? shown.length + " of " + state.files.length : state.files.length + (state.files.length === 1 ? " plot" : " plots");
@@ -1110,7 +1169,7 @@
     store.set("project", id);
     state.open = new Set(store.get("open:" + id, []));
     state.file = null;
-    await loadFiles(false);
+    await busy(() => loadFiles(false), () => showProjectLoading(id));
     if (file && state.files.some((f) => f.path === file)) showFile(file, { push });
     else { if (push) writeHash(); showFile(null, { push: false }); }
   }
@@ -1145,7 +1204,7 @@
 
   // ── events ──────────────────────────────────────────────────────────────
   $("project").addEventListener("change", async (e) => {
-    if (state.view !== "runs") { selectProject(e.target.value, null); return; }
+    if (state.view !== "runs") { selectProject(e.target.value, null).catch((err) => { $("list").innerHTML = ""; showError(err); }); return; }
     await selectProject(e.target.value, null, { push: false });
     await openRuns(null, undefined, { push: true });
   });
@@ -1220,7 +1279,7 @@
     try { await navigator.clipboard.writeText(location.href); toast("Link copied"); }
     catch { prompt("Copy this link:", location.href); }
   });
-  $("refresh").addEventListener("click", async () => { await refresh({ projects: true }); toast("Rescanned"); });
+  $("refresh").addEventListener("click", async () => { await busy(() => refresh({ projects: true })); toast("Rescanned"); });
   const narrow = () => window.matchMedia("(max-width: 760px)").matches;
   function setSidebar(show) {
     if (narrow()) document.body.classList.toggle("nav-open", show);
@@ -1308,10 +1367,16 @@
   (async () => {
     try {
       if (new URLSearchParams(location.search).has("token")) history.replaceState(null, "", location.pathname + location.hash);
-      await loadProjects();
+      const stopTicker = bootTicker();
+      try { await busy(loadProjects); } finally { stopTicker(); }
       await route({ push: false });
       if (!location.hash && state.project) history.replaceState(null, "", "#" + new URLSearchParams({ p: state.project }).toString());
-    } catch (err) { showError(err); }
+    } catch (err) {
+      $("project").innerHTML = "<option>Could not load projects</option>";
+      $("list").innerHTML = "";
+      $("list").removeAttribute("aria-busy");
+      showError(err);
+    }
   })();
 })();
 </script>
