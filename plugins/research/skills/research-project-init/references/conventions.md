@@ -144,7 +144,7 @@ The canonical name is the ssh alias.
   verbatim). They are other people's machines, reached over a tailnet (`network = "tailscale"`).
 - **leonardo** is a batch cluster: one run per job, one GPU, 8 cores, 128 GB unless the user says
   a run needs more; it is outside lane balancing. Access is a short-lived SSH certificate only the
-  user can renew (`phone-bridge`). The project
+  user can renew. The project
   account is the one in its declared `repo_path`; there is no core-hour cap unless the user sets
   one.
 - **Machine registry.** Each rig's ssh alias, hostname, storage roots, quota filesystem, and shared

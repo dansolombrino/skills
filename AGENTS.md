@@ -54,8 +54,8 @@ is the network layer under this repo's multi-machine skills. It holds how each r
 `behemoth` through the Sapienza VPN, the reverse SSH tunnels `behemoth` uses to call back into
 the rigs, the ssh multiplexing every rig needs, and each rig's systemd units.
 
-Its role here: `rig-sync`, `sweep-dispatch`, `sweep-supervisor`, `rig-board`, `environment-sync`
-and `phone-bridge` assume plain `ssh <machine>` and `rsync` work in both directions between the
+Its role here: `rig-sync`, `sweep-dispatch`, `sweep-supervisor`, `rig-board` and
+`environment-sync` assume plain `ssh <machine>` and `rsync` work in both directions between the
 machines in `~/.config/rigsync/machines.toml`; that repo is what makes them work. When those skills
 fail with ssh timeouts or refused connections, look there first (its README covers known
 failure modes, including the VPN gateway blocking new connections for about an hour), not in

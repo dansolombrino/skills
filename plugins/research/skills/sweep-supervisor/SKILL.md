@@ -104,7 +104,7 @@ work requests that same profile.
   `say`, and every follow-up report — identical notices at most once an hour, across waves. Its
   `{context}` names the wave and the agent session that wrote, and marks failed runs and a rig down
   silent (the supervisor is on them).
-- **Conversations.** A phone message (`tell`, from `phone-bridge`) goes before any tick of its
+- **Conversations.** A phone message (`tell`) goes before any tick of its
   wave to the session that wrote the message it replies to, else the one that last spoke to the
   user, resumed through `resume_command` (else a fresh agent). The turn also handles new events; a
   finished wave can still be talked to. The agent answers with `say`, the only way its words reach

@@ -42,7 +42,7 @@ phone resumes a session (Conversations).
 
 ### Conversations
 
-The user talks to the agents from the phone (`phone-bridge`): a message goes to the session that
+The user talks to the agents from the phone (a relay that runs `tell` with their reply): a message goes to the session that
 wrote the message it replies to, else the one that last spoke to the user. For that, every run's
 session is recorded, and `resume_command` continues one with the user's words as `{prompt}`:
 
@@ -98,11 +98,7 @@ messages whose status line it updates), for every `ask` and `say`,
 every follow-up report, a finished wave, failed runs, a rig down, a lane that cannot start, a cluster submission
 failure, and a certificate about to expire or expired. It is what lets the user stay away from
 chats: point it at a phone. `ntfy` needs only the app and an unguessable topic name (anyone who
-knows the topic reads it, so keep it private); the `phone-bridge` skill's Telegram bot
-(`["python3", "<phone-bridge>/scripts/bridge.py", "send", "{text}", "--context", "{context}"]`)
-gives every wave its own thread (in its project's own group, if it has one) where the user talks
-to its agent, and renews a cluster's SSH
-certificate from the phone; any command that takes the text as an argument
+knows the topic reads it, so keep it private); any command that takes the text as an argument
 works (`notify-send` for a desktop, a mail or chat CLI). Without it, notices exist only in the
 printout and `followups`.
 
