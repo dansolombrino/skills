@@ -1,4 +1,4 @@
 interface:
   display_name: "Research Visualizations"
   short_description: "Interactive HTML plots from evaluations"
-  default_prompt: "Use $visualizations to plot evaluation results as self-contained interactive HTML under the producer's full numbered hierarchy, with titles that state the selected params by full name, meaningful axis and metric text, an (i) hover explanation for every selectable param from PARAM_GLOSSARY.json, the download buttons and reader toolbar, and a plot-server URL for each rendered plot."
+  default_prompt: "Use $visualizations to plot evaluation results as self-contained interactive HTML under the producer's full numbered hierarchy, with titles that state the selected params by full name, meaningful axis and metric text, an (i) hover explanation for every selectable param from PARAM_GLOSSARY.json, the download buttons and reader toolbar, a headless-browser layout check (plot_check.py plus reading its screenshots) with every overlap or clipping fixed, and a plot-server URL for each rendered plot."

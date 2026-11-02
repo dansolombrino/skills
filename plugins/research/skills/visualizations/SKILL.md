@@ -108,9 +108,11 @@ plots, and the user may reword any of them. Commit the glossary with the plottin
 - Plotting is a direct command, not a launch: run the argparse command in the foreground on
   `rig-4090`, where evaluations converge, from its project checkout. No wave, tmux, `sweep-dispatch`,
   `rig-sync`, or EXPERIMENTS.md rows.
-- After rendering, open the file and check that the title, axis, and metric text are present and
-  legible, the (i) hovers work, the page is white, the affordances work, and both download buttons
-  produce files that reopen offline.
+- Look at every render: `uv run scripts/plot_check.py <file>...` (this skill's directory)
+  reports overlapping, clipped or on-data text, legends over data, crowded ticks and JS errors at
+  three widths, and saves screenshots. Fix every error's cause
+  ([references/layout-fixes.md](references/layout-fixes.md)) and rerun until clean; then read the
+  screenshots for what geometry misses; confirm hovers and offline downloads.
 - Give the user each rendered file as a link from `scripts/plot_server.py url <file>` (this
   skill's installed directory) run on the rendering machine: the `public:` URL first, the
   `local:` one only as a secondary line. If no `public:` line prints or the server does not serve
