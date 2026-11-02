@@ -59,9 +59,11 @@ Decide these for every plot, each time the plotting code changes:
   or no direction is better. Cover separate panels, derived metrics, and encodings separately
   unless one explanation fits all. When the producer's code and schema don't ground a metric's
   meaning, ask rather than guess.
-- **Selector.** Each selectable param shows its glossary full name only, followed by an **(i)**
-  icon whose hover shows the explanation. Under `hashed-v2` the selection is keyed by run hash and
-  shows each run's params beside it in the same full names (`Full name = value, …`).
+- **Selector.** Filters on top: one multi-select per identity param whose value differs across
+  runs (per field for a dict param; also run_id version and wave), all on, with value counts,
+  all/none, and the glossary full name plus an **(i)** hover; params equal in every run listed once
+  as fixed text. Below, the collapsible run list keyed by hash, each with `Full name = value, …`,
+  showing only matching runs. The figure and `plotSelectedRuns()` use matching ticked runs.
 - **Affordances.** A series toggle for two or more line series, a slider or stepper for an
   ordered dimension (layer, epoch, step, checkpoint); nothing the figure's shape doesn't call for.
 - **Provenance.** The selected run_ids in the figure; the producer `<experiment_path>`, project
