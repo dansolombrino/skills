@@ -18,7 +18,8 @@
     pristine = "<!DOCTYPE html>\n" + document.documentElement.outerHTML;
     addButtons();
   });
-  window.addEventListener("load", addButtons);
+  // In the page's flow, last: a bar fixed over the window would cover whatever text scrolls under it.
+  window.addEventListener("load", () => { addButtons(); document.body.appendChild(document.getElementById("plot-download")); });
 
   function freshDocument() {
     const doc = new DOMParser().parseFromString(pristine, "text/html");
@@ -61,8 +62,8 @@
     if (!document.body || document.getElementById("plot-download")) return;
     const bar = document.createElement("div");
     bar.id = "plot-download";
-    bar.setAttribute("style", "position:fixed;right:12px;bottom:12px;z-index:2147483647;display:flex;gap:6px;" +
-      "font:12px/1.2 system-ui,-apple-system,'Segoe UI',sans-serif");
+    bar.setAttribute("style", "clear:both;width:100%;box-sizing:border-box;padding:12px 0;display:flex;flex-wrap:wrap;" +
+      "justify-content:flex-end;gap:6px;font:12px/1.2 system-ui,-apple-system,'Segoe UI',sans-serif");
     const button = (label, title, onClick) => {
       const b = document.createElement("button");
       b.type = "button";

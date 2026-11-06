@@ -14,8 +14,16 @@ closing line naming `watch --all`.
 
 The numbers come from the supervisor's own `brief_view` of the wave's snapshot (the same data the
 printout and the rig-board viewer show); the dashboard is the rig-board viewer's Experiments tab,
-named only when the machine registry declares the viewer's port. Prints nothing for any other hook
-event or when no wave is live, and never fails: a hook error must not get in the way of a session.
+named only when the machine registry declares the viewer's port.
+
+In a main checkout holding an EXPERIMENTS.md it also states what has drifted, from local files plus
+two local git reads, never ssh: `inpr` rows in closed waves, worktrees of finished waves left behind,
+a journal guard not installed (`core.hooksPath` not `.githooks`, or `.githooks/pre-commit` untracked),
+and a branch other than the one sync.toml names. A linked worktree is on its own branch by design and holds a copy of the file, so it
+gets none of these.
+
+Prints nothing for any other hook event, for a supervisor agent, or when there is nothing to state,
+and never fails: a hook error must not get in the way of a session.
 
 The wave layout constants are copied from supervisor.py and rigsync.py rather than imported, so a
 project without live waves costs no import at all; tests/test_hooks.py keeps the copies in step.
@@ -28,6 +36,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 import time
 import tomllib
@@ -35,6 +44,9 @@ from pathlib import Path
 
 WAVE_RE = re.compile(r"\d{8}-\d{6}")  # rigsync.WAVE_RE
 WILDCARD_BINDS = {"", "0.0.0.0", "::", "[::]"}
+TERMINAL_ROWS = {"done", "failed", "superseded"}
+GIT_TIMEOUT_S = 1.5  # of the hook's 5 s
+MAX_NAMED = 5
 
 
 def project_root(cwd: str) -> Path | None:
@@ -132,19 +144,122 @@ def fact(root: Path, wave_id: str, queue: dict, sup, board_config, url: str | No
     return line + (f" Dashboard: {url}." if url else "")
 
 
-def main() -> int:
-    if os.environ.get("SWEEP_SUPERVISOR_MODEL"):  # a supervisor agent: it owns the wave, and a watch from it would take a chat's notices
-        return 0
+def experiments_root(cwd: str) -> Path | None:
+    """The main checkout holding the EXPERIMENTS.md nearest cwd; None in a linked worktree or anywhere else."""
+    for start in filter(None, (os.environ.get("CLAUDE_PROJECT_DIR"), cwd)):
+        for d in [Path(start), *Path(start).parents]:
+            if (d / "EXPERIMENTS.md").is_file():
+                return d if (d / ".git").is_dir() else None
+    return None
+
+
+def table_rows(text: str) -> list[dict[str, str]]:
+    """Every row of a table with `wave` and `status` columns; a row of the wrong shape is reconcile.py's to report."""
+    rows: list[dict[str, str]] = []
+    columns: list[str] | None = None
+    for line in text.splitlines():
+        if not line.lstrip().startswith("|"):
+            columns = None
+            continue
+        cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", line.strip().strip("|"))]
+        if columns is None:
+            columns = cells if {"wave", "status"} <= set(cells) else []
+        elif columns and len(cells) == len(columns) and not set("".join(cells)) <= set("-: "):
+            rows.append(dict(zip(columns, cells)))
+    return rows
+
+
+def queue_of(root: Path, wave_id: str) -> dict | None:
     try:
-        payload = json.loads(sys.stdin.read() or "{}")
-    except ValueError:
-        return 0
-    if not isinstance(payload, dict) or (payload.get("hook_event_name") or "SessionStart") != "SessionStart":
-        return 0
-    root = project_root(payload.get("cwd") or os.getcwd())
+        queue = json.loads((root / ".waves" / "_state" / wave_id / "queue.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return queue if isinstance(queue, dict) else None
+
+
+def named(items: list[str]) -> str:
+    more = f" and {len(items) - MAX_NAMED} more" if len(items) > MAX_NAMED else ""
+    return ", ".join(items[:MAX_NAMED]) + more
+
+
+def guard_problem(root: Path) -> str | None:
+    """Why the journal guard is not installed: the repository's own core.hooksPath must be `.githooks`
+    and `.githooks/pre-commit` tracked. A global value is not this project's guard; exit 1 means unset
+    or untracked, and any other failure (no repository, a timeout) says nothing."""
+    environment = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")}
+
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=GIT_TIMEOUT_S, env=environment, check=False)
+
+    try:
+        config = git("config", "--local", "--get", "core.hooksPath")
+        if config.returncode == 1:
+            return "core.hooksPath is unset"
+        if config.returncode:
+            return None
+        value = config.stdout.strip()
+        if value.rstrip("/") != ".githooks":
+            return f"core.hooksPath is {value}, not .githooks"
+        if git("ls-files", "--error-unmatch", ".githooks/pre-commit").returncode == 1:
+            return ".githooks/pre-commit is not tracked"
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return None
+
+
+def branch_drift(root: Path) -> str | None:
+    """The checkout's branch against sync.toml's `git.branch`, from the files alone."""
+    try:
+        wanted = tomllib.loads((root / "sync.toml").read_text()).get("git", {}).get("branch")
+        head = (root / ".git" / "HEAD").read_text().strip()
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(wanted, str) or not wanted or head == f"ref: refs/heads/{wanted}":
+        return None
+    current = f"on branch {head.removeprefix('ref: refs/heads/')}" if head.startswith("ref: refs/heads/") else "on a detached HEAD"
+    return f"This checkout is {current}; sync.toml names {wanted} as the project's branch."
+
+
+def drift_facts(cwd: str) -> list[str]:
+    root = experiments_root(cwd)
+    if root is None:
+        return []
+    rows = table_rows((root / "EXPERIMENTS.md").read_text(errors="replace"))
+    by_wave: dict[str, list[str]] = {}
+    for row in rows:
+        by_wave.setdefault(row["wave"], []).append(row["status"])
+    facts = []
+    closed = [
+        f"{wave} ({statuses.count('inpr')})" for wave, statuses in sorted(by_wave.items())
+        if "inpr" in statuses and WAVE_RE.fullmatch(wave) and (queue_of(root, wave) or {}).get("finished_at")
+    ]
+    if closed:
+        facts.append(f"EXPERIMENTS.md has inpr rows in closed waves: {named(closed)}.")
+    left = []
+    waves_dir = root / ".waves"
+    for wave in sorted(p.name for p in waves_dir.iterdir()) if waves_dir.is_dir() else []:
+        if not WAVE_RE.fullmatch(wave) or not (waves_dir / wave).is_dir():
+            continue
+        queue = queue_of(root, wave)
+        statuses = by_wave.get(wave, [])
+        if (queue.get("finished_at") if queue is not None else statuses and TERMINAL_ROWS.issuperset(statuses)):
+            left.append(f".waves/{wave}")
+    if left:
+        facts.append(f"Worktrees of finished waves remain: {named(left)}.")
+    guard = guard_problem(root)
+    if guard:
+        facts.append(f"The journal guard is not installed in this checkout: {guard}.")
+    branch = branch_drift(root)
+    if branch:
+        facts.append(branch)
+    return facts
+
+
+def live_wave_lines(cwd: str) -> list[str]:
+    root = project_root(cwd)
     waves = live_waves(root) if root else []
     if not waves:
-        return 0
+        return []
     try:
         sup = load_supervisor()
     except Exception:  # the facts degrade to the queue's own counts
@@ -169,6 +284,26 @@ def main() -> int:
         lines.append(line)
     if together:
         lines.append(f"No chat is following these waves; {watch_command(root, '--all')} follows them all.")
+    return lines
+
+
+def main() -> int:
+    if os.environ.get("SWEEP_SUPERVISOR_MODEL"):  # a supervisor agent: it owns the wave, and a watch from it would take a chat's notices
+        return 0
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+    except ValueError:
+        return 0
+    if not isinstance(payload, dict) or (payload.get("hook_event_name") or "SessionStart") != "SessionStart":
+        return 0
+    cwd = payload.get("cwd") or os.getcwd()
+    lines = live_wave_lines(cwd)
+    try:
+        lines += drift_facts(cwd)
+    except Exception:  # a torn file costs its facts, not the live-wave lines
+        pass
+    if not lines:
+        return 0
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "\n".join(lines)}}))
     return 0
 

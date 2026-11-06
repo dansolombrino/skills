@@ -1,9 +1,10 @@
 # plot-server as a sandboxed system service. Installed by scripts/install_sandboxed.sh; see
 # references/plot-server.md. The server runs as the dedicated plotserver account and sees a
 # read-only filesystem in which /home and /mnt are empty; the sync job bind-mounts each project's
-# plots/ and each experiment's evaluations/<experiment>/RUN_ID_{MAP,VERSIONS,HISTORY}.json back in,
-# read-only (plot-server.service.d/plots.conf). Nothing else of your data exists from inside,
-# whatever the server's own code does.
+# plots/, each experiment's evaluations/<experiment>/RUN_ID_MAP.json and its
+# config/<experiment>/RUN_ID_{VERSIONS,HISTORY}.json back in, read-only
+# (plot-server.service.d/plots.conf). Nothing else of your data exists from inside, whatever the
+# server's own code does.
 [Unit]
 Description=plot-server: read-only HTTP view of every project's plots/ (sandboxed)
 After=network-online.target
