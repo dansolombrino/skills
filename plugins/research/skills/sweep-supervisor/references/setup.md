@@ -15,8 +15,10 @@ slurm = ["leonardo"]
 
 [supervisor]
 cycle_every = 60             # seconds between service passes (probe, feed, recover, offload, table); >= 10
-tick_every = 1800            # safety-net seconds between agent ticks when nothing happens; events wake it at once
+tick_every = 1800            # seconds between scheduled agent ticks; events wake it at once
+idle_tick_every = 21600      # with nothing new since the last good tick, a real tick only this often
 agent_timeout = 900          # a tick that runs longer is stopped; the next one starts fresh
+closing_timeout = 2700       # the same for a terminal wave's closing tick, which does the most work
 followup_timeout = 10800     # a follow-up (post-wave plots, fix-and-redispatch) that runs longer is stopped
 notify_command = ["curl", "-s", "-d", "{text}", "https://ntfy.sh/<private topic>"]   # optional; see Notices
 
@@ -24,6 +26,7 @@ notify_command = ["curl", "-s", "-d", "{text}", "https://ntfy.sh/<private topic>
 model = "<model alias or id>"
 effort = "<low|medium|high|xhigh|max>"
 command = ["<headless agent executable>", "...", "{prompt}"]
+health_command = ["<a command whose exit code says the agent can run>"]   # optional, no default; see Agent health
 ```
 
 The agent is woken at once by every event that needs judgment — a failed run or job, a lane
@@ -32,10 +35,18 @@ stopped, blocked or relaunched, a rig down or back, a run whose heartbeat went s
 runs (`lane-idle-tail`, once per episode), a collect, offload or submission failure, an answer, the
 wave turning terminal — so `tick_every` is only a safety net. An explicit value is respected.
 
+A scheduled tick is skipped while nothing changed: no ledger record since the last tick that exited
+cleanly began, and no edit of `EXPERIMENTS.md` since a tick last ended. A real tick (`idle tick`) still
+runs every `idle_tick_every`. A failed tick is never idle: the next one runs at `tick_every`, and a
+terminal wave no tick has finished keeps that period too. What a script cannot see waits for the next
+real tick, so on a quiet wave it can take up to `idle_tick_every`: one of our cards free and not yet a
+lane, a run stalled under a live heartbeat, and the `eta` column of `EXPERIMENTS.md`.
+
 `command` is an argv list, never a shell string. `{prompt}`, `{model}`, and `{effort}` are
 substituted per tick; `{prompt}` is required. The tick runs with the project root as its working
 directory and `SWEEP_SUPERVISOR_MODEL`/`SWEEP_SUPERVISOR_EFFORT` in its environment, so every
-`decide` line and the table header name the profile that produced them. Every tick is a **fresh**
+`decide` line and the table header name the profile that produced them; `SWEEP_SUPERVISOR_SCRIPT`,
+also in the prompt, is the absolute path of the running script. Every tick is a **fresh**
 process, so nothing can expire, compact away, or block on a prompt. When `command` takes
 `{session}` (an executable that accepts a preset session id), the supervisor passes a fresh UUID
 per run and exports it as `SWEEP_SUPERVISOR_SESSION`, so `ask`, `say` and the ledger name the
@@ -51,11 +62,32 @@ every agent):
 model = "opus"
 effort = "high"
 command = ["claude", "-p", "{prompt}", "--session-id", "{session}", "--model", "{model}", "--effort", "{effort}", "--allowedTools", "Read,Edit,Write,Glob,Grep,Skill,Bash"]
+health_command = ["claude", "auth", "status"]
 ```
 
 `{prompt}` goes right after `-p`: `--allowedTools` is variadic and would consume a prompt placed
 after its value, leaving the tick with no prompt. The supervisor refuses that ordering whenever it
 loads the registry, so `check` fails on it.
+
+`claude auth status` exits 0 when logged in and 1 when not, so it fails once a login has ended, not
+while one is about to.
+
+A run started with `-p` and a text prompt stops a background command after 10 minutes by default, and
+at 2 hours at most, while a follow-up may run `followup_timeout` (3 hours). Match them in the service's
+environment, in milliseconds, then restart the service:
+
+```ini
+# ~/.config/systemd/user/sweep-supervisor.service.d/bash-limits.conf
+[Service]
+# the longest a command may be given: followup_timeout, 10800 s
+Environment=BASH_MAX_TIMEOUT_MS=10800000
+# what a command gets when it asks for nothing: 30 minutes, the interactive default
+Environment=BASH_DEFAULT_TIMEOUT_MS=1800000
+```
+
+Raise `BASH_MAX_TIMEOUT_MS` with `followup_timeout`. The default also holds a foreground command that
+long before it moves to the background, so a hung command can use up a tick's `agent_timeout` or hold
+a follow-up longer; both limits still apply. Other hosts ignore these variables.
 
 Codex, headless — fill in the executable's own flags for model and reasoning effort from its
 `--help`; the supervisor only requires the three placeholders it substitutes:
@@ -72,13 +104,23 @@ tick uses: reading and editing inside the project, this plugin's scripts, `ssh` 
 rigs, `tmux`, `git`, and `date`. Prefer the narrowest allowlist the host supports over a blanket
 bypass; a denied tool call fails that step of the tick, which the tick reports with `decide`.
 
+## Agent health
+
+Two failed ticks in a row, timeouts included, raise a `⚠` line and an `agent-failing` notice, once per
+streak; the next good tick clears it. A declared `health_command` is run by `check` and hourly by the
+service. Only its exit code counts: its output is thrown away unread, since such a command reports on
+credentials. A failure is a `⚠` on every wave and a notice when it starts. Plain `check` only prints
+it, so a login cannot keep the service from starting, since it feeds and recovers lanes with no agent;
+`check --service` and `register --confirm` refuse on it.
+
 ## Notices
 
 `notify_command` is an argv list run with `{text}` substituted (and `{context}`, when present, with
 a JSON object: `kind`, `silent`, and for a wave's notice `project`, `root`, `wave`, `body` without
 the wave prefix, the writing agent's `session`, and an `ask`'s `question`), for every `ask` and `say`,
 every follow-up report, a finished wave, failed runs, a rig down, a lane that cannot start, a cluster submission
-failure, and a certificate about to expire or expired. It is optional, and reaches the user with no
+failure, failing agent ticks, a project checkout off its branch, and a certificate about to expire, expired,
+renewed, or whose renewal failed. It is optional, and reaches the user with no
 chat open. `ntfy` needs only the app and an unguessable topic name (anyone who
 knows the topic reads it, so keep it private); any command that takes the text as an argument
 works (`notify-send` for a desktop, a mail or chat CLI). Without it nothing is pushed: notices reach
@@ -94,7 +136,16 @@ supervisor warns an hour before it expires and when it does:
 ```toml
 [machines.leonardo]
 ssh_cert = "~/.ssh/id_leonardo-cert.pub"
+cert_renew_command = "systemctl --user start cineca-cert-renew.service"   # optional
 ```
+
+`cert_renew_command`, a string split like a shell line but run with no shell, or an argv list, runs
+when the certificate enters that last hour (or is found expired) while a wave uses the rig: at most
+once per certificate, across waves. It passes only by exiting 0 and leaving a later expiry; only its
+exit code is kept, so run it by hand to see why it failed. The ledger records `cert-renewed` or
+`cert-renew-failed`, and the notice says which. After a failure the `⚠` line and the expired notice go
+out as they do with no command. `cineca-login` provides one for Leonardo; a scheduled renewal keeps
+the certificate out of this window, so the command is its backstop.
 
 ## Service
 
@@ -117,6 +168,12 @@ checkout, put its `scripts/supervisor.py` in the unit instead; that unit never m
 agent or keys an interactive shell uses. `python3 supervisor.py check --service` must pass as the
 service user before the first wave; `sweep-dispatch` refuses to launch otherwise.
 
+`register --confirm` reruns what it can in seconds on the hub, and registers nothing on a failure:
+`check --service` (the service, the agent profile, `health_command`) and whether the project checkout
+is on its `sync.toml` branch. The other dispatch gates stay with `sweep-dispatch`: `collect --check`,
+`rig-sync activity` and both `doctor`s ssh to every rig, and the run_id plan is a call into the
+project's code over the planned configs.
+
 ## State
 
 | where | what |
@@ -134,6 +191,8 @@ service user before the first wave; `sweep-dispatch` refuses to launch otherwise
 | `<board root>/supervisor/finished/<project>__<wave_id>.json` | a finished wave, kept 14 days for the rig-board viewer; never supervised |
 | `<board root>/supervisor/followups/<id>.json` | one follow-up: kind, brief, state, log path, report, session |
 | `<board root>/supervisor/service/heartbeat.json` | the running service's time, pid and host, each cycle; `check --service` reads it |
+| `<board root>/supervisor/service/agent-health.json` | the last hourly `health_command` result: its time and what failed, never its output |
+| `<board root>/supervisor/service/cert-renewals.json` | per rig, the certificate expiry a renewal was last tried for, and how it went |
 
 `.waves/` is already ignored by every supported project, and `_state` can never be a wave id, so
 no project needs a change. `finish --confirm` moves the pointer to `finished/` when a wave is terminal

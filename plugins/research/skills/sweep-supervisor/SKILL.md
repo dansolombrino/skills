@@ -13,9 +13,8 @@ registry: [references/setup.md](references/setup.md). The unattended tick:
 [references/tick.md](references/tick.md).
 
 **Resolving this skill's own files.** `scripts/supervisor.py` means *this skill's installed
-directory* — the folder holding the SKILL.md you are reading — not the research project. Use that
-directory's absolute path. It loads `rig-sync`, `rig-board`, and `environment-sync` by sibling path,
-so install them from the same plugin.
+directory* — the folder holding the SKILL.md you are reading — not the research project; use its absolute path. It loads `rig-sync`, `rig-board`, and
+`environment-sync` by sibling path, so install them from the same plugin.
 
 ```bash
 # Absolute path to this skill's own scripts/supervisor.py; see "Resolving this skill's own files".
@@ -27,7 +26,7 @@ python3 "$SUPERVISOR" --root <project root> table --wave <wave_id>          # st
 python3 "$SUPERVISOR" --root <project root> table --wave <wave_id> --full   # the per-GPU table
 python3 "$SUPERVISOR" --root <project root> watch --wave <wave_id>          # returns on anything new or the wave's end
 python3 "$SUPERVISOR" --root <project root> watch --all                     # every live wave of the project
-python3 "$SUPERVISOR" --root <project root> ledger --wave <wave_id>         # what happened since the last tick
+python3 "$SUPERVISOR" --root <project root> ledger --wave <wave_id>         # since the last good tick began
 python3 "$SUPERVISOR" --root <project root> answer --wave <wave_id> --id q1 --text "<the user's answer>"
 python3 "$SUPERVISOR" --root <project root> say --wave <wave_id> --text "<the agent's words to the user>"
 python3 "$SUPERVISOR" --root <project root> lane add --wave <wave_id> --rig <rig> --gpu <ids> --reason "<why>"
@@ -38,7 +37,7 @@ python3 "$SUPERVISOR" followups                               # every follow-up,
 
 ## Who does what
 
-| | hub service (`serve`, every cycle) | unattended agent (on events; a half-hourly safety tick) | chat |
+| | hub service (`serve`, every cycle) | unattended agent (on events; a safety tick) | chat |
 |---|---|---|---|
 | lanes | start, feed, relaunch after a fault, drain | unblock, admit a new lane on one of our pool cards | — |
 | runs | assign in queue order to the lane free first; settle outcomes from the artifact | reorder, pin, exclude, requeue, steal, constrain | — |
@@ -55,15 +54,13 @@ run can still be re-routed. The hub reaches rigs; rigs never reach the hub.
 
 The agent is woken at once by every event that needs judgment: a failed run or job, a lane stopped,
 blocked or relaunched, a rig down or back, an answer, a collect/offload/submit failure, the wave
-turning terminal, `heartbeat-stale` (a run's heartbeat older than three minutes, once per episode),
-and `lane-idle-tail` (a lane with nothing it can take while another lane still holds runs, once per
-episode). The scheduled tick (`tick_every`, default 30 minutes) is only a safety net.
+turning terminal, `heartbeat-stale` (a run's heartbeat older than three minutes) and `lane-idle-tail`
+(a lane with nothing it can take while another still holds runs), each once per episode. The scheduled tick (`tick_every`, default 30 minutes) is only a safety net, skipped while
+nothing changed, with a real tick every `idle_tick_every` (6 hours); a failed tick is never idle.
 
-- **Evaluations converge on the hub.** Every cycle the supervisor runs `rigsync collect` for each
-  reachable pool rig except the hub, recording the result in `collect_last`. A failure is one
-  `collect-failed` event per new problem and never stops the cycle. When every run is terminal it
-  collects once more from every rig before marking the wave terminal; `SUP finish` collects one
-  last time before closing the wave.
+- **Evaluations converge on the hub.** Every cycle runs `rigsync collect` for each reachable pool rig
+  except the hub. A failure is one `collect-failed` event per new problem and never stops the cycle.
+  A wave turning terminal collects once more from every rig; `SUP finish` collects a last time.
 - **The fleet board decides first.** The service claims a card before it starts a lane there; a
   refused claim keeps the lane out (`waiting for board`, one `claim-refused` event) until the holder
   releases it. A lane whose card the board gives to another wave is not fed.
@@ -107,19 +104,19 @@ work requests that same profile.
 ## Without a chat
 
 - **Notices.** Only a declared `notify_command` pushes (`check` says); else they reach a chat running
-  `watch`. It gets one line for a finished wave, failed runs, a rig down, a lane that cannot start, a
+  `watch`. One line for a finished wave, failed runs, a rig down, a lane that cannot start, a
   cluster submission failure (identical ones at most hourly, across waves), every `ask`, `say` and
-  follow-up report; a failure is logged as `notify-failed`. Its `{context}` names the wave and the agent session that wrote, and marks failed runs and a rig down
-  silent (the supervisor is on them).
-- **Certificates.** A rig's `ssh_cert` (a cluster login certificate, such as Leonardo's 12-hour
-  one) is watched: a notice an hour before it expires and one when it does, and a `⚠` line. Renewal
-  is the user's 2FA, so it is never an `ask`; the service resumes the rig the cycle it answers.
-- **Releases.** Running from a versioned plugin install, the service re-executes itself onto a newer
-  installed version between cycles once that copy's `check` passes and no agent it started is running.
-- **Held GPUs.** A pool lane held by another wave waits (`waiting for board`) and starts when
-  released; it never makes the wave ETA unavailable while another lane can run.
-- **Cluster jobs.** The wave ETA also waits for the last running cluster job, from its own progress;
-  a pending job's start is the scheduler's call and is not counted.
+  follow-up report; a failure is logged as `notify-failed`. Its `{context}` names the wave and the writing session, and marks failed runs and a rig down silent.
+- **Certificates.** A rig's `ssh_cert` is watched: a notice an hour
+  before it expires and one when it does, and a `⚠` line. A declared `cert_renew_command` runs first,
+  once per certificate, its outcome in the ledger. Never an `ask`; the service resumes the rig when it answers.
+- **Trouble ahead.** Two failed ticks in a row, a failing `health_command`, or a project checkout off
+  its `sync.toml` branch (blocks relaunches and dispatch; follow-ups wait; nothing moves it: a person
+  may be working there): a `⚠` line and a notice.
+- **Releases.** Running from a versioned install, the service moves onto a newer installed version
+  between cycles once that copy's `check` passes and no agent it started runs.
+- **Held GPUs.** A lane `waiting for board` never makes the wave ETA unavailable while another can run.
+- **Cluster jobs.** The wave ETA waits for the last running cluster job, not for a pending one.
 
 ## Follow-ups
 
@@ -131,7 +128,7 @@ so they outlive the wave, and one interrupted by a service restart runs again.
 - **`analyze`** — queued by `finish` for every wave that ends with at least one `done` run
   (`--no-analysis` skips it): re-render every plotter of the experiment (or the smallest set that
   answers its question) under the `visualizations` contract, append the `research-journal` entry,
-  commit, report the plot URLs.
+  commit on the project's branch and push, report the plot URLs.
 - **`fix`** — queued by the agent for a deterministic engineering error: a traceback, a wrong
   path, a generator or wave-script bug. It fixes the code on the hub's main checkout without
   changing what the experiment measures, reruns the smoke, commits, and dispatches a wave of
@@ -168,7 +165,7 @@ enforces this and refuses otherwise; never work around a refusal with a hand-wri
 ## Stop conditions
 
 - `check --service` fails (agent profile undeclared, service not running): a wave is not
-  launched (`sweep-dispatch` gate) and an attached chat says so instead of promising status.
+  launched (`sweep-dispatch` gate; `register --confirm` reruns it) and a chat says so.
 - A wave with no `.waves/_state/<wave_id>/queue.json` (launched before this contract) may be
   reconciled by `experiments-tracking`, never supervised or recovered here.
 - Never edit `queue.json`, a lane buffer, or the board by hand; every change goes through the
