@@ -17,35 +17,23 @@ from unittest import mock
 
 ROOT = Path(__file__).parents[1]
 RIGSYNC = ROOT / "plugins/research/skills/rig-sync/scripts/rigsync.py"
-PROJECT_TEMPLATES = (
-    ROOT / "plugins/research/skills/research-project-init/references/templates.md"
-)
+PROJECT_INIT = ROOT / "plugins/research/skills/research-project-init"
+PROJECT_ASSETS = PROJECT_INIT / "assets/project"
 
 
-def template_block(heading: str) -> str:
-    """The python body templates.md publishes under one `## <heading>` section."""
-    match = re.search(
-        rf"## {re.escape(heading)}\n\n```python\n(.*?)\n```",
-        PROJECT_TEMPLATES.read_text(),
-        re.DOTALL,
-    )
-    assert match is not None, heading
-    return match.group(1)
+def project_templates_text() -> str:
+    """Everything a scaffold is rendered from: the templates page and every asset."""
+    assets = (path for path in sorted(PROJECT_ASSETS.rglob("*")) if path.is_file() and "__pycache__" not in path.parts)
+    return "\n".join([(PROJECT_INIT / "references/templates.md").read_text(), *(path.read_text() for path in assets)])
+
+
+def template_block(relative: str) -> str:
+    """The body of one scaffold file, by its path under assets/project/."""
+    return (PROJECT_ASSETS / relative).read_text()
 
 
 def run_id_template() -> str:
     return template_block("code/common/run_id.py")
-
-
-def markdown_template_block(heading: str) -> str:
-    """The Markdown body templates.md publishes under one named section."""
-    match = re.search(
-        rf"## {re.escape(heading)}\n\n```markdown\n(.*?)\n```",
-        PROJECT_TEMPLATES.read_text(),
-        re.DOTALL,
-    )
-    assert match is not None, heading
-    return match.group(1)
 
 
 def status_provenance_fields() -> frozenset[str]:
@@ -759,7 +747,7 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("_lanes/wave_<wave_id>/lane.sh", launch[0])
 
     def test_scaffold_templates_keep_tests_runnable_and_outside_the_journal_guard(self) -> None:
-        templates = PROJECT_TEMPLATES.read_text()
+        templates = project_templates_text()
         self.assertIn('dev = ["pytest>=8"]', templates)
         self.assertIn(".pytest_cache/", templates)
         # Test edits deliberately do NOT trip the journal guard.
@@ -768,9 +756,9 @@ class ResearchContractTests(unittest.TestCase):
         )
 
     def test_project_init_templates_scaffold_research_2_records(self) -> None:
-        templates = PROJECT_TEMPLATES.read_text()
-        for heading in ("README.md", "AGENTS.md", "EXPERIMENTS.md (initial)", "JOURNAL.md (initial)"):
-            markdown_template_block(heading)
+        templates = project_templates_text()
+        for name in ("README.md", "AGENTS.md.template", "CLAUDE.md.template", "EXPERIMENTS.md", "JOURNAL.md"):
+            self.assertTrue((PROJECT_ASSETS / name).is_file(), name)
         self.assertIn("## CLAUDE.md", templates)
         self.assertNotIn("## program/", templates)
         self.assertNotIn("engineering_mode", templates)
@@ -864,7 +852,7 @@ class ResearchContractTests(unittest.TestCase):
         skills = ROOT / "plugins/research/skills"
         templates = (skills / "sweep-dispatch/references/templates.md").read_text()
         slurm = (skills / "sweep-dispatch/references/cineca-slurm.md").read_text()
-        init_templates = PROJECT_TEMPLATES.read_text()
+        init_templates = project_templates_text()
         # Scripts run from the shared root and read code from the worktree.
         self.assertIn('PROJECT_ROOT="${SLURM_SUBMIT_DIR:-$PWD}"', templates)
         self.assertIn('WAVE_TREE="$PROJECT_ROOT/.waves/$WAVE_ID"', templates)
@@ -1069,12 +1057,7 @@ class ResearchContractTests(unittest.TestCase):
             self.assertIn("missing wave worktree", missing.stderr)
 
     def test_paths_template_splits_storage_and_source_roots(self) -> None:
-        templates = (
-            ROOT / "plugins/research/skills/research-project-init/references/templates.md"
-        ).read_text()
-        start = templates.index("## code/common/paths.py")
-        code = templates[templates.index("```python\n", start) + len("```python\n"):]
-        code = code[: code.index("```\n")]
+        code = template_block("code/common/paths.py")
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
             shared = base / "project"
@@ -1110,9 +1093,7 @@ class ResearchContractTests(unittest.TestCase):
         templates = (
             ROOT / "plugins/research/skills/sweep-dispatch/references/templates.md"
         ).read_text()
-        status_template = (
-            ROOT / "plugins/research/skills/research-project-init/references/templates.md"
-        ).read_text()
+        status_template = template_block("code/common/status.py")
         source_guard = templates.index('SOURCE_REVISION=$(git -C "$WAVE_TREE" rev-parse')
         python = templates.index('"$ENVIRONMENT_DIR/bin/python" "$WAVE_TREE/code/<NNN_exp>/<script>.py"')
         self.assertLess(source_guard, python)
@@ -1123,9 +1104,7 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn('"$rc" -eq 86', templates)
 
     def test_status_writer_template_is_canonical_and_machine_readable(self) -> None:
-        project_templates = (
-            ROOT / "plugins/research/skills/research-project-init/references/templates.md"
-        ).read_text()
+        project_templates = template_block("code/common/status.py")
         dispatch_templates = (
             ROOT / "plugins/research/skills/sweep-dispatch/references/templates.md"
         ).read_text()
@@ -1138,17 +1117,8 @@ class ResearchContractTests(unittest.TestCase):
         self.assertIn("threading.Thread", project_templates)
 
     def test_status_writer_template_runs_structured_progress_only(self) -> None:
-        templates = (
-            ROOT / "plugins/research/skills/research-project-init/references/templates.md"
-        ).read_text()
-        match = re.search(
-            r"## code/common/status\.py\n\n```python\n(.*?)\n```",
-            templates,
-            re.DOTALL,
-        )
-        self.assertIsNotNone(match)
         namespace: dict[str, object] = {}
-        exec(compile(match.group(1), "status.py", "exec"), namespace)
+        exec(compile(template_block("code/common/status.py"), "status.py", "exec"), namespace)
         status_writer = namespace["StatusWriter"]
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1223,7 +1193,7 @@ class ResearchContractTests(unittest.TestCase):
             self.assertEqual(read_metrics(Path(tmp) / "missing"), {})
 
     def test_new_projects_track_metrics_offline_without_wandb(self) -> None:
-        templates = PROJECT_TEMPLATES.read_text()
+        templates = project_templates_text()
         self.assertNotIn("WANDB_API_KEY", templates)
         self.assertNotIn("wandb_config", templates)
         skill = (ROOT / "plugins/research/skills/experiment-design/SKILL.md").read_text()

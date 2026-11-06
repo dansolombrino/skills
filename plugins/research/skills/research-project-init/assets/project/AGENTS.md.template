@@ -1,0 +1,19 @@
+# {{PROJECT_NAME}} — project notes
+
+<!-- Thin by design: generic research conventions come from the `research` skills, enabled by
+     the `research` tag in `.project.toml`. Only project-specific facts live here. -->
+
+## Where things are
+
+- `EXPERIMENTS.md` — run state: what exists, what ran where.
+- `JOURNAL.md` — the story: why things were done and what was learned.
+- `README.md` — structure and setup.
+- `config/NNN_*/RUN_ID_VERSIONS.json` — each experiment's run identity (`hashed-v2`);
+  `run-identity` looks up a run hash and migrates an identity.
+
+This project's own files and the `research` skills are the reference; don't copy layout or
+defaults from other projects on disk.
+
+## Project-specific quirks
+
+<!-- datasets, unusual constraints, deviations from the standard structure -->

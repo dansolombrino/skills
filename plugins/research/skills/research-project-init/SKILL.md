@@ -5,14 +5,14 @@ description: Scaffold a new or empty Research 2.0 repository - the standard expe
 
 # Research Project Init
 
-Scaffold a fresh Research 2.0 project from
-[references/conventions.md](references/conventions.md) and
+Scaffold a fresh Research 2.0 project with `scripts/scaffold.py` (this skill's installed directory),
+per [references/conventions.md](references/conventions.md) and
 [references/templates.md](references/templates.md); this project's templates are the reference,
 not other projects on disk.
 
 ## Admission
 
-Never ask what this skill resolves (defaults, rigs, re-init, GitHub repo): act, then report
+Never ask what this skill resolves (defaults, rigs, re-init, GitHub repo, tagging): act, then report
 it. Stop only for a missing registry entry, a failed `gh auth status`, or existing content.
 
 1. The path is new, an empty directory, or an empty Git repository; one whose commits hold no
@@ -20,19 +20,20 @@ it. Stop only for a missing registry entry, a failed `gh auth status`, or existi
    project, research content, or commits with files is unsupported. The project tag written by
    `project-init` does not count as content: `.project.toml`, `.claude/settings.json`, and
    `.codex/config.toml` are allowed when they hold only what `project-init` writes; leave them
-   untouched and include them in the first commit. Require `.project.toml` to list `research`; otherwise hand off to
-   `project-init` to tag the project first.
+   untouched. Require `.project.toml` to list `research`; otherwise hand off to `project-init`
+   to tag it, in this run (step 1 below).
 2. Defaults, each overridden by anything the user states: project name = directory name; branch
    `main`; Python = the newest stable patch `uv python list` offers for the newest minor torch
-   supports; uv = the installed `uv --version`; hub development environment `.venv`; torch as the
-   only dependency; evaluations and plots not committed. There is no project description.
+   supports; uv = the installed `uv --version`; hub development environment `.venv`; the template's
+   standard dependencies; evaluations and plots not committed. There is no project description.
 3. Rigs: the ones the user names, else every `board.rigs` machine in the user registry, never
    asked; `leonardo` only when named. A rig's `repo_path` mirrors the hub's under its storage
-   root, like the user's other projects. Each needs a complete entry in
-   `~/.config/rigsync/machines.toml` (`rig-sync` → `references/configuration.md`): `ssh`,
-   `hostname`, storage roots (`storage_roots` or `storage_root`), `quota_fs`/`min_free_gb` on a
+   root. Each needs a complete entry in `~/.config/rigsync/machines.toml` (`rig-sync` →
+   `references/configuration.md`): `ssh`, `hostname`, storage roots, `quota_fs`/`min_free_gb` on a
    quota'd rig, and `[machines.<rig>.caches]` where the rig owns shared caches. A missing entry
    or field is a once-per-machine setup step to do with the user, never something to infer.
+   So is a project path under none of the hub's declared roots: stop before writing anything and
+   report the two fixes, a path under a declared root or the volume added to the registry.
 
 ## GitHub repository
 
@@ -48,36 +49,31 @@ Use the remote the user names; otherwise:
    public repository, never create one in an org the user did not name, and never change an
    existing repository's visibility.
 
-## Scaffold
+## Order
 
-1. Create `checkpoints/`, `code/`, `config/`, `evaluations/`, `logs/`, `plots/`, `scripts/`,
-   `tests/`, `visualizations/`, `shitpads/`, and `references/`, with a `.gitkeep` in every
-   directory that would otherwise be empty.
-2. From the templates: `README.md`, `AGENTS.md`, `CLAUDE.md`, `JOURNAL.md`, `EXPERIMENTS.md`,
-   `.env.example`, `.env`, `.gitignore`, `.vscode/settings.json`, `sync.toml`, `pyproject.toml`,
-   and `.python-version`. `AGENTS.md` holds the notes and `CLAUDE.md` only points at it.
-   Never duplicate the notes across the two. `uv.lock`
-   is not templated: the environment gate generates it. `.env` holds secrets (empty unless the
-   user supplies them), repo-relative storage, and machine-local settings only.
-3. Install `.githooks/pre-commit` (the journal guard) with `git config core.hooksPath .githooks`.
-4. Create `code/common/` `run_id.py`, `status.py`, `metrics.py`, `paths.py`,
-   `environment_smoke.py` (default `gpu_smoke` target); copy `assets/environment.py` from the
-   `environment-sync` skill's directory to `code/common/environment.py`.
+One unattended run. No step waits for the user or a new session: a tag only decides
+which plugins the next session loads, and everything here runs by path.
 
-## Git, environment, and rigs
-
-1. Initialize Git with the resolved remote and branch, make the first commit, and push it.
-2. Run `environment-sync` doctor, then `provision --staged` and `verify --staged` on the hub, and
-   create the hub development environment (`UV_PROJECT_ENVIRONMENT=<name> uv sync --frozen`).
-   Commit `uv.lock`.
-3. Bring up every intended rig in this order; a failed step stops the later ones for that rig:
-   1. `sync.toml` gets one absolute `repo_path` per rig, under one of its declared storage roots.
-   2. `rig-sync check-paths` must pass: it catches a path off the rig's large volume before
-      anything is cloned there.
-   3. `rig-sync provision-env --dry-run`, then `--confirm`, for each rig that declares caches
-      (otherwise the rig falls back to `~/.cache`; the script backs up and verifies the shell
-      files and rolls itself back on failure).
-   4. `rig-sync prepare` for each peer.
-   5. `rig-sync push-env` for each peer: a fresh clone has no `.env`.
-   6. `rig-sync doctor` and the `environment-sync` gates for every peer.
-4. Report what is ready, what is blocked, and the defaults taken.
+1. `git init -b main` unless the path is a repository already, since tagging needs one. If untagged,
+   run `project-init`'s `apply --categories research`; this request is the answer to its questions.
+2. `python3 scripts/scaffold.py <path> --python X.Y.Z --uv X.Y.Z`, then again with `--confirm`.
+   It writes the taxonomy; root files such as `AGENTS.md`, `CLAUDE.md`, `.env` (0600), `sync.toml`,
+   and `pyproject.toml`; `code/common/` (with `environment_smoke.py`, the default `gpu_smoke`
+   target); and the journal guard, with `core.hooksPath` set. `AGENTS.md` holds the notes and
+   `CLAUDE.md` only points at it. Never duplicate the notes across the two. `uv.lock`
+   is not templated: step 4 generates it.
+3. Append a `[machines.<rig>]` `repo_path` to `sync.toml` for the hub (its real path) and each rig.
+4. `git remote add` the resolved remote, run `uv lock`, then make the first commit with everything:
+   tag files, scaffold, `sync.toml`, `uv.lock`. Asking for a scaffold is asking for that commit.
+   Push it.
+5. On the hub: `environment-sync` doctor, `provision --staged`, and `verify --staged`; then the
+   development environment (`UV_PROJECT_ENVIRONMENT=<name> uv sync --frozen`).
+6. Bring up every intended rig in this order; a failed step stops the later ones for that rig:
+   1. `rig-sync check-paths` must pass: it catches a path off the rig's large volume.
+   2. `rig-sync provision-env --dry-run`, then `--confirm`, for each rig that declares caches
+      (otherwise the rig falls back to `~/.cache`).
+   3. `rig-sync prepare` for each peer.
+   4. `rig-sync push-env` for each peer: a fresh clone has no `.env`.
+   5. `rig-sync doctor` and the `environment-sync` gates for every peer.
+7. Report what is ready, what is blocked, the defaults taken, and that the plugin loads from the
+   next session if the tag is new.

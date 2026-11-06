@@ -1,0 +1,29 @@
+.env
+{{ENVIRONMENT_NAME}}/
+.rigsync_cache/
+# per-wave worktrees and lock-keyed wave environments, created by rig-sync and environment-sync
+.waves/
+.envs/
+storage/
+shitpads/*
+!shitpads/.gitkeep
+logs/*
+!logs/.gitkeep
+# Slurm job-id history written beside a wave script by sweep-dispatch; state, not source
+scripts/**/leonardo.jobs
+references/*
+!references/.gitkeep
+checkpoints/*
+!checkpoints/.gitkeep
+evaluations/*
+!evaluations/.gitkeep
+plots/*
+!plots/.gitkeep
+__pycache__/
+*.pyc
+.pytest_cache/
+# hydra default run dir, if left enabled
+outputs/
+# editor state is machine-local, except the exclude maps, which are project policy
+.vscode/*
+!.vscode/settings.json

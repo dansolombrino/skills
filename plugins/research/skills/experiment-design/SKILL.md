@@ -5,7 +5,7 @@ description: Compile a requested scientific step into a reproducible Research 2.
 
 # experiment-design
 
-Turns a requested step into an experiment that `sweep-dispatch` can launch. Project facts:
+Turns a step into an experiment `sweep-dispatch` can launch. Project facts:
 `../research-project-init/references/conventions.md`.
 
 ## 1. Name and structure
@@ -13,8 +13,8 @@ Turns a requested step into an experiment that `sweep-dispatch` can launch. Proj
 - Take the next free `NNN_name`; sub-experiments nest as `NNN_exp/NNN_sub`. The complete numbered
   leaf hierarchy is `<experiment_path>`; preserve it unchanged in `code/`, `config/`, and later in
   `evaluations/`, `visualizations/`, and `plots/`.
-- Unit tests are optional, at `tests/code/<experiment_path>/<script_stem>/test_*.py`; they never
-  substitute for the smoke command (§ 6).
+- Optional unit tests go in `tests/code/<experiment_path>/<script_stem>/test_*.py`; never instead
+  of the smoke (§ 6).
 
 ## 2. run_id
 
@@ -40,10 +40,10 @@ An experiment pinned to an older layout: see `run-identity` references/legacy-la
 ### Changing an existing experiment's config
 
 Adding, removing, or renaming a behavior-affecting param changes the identity: decide whether it
-joins (a param that cannot change results may stay out, with the reason recorded). If no
+joins (one that cannot change results may stay out, reason recorded). If no
 checkpoint, evaluation, plot, or wave record exists yet, rewrite the current version entry and the
 section header. Otherwise append the next version and run a run_id migration through
-`run-identity`; the experiment stays one experiment.
+`run-identity`.
 
 ## 3. Config
 
@@ -52,9 +52,9 @@ run_id metadata and no secrets in yaml; a new environment variable goes into `.e
 
 ## 4. Checkpoints
 
-- Filenames, contents (full training state for exact resume vs weights only), and whether the
-  script resumes. Unattended crash recovery relaunches interrupted runs: resumable ones continue,
-  others restart from scratch, so expensive runs want full state.
+- Filenames, contents (full training state vs weights only), and whether the script resumes.
+  Crash recovery relaunches interrupted runs: resumable ones continue, others restart, so expensive
+  runs want full state.
 - Retention, sized: `checkpoint size × checkpoints retained × runs`, against the rig's and the
   hub's headroom (offload moves a wave's checkpoints to the hub). Record the **per-run retained
   footprint in KiB**; each wave script adds it to its lane's storage floor.
@@ -71,13 +71,15 @@ run_id metadata and no secrets in yaml; a new environment variable goes into `.e
   `heartbeat(completed=<done>, total=<total>, unit=<label>)` after every epoch or major step.
   Wave id, rig, GPU, source revision, and environment fingerprint come from environment variables
   the wave exports, never config params.
-- Print start, end, and elapsed to stdout; the wave script captures the log.
+- Print start, end, and elapsed to stdout for the wave log.
 
 ## 6. Smoke command
 
 One repeatable hub command that runs the real entrypoint on the smallest safe workload, with the
-interpreter written as `<env>/bin/python` and an output that cannot collide with a production run,
-plus its pass criterion (exit 0 and a named output proving one unit of work). Record both in the
+interpreter written as `$ENVIRONMENT_DIR/bin/python` (from `environment-sync verify --staged`, never
+the development environment) and outputs from `output_root(..., smoke=True)`
+(`../research-project-init/references/templates.md` § Smoke outputs), plus its pass criterion (exit 0
+and a named output proving one unit of work). Record both in the
 section header; `sweep-dispatch` runs it before tagging each wave.
 
 The smoke shrinks the workload, never the code path: every subsystem production enables
@@ -89,19 +91,20 @@ smoke and kills every run of the wave.
 Tracking is offline only, in the evaluations run dir: the whole config (`.run_config.json`),
 wave provenance (`.status.json`), and every tracked scalar (`metrics.jsonl`).
 
-- Ask the user which metrics to track and under which keys (`train/loss`, `val/acc`); record the
-  keys in the section header.
+- Track what the user named; otherwise, always when unattended, choose what the step's question needs
+  (`train/loss`, `val/acc`). Record the keys in the section header.
 - Open `MetricsWriter(<eval run dir>, resume=<training state was restored>)`
   (`code/common/metrics.py`) after `guard_run_config`, inside the `StatusWriter`, and call
   `log({<key>: <value>, ...}, step=<global step>)` wherever a metric is computed. A project
-  lacking `metrics.py` takes it from the `research-project-init` template.
+  lacking `metrics.py` copies `research-project-init`'s.
 - Plots read it with `read_metrics`; final results still go to their own evaluation outputs (§ 4).
 
 ## 8. Paths in code
 
-Waves run code from a worktree while storage stays in the shared project root, so every storage
-location (`.env`, checkpoints, evaluations, logs, caches, earlier experiments' outputs) goes
+Waves run code from a worktree with storage in the shared project root, so every storage
+location (`.env`, checkpoints, evaluations, logs, caches) goes
 through `paths.py` `project_path()`, and tracked inputs through `source_path()`; never derive a
-storage path from `Path(__file__)` or `os.getcwd()`.
+storage path from `Path(__file__)` or `os.getcwd()`. Imports: `from common.paths import ...` after
+the one `sys.path` line in that templates page (§ Experiment entrypoint).
 
-Finish with the `research-journal` entry and a commit; the next step is usually `sweep-dispatch`.
+Finish with the `research-journal` entry and a commit.
