@@ -6,6 +6,10 @@ wave scripts themselves are read from the wave's detached worktree `.waves/<wave
 wave-isolation contract in conventions); nothing is ever executed from the main checkout. Layout and vocabulary (wave, lane, GPU set):
 `../../research-project-init/references/conventions.md`.
 
+Never fill these by hand: `scripts/render_wave.py` renders them from one JSON input ([the
+format](#render_wavepy--the-json-input)) and refuses a placeholder it cannot fill. The blocks here
+are what it reads, so a change here changes every wave it renders afterwards.
+
 ## wave.sh — one per (run, wave), self-contained, self-guarded, and placed at run time
 
 Committed at `scripts/<NNN_exp>/<run_id folder>/wave_<wave_id>/wave.sh` (the `rid-<32 hex>`
@@ -402,8 +406,9 @@ immediately before it starts or restarts it.
 
 ## Supervisor manifest — what `sweep-supervisor register` reads
 
-Written by dispatch to the scratch area (never under `scripts/`: it is launch input, not an
-execution file), one JSON object:
+Written by `render_wave.py manifest` to the **scratch area** `shitpads/wave_<wave_id>/` in the hub's
+main checkout (gitignored, rig-local, kept with the render input; never under `scripts/`: it is
+launch input, not an execution file), one JSON object:
 
 ```json
 {
@@ -467,8 +472,12 @@ order, and the initial estimate.
    targets excluded; `supervisor.py` rejects offload entries that are not lane rigs). `leonardo`
    joins with a job cap and no core-hour cap.
 2. **Cost.** Estimate every run's cost in rig-independent units with the `experiments-tracking`
-   hierarchy (`cost = elapsed_s × weight`, preferring same-rig history). With no history at all,
-   omit `cost_s` — say so, and treat the first estimate as provisional.
+   hierarchy (`cost = elapsed_s × weight`, preferring same-rig history). With no history at all:
+   when the smoke timed real GPU work and the design record gives the unit count,
+   `cost_s = smoke seconds per unit × units × weight(smoke rig)` (a CPU smoke is no basis), and say
+   it is provisional. Otherwise omit `cost_s` and say so: the queue keeps the listed order, the
+   supervisor's table shows no ETA (`no basis yet`) until a run of the wave finishes and then uses
+   that wave's median, and a Slurm job gets `default_walltime_s`.
 3. **Order.** Sort runs by cost descending. Longest-first matters: a long run claimed last is what
    leaves one lane working alone at the end of the wave.
 4. **Estimate.** Simulate the feeder (each run to the eligible lane predicted free first, runtime
@@ -479,3 +488,65 @@ Worked example — 12 equal-cost runs, one hour each on `rig-4090`, across `rig-
 `rig-3090-ti` gpu0 (0.5), and `behemoth` gpu0 (2.0). The feeder lands 3 / 2 / 7 and the wave takes
 about 4.0 h; an even 4 / 4 / 4 split would take 8.0 h with behemoth idle for six of them. If
 `rig-3090-ti` turns out slower than its weight, it simply claims fewer runs — nobody re-plans.
+
+## render_wave.py — the JSON input
+
+Written to the scratch area, one object. `render_wave.py scripts --input <file> --root <project>
+[--dry-run]` writes every `wave.sh`, `README.md`, and `lane.sh`, and refuses to overwrite one that
+differs. `render_wave.py manifest --input <file> --root <project>` runs after the tag exists, reads
+the commit from `wave--<wave_id>`, and writes `shitpads/wave_<wave_id>/manifest.json`. The smoke argv
+comes from `sync.toml`; the run paths and override tokens are the project's helpers' output, because
+this script imports no project code.
+
+```json
+{
+  "wave_id": "<wave_id>",
+  "experiment": "<NNN_exp>",
+  "purpose": "<one line for the README title>",
+  "why": "<why this wave, one line>",
+  "hub": "rig-4090",
+  "entrypoint": "<script>.py, relative to code/<NNN_exp>/",
+  "environment_dir": "<ENVIRONMENT_DIR printed by verify --staged>",
+  "environment_fingerprint": "<ENVIRONMENT_FINGERPRINT printed by verify --staged>",
+  "identity_version": 1,
+  "pool": {"rig-4090": {"lanes": ["0"]}},
+  "weights": {"rig-4090": 1.0},
+  "runs": [
+    {
+      "id": "<run_id_name>",
+      "label": "<run_id_label>",
+      "checkpoint_dir": "<from run_id_path>",
+      "eval_dir": "<from run_id_path>",
+      "artifact": "<final artifact under either directory>",
+      "overrides": ["<one hydra_override_arg return value per override>"],
+      "footprint_kib": 0,
+      "resumes": true,
+      "cost_s": 3600,
+      "min_vram_mib": 20000,
+      "needs": ["hf:imagenet-1k"]
+    }
+  ]
+}
+```
+
+`resumes`, `cost_s`, `min_vram_mib`, and `needs` are optional. `pool`, `weights`, and the optional
+`gpu_grants`, `fix_depth`, and `fixes_wave` pass to the manifest as described above; `offload` defaults
+to every non-hub lane rig. A pool entry with `max_jobs` adds the job header to every script and needs
+`slurm_account`. An older pin sets `run_id_layout`, gives each run its `folder`, and sets
+`run_id_segments` for a segments pin (`run-identity` references/legacy-layouts.md).
+
+## Smoke when the hub's GPU is busy
+
+The recorded smoke normally runs on a card the board shows free on the hub. When every hub card is
+held or foreign, nothing is taken from anyone:
+
+1. Run the same smoke command on the hub with `CUDA_VISIBLE_DEVICES=""`. It proves the code path,
+   config, and outputs, not the GPU.
+2. After deployment, `environment-sync verify --wave <wave_id> --revision <sha> --lane <rig>:<gpus>`
+   on each free pool lane proves the environment on the real cards. A card another wave holds can
+   fail on memory alone, so leave a held lane out: the supervisor repeats this check before it
+   starts that lane.
+3. Say "CPU smoke, hub GPU busy" in the launch journal entry. A GPU-only fault in the entrypoint now
+   shows in the wave's first run, so wait for a card when the wave is expensive.
+
+An entrypoint with no CPU form waits for a hub card; ask the user rather than preempting one.

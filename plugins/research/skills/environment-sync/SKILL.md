@@ -60,13 +60,15 @@ Run these from the project's main checkout: from a linked worktree (a session's 
    `repo_path` resolving outside every declared storage root of the rig, a root on the system
    filesystem, insufficient headroom against the quota, machine cache variables a **non-interactive** shell cannot see, and a project `.env`
    that re-declares them. Provisioning onto a rig whose storage is misdeclared installs a
-   multi-gigabyte environment on the wrong volume.
+   multi-gigabyte environment on the wrong volume. A declared cache on a short disk only warns;
+   the uv cache's disk is the one to read before step 2.
 2. Run `provision --dry-run` for the exact target and named rigs: `--wave <wave_id> --revision <sha>`
    after `rig-sync deploy-revision` created the wave worktrees (always including the hub), or
    `--staged --machines <hub>` before the dispatch commit exists, for the pre-dispatch smoke (the
    hub's environment files must then equal the index). It shows pinned uv/Python, the environment
    key and path, every target, and each `uv sync --frozen --exact --no-install-project --dry-run`
-   result (or the versioned uv installer plan). Then `--confirm`.
+   result (or the versioned uv installer plan), and names the uv cache's disk with an estimate
+   of what this lock adds to it, a warning when that leaves it short. Then `--confirm`.
 3. On confirmation, install pinned uv under ignored `.rigsync_cache/`, install the exact
    uv-managed Python, and exact-sync `.envs/<env_key>`. Building a key that does not exist yet is
    always allowed, even while other waves run. Re-syncing an existing key is refused while any

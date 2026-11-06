@@ -710,5 +710,167 @@ class MainCheckoutTests(unittest.TestCase):
         self.assertEqual(parser_commands, {"doctor", "provision", "verify"})
 
 
+class UvCacheEstimateTests(unittest.TestCase):
+    # What `uv sync --dry-run` really prints on stderr.
+    DRY_RUN = (
+        "Using CPython 3.13.5\n"
+        "Would create virtual environment at: env\n"
+        "Would download 2 packages\n"
+        "Would install 3 packages\n"
+        " + small==1.0\n"
+        " + torch-thing==2.0.0+cu121\n"
+        " + medium==1.0\n"
+    )
+    GIB = 1024**3
+    LOCK = f"""
+version = 1
+
+[[package]]
+name = "small"
+version = "1.0"
+wheels = [{{ url = "https://x/small-1.0-py3-none-any.whl", size = 1000 }}]
+
+[[package]]
+name = "torch_thing"
+version = "2.0.0+cu121"
+wheels = [
+  {{ url = "https://x/torch_thing-2.0.0-cp312-manylinux_2_17_x86_64.whl", size = {2 * GIB} }},
+  {{ url = "https://x/torch_thing-2.0.0-cp312-macosx_11_0_arm64.whl", size = {9 * GIB} }},
+]
+
+[[package]]
+name = "medium"
+version = "1.0"
+sdist = {{ url = "https://x/medium-1.0.tar.gz", size = {GIB} }}
+
+[[package]]
+name = "not-planned"
+version = "1.0"
+wheels = [{{ url = "https://x/not_planned-1.0-py3-none-any.whl", size = {50 * GIB} }}]
+"""
+
+    def machine(self):
+        return envsync.rigsync.Machine("rig", "rig", None, Path("/tmp/rig"), True)
+
+    def target(self):
+        return envsync.Target("0123456789abcdef", "20260802-120000", "a" * 40)
+
+    def report(self, free_gb: float, output: str | None) -> str:
+        reading = envsync.rigsync.DiskReading(
+            "/dev/cache", "/cache", int(free_gb * 1024 * 1024), 500 * 1024 * 1024, "df", 25.0
+        )
+
+        def fake_remote(_machine, argv, check=True, **_kw):
+            if argv[0] == "cat":
+                return subprocess.CompletedProcess(argv, 0, self.LOCK.encode(), b"")
+            if argv[0] == "uname":
+                return subprocess.CompletedProcess(argv, 0, b"x86_64\n", b"")
+            return subprocess.CompletedProcess(argv, 0, b"/cache/uv", b"")
+
+        stream = io.StringIO()
+        with mock.patch.object(envsync.rigsync, "remote", side_effect=fake_remote), mock.patch.object(
+            envsync.rigsync, "read_disks", return_value=[reading]
+        ), redirect_stdout(stream):
+            envsync.report_uv_cache(self.machine(), self.target(), output)
+        return stream.getvalue()
+
+    def test_parses_the_real_dry_run_output(self) -> None:
+        downloads, installs = envsync.parse_sync_plan(self.DRY_RUN)
+        self.assertEqual(downloads, 2)
+        self.assertEqual(installs[1], ("torch-thing", "2.0.0+cu121"))
+        self.assertEqual(envsync.parse_sync_plan("Would download 1 package\n")[0], 1)
+        self.assertEqual(envsync.parse_sync_plan("Audited 3 packages\n"), (0, []))
+
+    def test_the_bound_is_the_largest_downloads_of_this_architecture(self) -> None:
+        bound, unknown = envsync.plan_download_bytes(self.LOCK, envsync.parse_sync_plan(self.DRY_RUN), "x86_64")
+        self.assertEqual(bound, 3 * self.GIB)  # torch 2 + medium's sdist 1; never the macOS wheel or an unplanned one
+        self.assertEqual(unknown, 0)
+
+    def test_a_package_with_no_recorded_size_is_counted_not_hidden(self) -> None:
+        lock = '[[package]]\nname = "torch-thing"\nversion = "2.0.0+cu121"\nwheels = [{ url = "https://x/t-linux_x86_64.whl" }]\n'
+        bound, unknown = envsync.plan_download_bytes(lock, envsync.parse_sync_plan(self.DRY_RUN), "x86_64")
+        self.assertEqual((bound, unknown), (0, 1))
+
+    def test_a_disk_the_plan_would_fill_warns_and_names_itself(self) -> None:
+        line = self.report(30.0, self.DRY_RUN)
+        self.assertTrue(line.startswith("WARN rig uv cache: /cache/uv on /dev/cache at /cache: 30.0G free"), line)
+        self.assertIn("2 of 3 packages to download: at most 3.0G of wheels, roughly 9.0G once unpacked", line)
+
+    def test_a_disk_with_room_is_ok(self) -> None:
+        self.assertTrue(self.report(300.0, self.DRY_RUN).startswith("OK rig uv cache"))
+
+    def test_nothing_to_download_only_warns_below_the_floor(self) -> None:
+        all_cached = "Would install 1 package\n + small==1.0\n"
+        self.assertTrue(self.report(30.0, all_cached).startswith("OK"))
+        self.assertTrue(self.report(13.0, all_cached).startswith("WARN"))
+
+    def test_with_uv_missing_it_still_names_the_disk(self) -> None:
+        line = self.report(13.0, None)
+        self.assertTrue(line.startswith("WARN rig uv cache: /cache/uv on /dev/cache"), line)
+        self.assertNotIn("packages", line)
+
+    def test_a_broken_lock_or_disk_never_stops_the_build(self) -> None:
+        self.LOCK = "not toml ["
+        self.assertIn("uv cache: /cache/uv", self.report(30.0, self.DRY_RUN))
+        with mock.patch.object(envsync.rigsync, "read_disks", return_value=None), mock.patch.object(
+            envsync.rigsync, "remote", return_value=subprocess.CompletedProcess([], 0, b"/x", b"")
+        ), redirect_stdout(io.StringIO()) as stream:
+            envsync.report_uv_cache(self.machine(), self.target(), self.DRY_RUN)
+        self.assertIn("WARN rig uv cache: cannot measure", stream.getvalue())
+
+    def test_provision_reports_before_it_syncs(self) -> None:
+        root = Path("/tmp/hub")
+        machine = envsync.rigsync.Machine("hub", "hub", None, root, True)
+        config = envsync.rigsync.Config(root, {"evaluations": {"path": "evaluations"}}, {"hub": machine})
+        settings = envsync.EnvironmentSettings(
+            root=root, environment_name=".venv", uv_version="0.11.32", python_version="3.12.11",
+            gpu_smoke=("python", "code/common/environment_smoke.py"),
+        )
+        order: list[str] = []
+
+        def fake_remote(_machine, argv, *, check=True):
+            if "sync" in argv:
+                order.append("dry-run" if "--dry-run" in argv else "sync")
+            return subprocess.CompletedProcess(argv, 0, b"", self.DRY_RUN.encode())
+
+        with mock.patch.object(envsync, "verify_source"), mock.patch.object(
+            envsync, "uv_version", return_value="0.11.32"
+        ), mock.patch.object(envsync, "environment_exists", return_value=False), mock.patch.object(
+            envsync, "remote", side_effect=fake_remote
+        ), mock.patch.object(envsync, "verify_environments"), mock.patch.object(
+            envsync, "report_uv_cache", side_effect=lambda *_args: order.append("report")
+        ) as report, redirect_stdout(io.StringIO()):
+            envsync.provision(settings, config, [machine], self.target(), dry_run=False, confirmed=True)
+        self.assertEqual(order, ["dry-run", "report", "sync"])
+        self.assertIn("Would download 2 packages", report.call_args.args[2])
+
+    def test_the_override_note_is_a_note(self) -> None:
+        text = " ".join((SCRIPT.parents[1] / "references/configuration.md").read_text().split())
+        self.assertIn("may be pinned instead, but only as an override recorded", text)
+        self.assertIn("this skill never chooses one", text)
+
+    def test_doctor_runs_the_cache_disk_check_through_rig_sync(self) -> None:
+        root = Path("/tmp/hub")
+        machine = envsync.rigsync.Machine("hub", "hub", None, root, True, caches=(("UV_CACHE_DIR", "/cache/uv"),))
+        config = envsync.rigsync.Config(root, {"evaluations": {"path": "evaluations"}}, {"hub": machine})
+        settings = envsync.EnvironmentSettings(
+            root=root, environment_name=".venv", uv_version="0.11.32", python_version="3.12.11",
+            gpu_smoke=("python", "code/common/environment_smoke.py"),
+        )
+        ok = subprocess.CompletedProcess([], 0, b"", b"")
+        stream = io.StringIO()
+        with mock.patch.object(envsync.rigsync, "remote", return_value=ok), mock.patch.object(
+            envsync.rigsync, "check_storage", return_value=(0, [])
+        ), mock.patch.object(envsync.rigsync, "check_machine_env", return_value=(0, [])), mock.patch.object(
+            envsync.rigsync, "check_project_env", return_value=(0, [])
+        ), mock.patch.object(
+            envsync.rigsync, "check_cache_disks", return_value=(0, ["WARN hub cache disk: UV_CACHE_DIR on short"])
+        ), mock.patch.object(envsync, "local_hub", return_value=machine), mock.patch.object(
+            envsync, "host_facts", return_value=envsync.HostFacts("Linux", "x86_64", "glibc", ("GPU",))
+        ), mock.patch.object(envsync, "uv_version", return_value="0.11.32"), redirect_stdout(stream):
+            envsync.doctor(settings, config, [machine])
+        self.assertIn("WARN hub cache disk: UV_CACHE_DIR on short", stream.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

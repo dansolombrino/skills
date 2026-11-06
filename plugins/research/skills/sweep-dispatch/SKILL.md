@@ -40,8 +40,9 @@ Each gate names what enforces it; a failure stops the wave and is reported as is
 
 ## Pool and queue
 
-- Read the fleet board first: `rig-board status --reconcile`. The pool is every lane of ours on the
-  project's rigs (`sync.toml`), free or held; a held lane waits in the pool and starts when its
+- Read the fleet board first, probing pool rigs only (others may be off limits):
+  `rig-board status --reconcile --rig <rig>`, one `--rig` per rig. The pool is every lane of ours on
+  the project's rigs (`sync.toml`), free or held; a held lane waits in the pool and starts when its
   holder releases it. Availability never comes from `nvidia-smi`.
 - An **opt-in** rig (`opt_in = true` in the registry, shown as `opt-in` on the board) is never in
   the pool by default, even when `sync.toml` declares it. When building the pool, offer the free
@@ -63,46 +64,43 @@ Each gate names what enforces it; a failure stops the wave and is reported as is
 
 ## Generate
 
-```
-scripts/NNN_exp/<run_id folder>/wave_<wave_id>/README.md   # purpose, pool, standing authorization; written once
-scripts/NNN_exp/<run_id folder>/wave_<wave_id>/wave.sh     # this run's invocation
-scripts/NNN_exp/_lanes/wave_<wave_id>/lane.sh              # the loop every lane runs
-```
+First the values the scripts embed, which do not depend on the commit: stage the lock files, then
+`environment-sync provision --staged` and `verify --staged --machines rig-4090` print
+`ENVIRONMENT_DIR` and `ENVIRONMENT_FINGERPRINT`.
+
+Then render, never hand-write: `python3 scripts/render_wave.py scripts --input <file> --root <project>`
+(this skill's installed `scripts/`, not the project's; input format in
+[references/templates.md](references/templates.md)). The input and the manifest live in the
+**scratch area**, the hub's `shitpads/wave_<wave_id>/`; the project's `scripts/` holds shell only.
+The script writes each run's `wave.sh` and once-only `README.md` under
+`scripts/NNN_exp/<run_id folder>/wave_<wave_id>/`, and `scripts/NNN_exp/_lanes/wave_<wave_id>/lane.sh`.
 
 - `wave.sh` names no rig and no GPU: the claiming lane supplies `LANE_RIG`, `LANE_GPUS`, and its
   storage floor; on `leonardo` the same file carries an `#SBATCH` header.
-- It is self-contained (overrides rendered with `hydra_override_arg`) and self-guarded: it skips
-  itself when the final artifact or its offload receipt exists. Its guards stop the lane with exit
-  `86` (source drift), `87` (environment drift), and `88` (storage).
-- The run folder is `run_id_path(...)`, the same `rid-<32 hex>` directory as in `evaluations/`.
-  Materialize each run's exact checkpoint, evaluation, status, and final-artifact paths into its
-  script and into the supervisor manifest.
-- The README records the wave's purpose, its pool and offload rigs, any `behemoth` or opt-in grant verbatim,
-  and its **standing authorization**: inside the pool the supervisor may start, move, requeue, and
-  steal this wave's own runs, resubmit or cancel its own not-yet-started jobs, fetch data into
-  declared caches, and free checksum-verified checkpoints on offload rigs. That record is what
-  bounds the unattended supervisor agent.
-- `scripts/` holds shell only; the manifest goes to the scratch area.
+- It skips itself when its final artifact or offload receipt exists, and stops the lane with exit
+  `86` (source drift), `87` (environment drift), or `88` (storage).
+- The README's **standing authorization** is what bounds the unattended supervisor agent.
 
 ## Test, commit, deploy
 
 1. Stage only this wave's code, config, scripts, EXPERIMENTS.md rows, and journal entry; every
    execution file is tracked and clean.
-2. Run the experiment's recorded smoke command on the hub in the staged lock's environment
-   (`environment-sync provision --staged` then `verify --staged --machines rig-4090`, which prints
-   `ENVIRONMENT_DIR`). The smoke must leave the staged patch unchanged.
+2. Run the experiment's recorded smoke command on the hub in the staged environment, on a card the
+   board shows free. It must leave the staged patch unchanged. Every hub card busy: CPU smoke on the
+   hub plus `environment-sync verify --lane` on pool rigs (references/templates.md).
 3. Commit `dispatch(<NNN_exp>): wave <wave_id>`, create the annotated tag `wave--<wave_id>`, and
    push branch and tag without force.
 4. `rig-sync deploy-revision --wave <wave_id>` (dry run, then `--confirm`) and `verify-revision`
    for every pool rig plus the hub; then `environment-sync provision`/`verify --wave <wave_id>
-   --revision <sha>` for the same set and every lane.
+   --revision <sha>` for the same set and every lane. It must print the fingerprint the scripts
+   embed; a different one stops the wave.
 
 Later hub commits never affect a dispatched wave: it reads code from its own worktree.
 
 ## Launch
 
-Write the manifest and run `sweep-supervisor register --wave <wave_id> --manifest <file>
---dry-run`, then `--confirm`. The service verifies and starts each lane, claims it on `rig-board`,
+Write the manifest (`render_wave.py manifest`) and run `sweep-supervisor register --wave <wave_id>
+--manifest <file> --dry-run`, then `--confirm`, which re-runs the fast gates. The service verifies and starts each lane, claims it on `rig-board`,
 feeds the queue, and submits `leonardo` jobs. Status in the chat and on the web: see
 `sweep-supervisor`. To watch a lane by hand: `ssh <rig>` then
 `tmux attach -t <project>_<NNN_exp>_<wave_id>_<rig>_gpu<ids>` (directly on the hub);
