@@ -12,7 +12,8 @@
 # One plugin per run (default: research). Release core and research separately.
 #
 # --dry-run validates and reports each host's installed version against the target without
-# tagging, pushing, or touching either host. It doubles as a standalone drift check.
+# tagging, pushing, or touching either host. It doubles as a standalone drift check. It is not
+# strictly read-only: it runs `git fetch origin main` and the test suite.
 
 set -euo pipefail
 
@@ -26,7 +27,7 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY_RUN=1; shift ;;
     --plugin) PLUGIN="${2:?--plugin needs a value}"; shift 2 ;;
     -m|--message) TAG_MESSAGE="${2:?--message needs a value}"; shift 2 ;;
-    -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -61,6 +62,29 @@ git fetch --quiet origin main 2>/dev/null || warn "could not fetch origin/main"
 behind="$(git rev-list --count HEAD..origin/main 2>/dev/null || echo 0)"
 [ "$behind" -eq 0 ] || git_check "local main is $behind commit(s) behind origin/main; pull first"
 
+# The script's own target. validate_repo.py enforces that both manifests carry the same version, so
+# reading one is enough.
+TARGET="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$CODEX_MANIFEST")"
+TAG="$PLUGIN--v$TARGET"
+
+# A forgotten bump has to stop the release before anything is pushed. On --dry-run an existing tag
+# is the normal state between releases, so report only whether the plugin moved past it.
+if [ "$DRY_RUN" -eq 1 ] && git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+  if bump_report="$(python3 scripts/check_version_bump.py --plugin "$PLUGIN" 2>&1)"; then
+    echo "✔ $bump_report"
+  else
+    warn "$bump_report"
+  fi
+elif ! tag_report="$(claude plugin tag "$PLUGIN_DIR" --dry-run 2>&1)"; then
+  git_check "$tag_report"
+fi
+
+# `codex plugin add` would keep a domain plugin on globally, and Verify would then fail after the
+# tag is public. A real release stops here instead; --dry-run counts it as drift further down.
+if ! global_on="$(python3 scripts/codex_plugin_state.py check-global 2>&1)"; then
+  git_check "domain plugin on, or config unreadable, in the global Codex config: $global_on"$'\n'"  fix with: python3 scripts/codex_plugin_state.py set <plugin-id> false"
+fi
+
 echo "✔ preflight ok (branch=$branch, dry_run=$DRY_RUN)"
 
 # ─────────────────────────────── 2. validate ────────────────────────────────
@@ -79,26 +103,18 @@ run_quietly() {
 
 run_quietly "validate_repo.py" python3 scripts/validate_repo.py
 
-# validate_repo.py covers three of the four places a version lives. The fourth is the pin in
-# tests/test_<plugin>_contracts.py, which is bumped in every release commit — catching a partial
-# bump here beats letting it surface as a bare assertion diff halfway through the suite.
-CONTRACT_TEST="tests/test_${PLUGIN}_contracts.py"
-[ -f "$CONTRACT_TEST" ] || fail "no version pin for $PLUGIN: $CONTRACT_TEST is missing"
-pinned="$(sed -n 's/.*assertEqual(manifest\["version"\], "\([0-9.]*\)").*/\1/p' "$CONTRACT_TEST" | head -1)"
-manifest_version="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$CODEX_MANIFEST")"
-[ -n "$pinned" ] || fail "$CONTRACT_TEST has no assertEqual(manifest[\"version\"], ...) pin"
-if [ "$pinned" != "$manifest_version" ]; then
-  fail "version bump is incomplete: manifests say $manifest_version but $CONTRACT_TEST still pins $pinned"
-fi
+# The custom validator covers both hosts' catalogs and metadata; this covers Claude's own schema as
+# the CLI moves. Plain --strict: --profile directory would add submission rules that do not apply.
+run_quietly "claude plugin validate --strict ." claude plugin validate --strict .
+for plugin_dir in plugins/*/; do
+  run_quietly "claude plugin validate --strict $plugin_dir" claude plugin validate --strict "$plugin_dir"
+done
 
 # The suite builds git fixtures in temp dirs. An ambient TMPDIR on a foreign-owned mount makes git
 # refuse to work there ("dubious ownership"), which would fail every release for a reason that has
 # nothing to do with the release. Pin a git-friendly scratch dir instead.
 run_quietly "test suite" env TMPDIR="${RELEASE_TMPDIR:-/tmp}" python3 -m unittest discover tests
 
-# validate_repo.py already enforces that the Codex manifest, the Claude manifest, and the Claude
-# catalog entry carry the same version, so reading any one of them is enough.
-TARGET="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$CODEX_MANIFEST")"
 echo "✔ target version: $PLUGIN $TARGET"
 
 # ──────────────────────── installed-version readers ─────────────────────────
@@ -138,12 +154,18 @@ if [ "$DRY_RUN" -eq 1 ]; then
   step "Drift check (no changes made)"
   printf '  target      %s\n  claude      %s\n  codex       %s\n' \
     "$TARGET" "$CLAUDE_BEFORE" "$CODEX_BEFORE"
+  dry_drift=0
   if [ "$CLAUDE_BEFORE" = "$TARGET" ] && [ "$CODEX_BEFORE" = "$TARGET" ]; then
     echo "✔ both hosts are on $TARGET"
-    exit 0
+  else
+    echo "✘ host(s) not on $TARGET — run scripts/release.sh (or the sync commands in README.md)" >&2
+    dry_drift=1
   fi
-  echo "✘ host(s) not on $TARGET — run scripts/release.sh (or the sync commands in README.md)" >&2
-  exit 1
+  if ! python3 scripts/codex_plugin_state.py check-global >/dev/null 2>&1; then
+    echo "✘ the global Codex config has a domain plugin on, or cannot be read (see the warning above)" >&2
+    dry_drift=1
+  fi
+  exit "$dry_drift"
 fi
 
 # ────────────────────────────── 3. tag + push ───────────────────────────────
@@ -151,8 +173,7 @@ step "Tag and push"
 
 git push origin main
 
-# `claude plugin tag` re-checks plugin.json against the enclosing marketplace entry and refuses to
-# move an existing tag, so a forgotten version bump stops the release here.
+# Preflight already ran this as a dry run; it stays the real tag creation and the last word.
 if [ -n "$TAG_MESSAGE" ]; then
   claude plugin tag "$PLUGIN_DIR" --push --remote origin -m "$TAG_MESSAGE"
 else
@@ -174,9 +195,17 @@ fi
 step "Sync Codex"
 
 # Codex has no `update`; the documented path is remove-then-add against the refreshed snapshot.
+# `remove` drops the plugin's config table and `add` always writes `enabled = true`, so record the
+# state first and put it back. A plugin with no recorded state takes its default: core on, others off.
 codex plugin marketplace upgrade "$MARKETPLACE"
+CODEX_ENABLED_BEFORE="$(python3 scripts/codex_plugin_state.py get "$PLUGIN_ID")"
+case "$CODEX_ENABLED_BEFORE" in
+  true|false) CODEX_ENABLED_WANT="$CODEX_ENABLED_BEFORE" ;;
+  *) if [ "$PLUGIN" = "core" ]; then CODEX_ENABLED_WANT=true; else CODEX_ENABLED_WANT=false; fi ;;
+esac
 codex plugin remove "$PLUGIN_ID" || warn "codex plugin remove failed; continuing to add"
-codex plugin add "$PLUGIN_ID"
+codex plugin add "$PLUGIN_ID" || fail "codex plugin add failed; rerun it, then: python3 scripts/codex_plugin_state.py set $PLUGIN_ID $CODEX_ENABLED_WANT"
+python3 scripts/codex_plugin_state.py set "$PLUGIN_ID" "$CODEX_ENABLED_WANT" || fail "could not restore enabled=$CODEX_ENABLED_WANT for $PLUGIN_ID in the global Codex config"
 
 # ──────────────────────── 6. verify — the actual gate ───────────────────────
 step "Verify"
@@ -191,8 +220,12 @@ printf '  %-8s %-12s %s\n' "codex"  "$CODEX_BEFORE"  "$CODEX_AFTER"
 drift=0
 [ "$CLAUDE_AFTER" = "$TARGET" ] || { warn "Claude is on $CLAUDE_AFTER, expected $TARGET"; drift=1; }
 [ "$CODEX_AFTER"  = "$TARGET" ] || { warn "Codex is on $CODEX_AFTER, expected $TARGET";  drift=1; }
-[ "$drift" -eq 0 ] || fail "released $PLUGIN $TARGET but a host did not pick it up — fix before relying on it"
+if ! global_on="$(python3 scripts/codex_plugin_state.py check-global 2>&1)"; then
+  warn "domain plugin on, or config unreadable, in the global Codex config: $global_on"
+  drift=1
+fi
+[ "$drift" -eq 0 ] || fail "released $PLUGIN $TARGET but a host is not right — fix before relying on it"
 
 echo
 echo "✔ $PLUGIN $TARGET released and installed on both hosts."
-echo "  Restart Claude Code and Codex; running sessions keep the version they launched with."
+echo "  Restart Codex and Claude Code, or run /reload-plugins in a Claude Code session; other running sessions keep the version they launched with."

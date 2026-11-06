@@ -46,7 +46,16 @@ class DualHostManifestTests(unittest.TestCase):
             claude = read_json(f"plugins/{plugin.name}/.claude-plugin/plugin.json")
             for field in ("name", "version", "description"):
                 self.assertEqual(codex[field], claude[field], f"{plugin.name}: {field} drifted between hosts")
-            self.assertEqual(catalog[plugin.name]["version"], codex["version"], plugin.name)
+            # The manifests are the single version source; a catalog copy could only drift.
+            self.assertNotIn("version", catalog[plugin.name], plugin.name)
+
+    def test_domain_plugins_are_off_by_default_on_claude(self) -> None:
+        for plugin in PLUGINS:
+            claude = read_json(f"plugins/{plugin.name}/.claude-plugin/plugin.json")
+            if plugin.name == "core":
+                self.assertNotIn("defaultEnabled", claude)
+            else:
+                self.assertIs(claude["defaultEnabled"], False, plugin.name)
 
     def test_claude_manifest_omits_codex_only_and_redundant_fields(self) -> None:
         for plugin in PLUGINS:
@@ -98,6 +107,21 @@ class SharedSkillTreeTests(unittest.TestCase):
         ]
         self.assertEqual(offenders, [], "distributed skills must not use the Codex '$' sigil")
 
+    def test_descriptions_have_no_angle_brackets(self) -> None:
+        # Claude's skill listing shows them as &lt; and &gt;.
+        for skill_dir in self.skill_dirs():
+            text = (skill_dir / "SKILL.md").read_text()
+            description = re.search(r"^description:\s*(.+)$", text, re.MULTILINE).group(1)
+            self.assertNotRegex(description, "[<>]", skill_dir)
+
+    def test_personal_network_repo_is_never_named(self) -> None:
+        offenders = [
+            str(path.relative_to(ROOT))
+            for path in (ROOT / "plugins").rglob("*")
+            if path.is_file() and "sapienza-vpn" in path.read_text(errors="ignore")
+        ]
+        self.assertEqual(offenders, [], "distributed plugins must not reference personal infrastructure")
+
     def test_codex_metadata_keeps_its_own_sigil(self) -> None:
         # The '$' form stays valid in Codex-only metadata, which Claude never reads.
         for skill_dir in self.skill_dirs():
@@ -124,6 +148,21 @@ class MaintenanceSkillMirrorTests(unittest.TestCase):
             self.assertLess(
                 len(pointer.read_text()), len(canonical.read_text()), f"{name} looks forked"
             )
+
+    def test_pointer_descriptions_equal_the_canonical_ones(self) -> None:
+        pattern = r"^description:\s*(.+)$"
+        for name in self.NAMES:
+            pointer = (ROOT / ".claude/skills" / name / "SKILL.md").read_text()
+            canonical = (ROOT / ".agents/skills" / name / "SKILL.md").read_text()
+            self.assertEqual(
+                re.search(pattern, pointer, re.MULTILINE).group(1),
+                re.search(pattern, canonical, re.MULTILINE).group(1),
+                name,
+            )
+
+    def test_reviewer_pointer_blocks_the_edit_tools(self) -> None:
+        pointer = (ROOT / ".claude/skills/marketplace-skill-reviewer/SKILL.md").read_text()
+        self.assertIn("disallowed-tools: Edit, Write, NotebookEdit", pointer)
 
 
 class BehavioralRegressionTests(unittest.TestCase):

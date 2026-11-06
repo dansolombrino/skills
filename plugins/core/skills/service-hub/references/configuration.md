@@ -92,8 +92,10 @@ as `link` services.
 
 ## Install as a user service
 
-`assets/service-hub.service` is a systemd user unit template. Point it at a **stable** copy of
-the script (the installed skill path, or a checkout of this repository on the machine):
+`assets/service-hub.service` is a systemd user unit template. Point it at a repository checkout
+on the machine, or at a small launcher you keep outside the install that starts the newest
+installed copy. Never point it straight at the installed skill path: that path contains the plugin
+version and the host deletes it some time after an update, so the unit would stop starting.
 
 ```bash
 python3 <skill>/scripts/hub.py token      # paste the output into [hub] token
