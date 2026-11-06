@@ -1,0 +1,17 @@
+{
+  "description": "Claude-only, named from .claude-plugin/plugin.json: check the agent's own tool calls against a research project's written rules. Log-only unless the user turns enforcement on (see README.md). Silent outside projects tagged research.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

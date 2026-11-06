@@ -8,6 +8,7 @@
     "url": "https://github.com/dansolombrino"
   },
   "repository": "https://github.com/dansolombrino/skills",
+  "hooks": "./hooks/guard-hooks.json",
   "keywords": [
     "research",
     "experiments",
