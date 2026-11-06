@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import io
+import os
 import subprocess
 import sys
 import tempfile
@@ -1933,6 +1934,176 @@ class OffloadTests(unittest.TestCase):
             rigsync.sync_cache(self.config, self.rig, "HF_HOME", "../escape", False, True)
         with self.assertRaisesRegex(rigsync.RigSyncError, "not a machine-level cache variable"):
             rigsync.sync_cache(self.config, self.rig, "PATH", "x", False, True)
+
+
+class MainCheckoutTests(unittest.TestCase):
+    """The real CLI, on a real project with a real session worktree and real wave worktrees."""
+
+    LIVE = "20260802-120000"
+    OTHER = "20260803-120000"
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name).resolve()
+        self.project = base / "proj"
+        self.registry = base / "machines.toml"
+        write(self.registry, f'[machines.hub]\nssh = "hub"\nhostname = "{rigsync.socket.gethostname()}"\n')
+        self.git("init", "-q", "-b", "main", str(self.project), cwd=base)
+        self.git("config", "user.name", "Test User")
+        self.git("config", "user.email", "test@example.com")
+        write(self.project / ".gitignore", "evaluations/\n.waves/\n.envs/\n.claude/\n")
+        write(
+            self.project / "sync.toml",
+            f"""
+            version = 1
+            [git]
+            remote = "origin"
+            branch = "main"
+            [artifacts.evaluations]
+            path = "evaluations"
+            depth = 2
+            [machines.hub]
+            repo_path = {str(self.project)!r}
+            """,
+        )
+        write(self.project / "uv.lock", "version = 1\n")
+        write(self.project / ".python-version", "3.11.9\n")
+        write(self.project / "pyproject.toml", '[project]\nname = "p"\n[tool.uv]\nrequired-version = "==0.7.16"\n')
+        self.git("add", ".")
+        self.git("commit", "-qm", "initial")
+        self.session = self.project / ".claude" / "worktrees" / "x"
+        self.git("worktree", "add", "-q", "-b", "session-x", str(self.session))
+        self.live_tree = self.project / ".waves" / self.LIVE
+        self.other_tree = self.project / ".waves" / self.OTHER
+        for tree in (self.live_tree, self.other_tree):
+            self.git("worktree", "add", "-q", "--detach", str(tree))
+        # A lane between runs: its tmux session is up, no run has a running status, and the
+        # supervisor's queue is unfinished.
+        self.lane = f"proj_000_exp_{self.LIVE}_hub_gpu0"
+        write(self.project / ".waves" / "_state" / self.LIVE / "queue.json", json.dumps({"runs": [], "finished_at": None}))
+        real_remote = rigsync.remote
+
+        def lane_up(machine, argv, **kwargs):
+            if argv[0] == "tmux":
+                return subprocess.CompletedProcess(argv, 0, f"{self.lane}\n".encode(), b"")
+            return real_remote(machine, argv, **kwargs)
+
+        patch = mock.patch.object(rigsync, "remote", side_effect=lane_up)
+        patch.start()
+        self.addCleanup(patch.stop)
+        previous = Path.cwd()
+        self.addCleanup(os.chdir, previous)
+
+    def git(self, *args: str, cwd: Path | None = None) -> None:
+        subprocess.run(["git", *args], cwd=cwd or self.project, check=True, capture_output=True)
+
+    def cli(self, cwd: Path, *argv: str) -> tuple[int, str, str]:
+        os.chdir(cwd)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = rigsync.main(["--registry", str(self.registry), *argv])
+        return code, out.getvalue(), err.getvalue()
+
+    def prune_live(self, cwd: Path) -> tuple[int, str, str]:
+        return self.cli(cwd, "prune", "--machines", "hub", "--waves", self.LIVE, "--confirm")
+
+    def test_prune_from_the_main_checkout_refuses_a_live_wave(self) -> None:
+        code, _out, err = self.prune_live(self.project)
+        self.assertEqual(code, 2, err)
+        self.assertTrue(self.live_tree.exists())
+
+    def test_prune_from_a_session_worktree_cannot_remove_a_live_wave(self) -> None:
+        code, _out, err = self.prune_live(self.session)
+        self.assertTrue(self.live_tree.exists(), f"live wave worktree removed; exit {code}, stderr {err!r}")
+        self.assertEqual(code, 2, err)
+        self.assertIn(f"main checkout, not the linked worktree {self.session}", err)
+        self.assertIn(f"--root {self.project}", err)
+
+    def test_prune_from_a_wave_worktree_cannot_remove_a_live_wave(self) -> None:
+        code, _out, err = self.prune_live(self.other_tree)
+        self.assertTrue(self.live_tree.exists(), f"live wave worktree removed; exit {code}, stderr {err!r}")
+        self.assertEqual(code, 2, err)
+        self.assertIn(f"--root {self.project}", err)
+
+    def test_an_explicit_worktree_root_is_refused_too(self) -> None:
+        code, _out, err = self.cli(self.project, "--root", str(self.session), "prune", "--machines", "hub", "--waves", self.LIVE, "--dry-run")
+        self.assertEqual(code, 2)
+        self.assertIn("main checkout", err)
+
+    def test_an_explicit_main_root_from_a_worktree_keeps_working(self) -> None:
+        # How the supervisor calls rig-sync: --root is the project, whatever the working directory.
+        argv = ("--root", str(self.project), "prune", "--machines", "hub", "--waves", self.OTHER, "--confirm")
+        self.lane = "unrelated"
+        code, out, err = self.cli(self.session, *argv)
+        self.assertEqual(code, 0, err)
+        self.assertIn("remove worktree", out)
+        self.assertEqual(err, "")
+        self.assertFalse(self.other_tree.exists())
+        code, _out, err = self.cli(self.session, "--root", str(self.project), "prune", "--machines", "hub", "--waves", self.LIVE, "--confirm")
+        self.assertEqual(code, 2)
+        self.assertIn("not finished", err)
+
+    def test_every_writing_command_refuses_from_a_linked_worktree(self) -> None:
+        wave, revision = self.OTHER, "a" * 40
+        commands = {
+            "push-env": ("--machine", "hub", "--dry-run"),
+            "provision-env": ("--dry-run",),
+            "push-source": ("--to", "hub", "--dry-run"),
+            "deploy-revision": ("--wave", wave, "--revision", revision, "--branch", "main", "--machines", "hub", "--dry-run"),
+            "prune": ("--machines", "hub", "--waves", wave, "--dry-run"),
+            "prepare": ("--machine", "hub", "--dry-run"),
+            "offload": ("--machine", "hub", "--wave", wave, "--dry-run"),
+            "collect": ("--wave", wave, "--dry-run"),
+            "restore": ("--machine", "hub", "--wave", wave, "--run", "r", "--dry-run"),
+            "sync-cache": ("--to", "hub", "--var", "HF_HOME", "--subpath", "x", "--dry-run"),
+            "push": ("evaluations", "--to", "hub", "--dry-run"),
+            "pull": ("evaluations", "--from", "hub", "--dry-run"),
+        }
+        parser_commands = set(next(a for a in rigsync.build_parser()._actions if a.dest == "command").choices)
+        self.assertEqual(parser_commands, set(commands) | rigsync.RESOLVING_COMMANDS, "new subcommand: decide how it treats a linked worktree")
+        for tree in (self.session, self.other_tree):
+            for command, rest in commands.items():
+                with self.subTest(command=command, tree=tree.name):
+                    code, out, err = self.cli(tree, command, *rest)
+                    self.assertEqual(code, 2, err)
+                    self.assertEqual(out, "")
+                    self.assertIn(f"{command} must run from the project's main checkout", err)
+                    self.assertIn(str(self.project), err)
+
+    def test_read_only_commands_resolve_to_the_main_checkout(self) -> None:
+        from_main = self.cli(self.project, "activity", "--machines", "hub")
+        self.assertEqual(from_main[0], 0, from_main[2])
+        self.assertIn(f"ACTIVE hub {self.LIVE}: tmux:{self.lane}", from_main[1])
+        for tree in (self.session, self.other_tree):
+            with self.subTest(tree=tree.name):
+                code, out, err = self.cli(tree, "activity", "--machines", "hub")
+                self.assertEqual(code, 0, err)
+                self.assertEqual(out, from_main[1])  # stdout stays parseable: the note goes to stderr
+                self.assertIn(f"using the main checkout {self.project}", err)
+
+    def test_repo_path_and_status_resolve_without_changing_stdout(self) -> None:
+        code, out, err = self.cli(self.other_tree, "repo-path", "--machine", "hub")
+        self.assertEqual((code, out), (0, f"{self.project}\n"), err)
+        write(self.project / "evaluations" / "000_exp" / "run" / "metrics.json", "{}")
+        code, out, err = self.cli(self.session, "status", "--group", "evaluations")
+        self.assertEqual(code, 0, err)
+        self.assertIn("000_exp/run", out)
+
+    def test_collect_check_resolves_and_finds_the_hub_queue(self) -> None:
+        # From the worktree the wave's queue is only under the main checkout: no "unknown wave" failure.
+        write(self.project / ".waves" / "_state" / self.LIVE / "queue.json", json.dumps({"runs": [], "pool": {}, "finished_at": None}))
+        results = [self.cli(cwd, "collect", "--check", "--wave", self.LIVE) for cwd in (self.project, self.session)]
+        self.assertEqual(results[0][0], 0, results[0][2])
+        self.assertEqual(results[1][:2], results[0][:2])
+        self.assertIn("using the main checkout", results[1][2])
+
+    def test_a_plain_or_non_git_root_is_not_a_linked_worktree(self) -> None:
+        self.assertIsNone(rigsync.linked_worktree_main(self.project))
+        self.assertIsNone(rigsync.linked_worktree_main(self.project / ".waves"))
+        self.assertIsNone(rigsync.linked_worktree_main(Path(self.tmp.name).resolve()))
+        self.assertEqual(rigsync.linked_worktree_main(self.session), self.project)
+        self.assertEqual(rigsync.linked_worktree_main(self.other_tree), self.project)
 
 
 if __name__ == "__main__":

@@ -15,6 +15,9 @@ and deployment never moves the main checkout.
 directory* — the folder holding the SKILL.md you are reading — not the research project, whose own
 `scripts/` holds shell wave scripts only.
 
+Run these from the project's main checkout: from a linked worktree (a session's or `.waves/<wave_id>`)
+read-only commands use the main checkout instead and every other command refuses, naming its path.
+
 ## Commands
 
 ```bash

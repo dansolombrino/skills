@@ -1185,9 +1185,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def use_main_checkout(args: argparse.Namespace) -> None:
+    """A linked worktree has no evaluations/ or `.waves/_state`: lookup resolves, migrate refuses."""
+    project = Path(args.project).resolve()
+    checkout = rigsync.linked_worktree_main(project)
+    if checkout is None:
+        return
+    if args.command != "lookup":
+        raise RunIdError(
+            f"migrate {args.migrate_command} must run from the project's main checkout, not the linked "
+            f"worktree {project}; pass --project {checkout}"
+        )
+    print(f"runid: {project} is a linked worktree; using the main checkout {checkout}", file=sys.stderr)
+    args.project = str(checkout)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        use_main_checkout(args)
         ctx = Context(args)
         if args.command == "lookup":
             return lookup(ctx, args.hash, args.where, args.json)

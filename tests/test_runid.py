@@ -536,6 +536,64 @@ name = "venv"
         self.assertEqual(manifest["status"], "failed-rolled-back")
         self.assertEqual(manifest["machines"]["rig"]["state"], "rolled-back")
 
+    # ---------------------------------------------------------------- linked worktrees
+
+    def make_worktree(self) -> Path:
+        """The hub as a Git checkout with a worktree that tracks sync.toml and config/, not evaluations/."""
+        def git(*args: str) -> None:
+            subprocess.run(["git", "-C", str(self.hub), *args], check=True, capture_output=True)
+
+        subprocess.run(["git", "init", "-q", "-b", "main", str(self.hub)], check=True)
+        git("config", "user.name", "Test User")
+        git("config", "user.email", "test@example.com")
+        write(self.hub / ".gitignore", "evaluations/\ncheckpoints/\nlogs/\nplots/\n.waves/\n.claude/\n")
+        git("add", ".")
+        git("commit", "-qm", "initial")
+        worktree = (self.hub / ".claude" / "worktrees" / "x").resolve()
+        git("worktree", "add", "-q", "-b", "session-x", str(worktree))
+        self.assertFalse((worktree / "evaluations").exists())
+        return worktree
+
+    def test_lookup_from_a_linked_worktree_finds_the_main_checkouts_runs(self) -> None:
+        target = self.runs[("cnn", 1)]
+        expected = self.cli("--experiment", EXP, "lookup", target, "--json")
+        self.assertEqual(expected[0], 0)
+        worktree = self.make_worktree()
+        code, out, err = runid_main("--project", str(worktree), "--registry", str(self.registry), "--experiment", EXP, "lookup", target, "--json")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out, expected[1])  # JSON on stdout stays clean: the note goes to stderr
+        self.assertIn(f"using the main checkout {self.hub.resolve()}", err)
+
+    def test_migrate_refuses_from_a_linked_worktree_naming_the_main_checkout(self) -> None:
+        worktree = self.make_worktree()
+        before = tree(self.hub / "evaluations")
+        for argv, name in (
+            (("migrate", "plan", "--add", "lr", "--reason", "x"), "plan"),
+            (("migrate", "apply", "--plan", "p.json", "--dry-run"), "apply"),
+            (("migrate", "rollback", "20260101-000000", "--confirm"), "rollback"),
+        ):
+            with self.subTest(name):
+                code, out, err = runid_main("--project", str(worktree), "--registry", str(self.registry), "--experiment", EXP, *argv)
+                self.assertEqual((code, out), (2, ""), err)
+                self.assertIn(f"migrate {name} must run from the project's main checkout", err)
+                self.assertIn(f"--project {self.hub.resolve()}", err)
+        self.assertEqual(tree(self.hub / "evaluations"), before)
+        self.assertFalse((worktree / "evaluations").exists())
+
+    def test_a_main_checkout_project_is_untouched_by_the_worktree_check(self) -> None:
+        self.make_worktree()
+        code, out, err = self.cli("--experiment", EXP, "lookup", self.runs[("cnn", 1)], "--json")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("linked worktree", err)
+        self.assertEqual(json.loads(out)["hash"], self.runs[("cnn", 1)])
+
+
+def runid_main(*argv: str) -> tuple[int, str, str]:
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = runid.main(list(argv))
+    return code, out.getvalue(), err.getvalue()
+
 
 if __name__ == "__main__":
     unittest.main()

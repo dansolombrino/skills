@@ -14,6 +14,8 @@ One skill tree serves both hosts. There is no per-host copy of a skill and no ge
 - Marketplace catalogs: `.agents/plugins/marketplace.json` (Codex) and
   `.claude-plugin/marketplace.json` (Claude).
 - Per-skill Codex metadata: `plugins/<plugin>/skills/<skill>/agents/openai.yaml`; Claude ignores it.
+- Plugin subagents: `plugins/<plugin>/agents/<name>.md`, Claude Code only. They add to a skill's
+  work and never replace it, so a host without them still has the full workflow.
 - Repo-local maintenance skills: `.agents/skills/<skill>/SKILL.md` is the canonical body;
   `.claude/skills/<skill>/SKILL.md` is a thin pointer to it. Never register either in the
   marketplace. Edit only the `.agents` copy; these are exempt from the host-neutral rule below.

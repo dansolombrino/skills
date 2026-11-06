@@ -729,17 +729,35 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def project_root(args: argparse.Namespace) -> Path:
+    """Same policy as rig-sync: a linked worktree's directory name is not the tmux prefix."""
+    root = args.root.resolve()
+    checkout = rigsync.linked_worktree_main(root)
+    if checkout is None:
+        return root
+    staged = getattr(args, "staged", False)
+    # --staged reads the index of the tree it runs in, so the main checkout would answer for another lock.
+    if args.command == "doctor" or (args.command == "verify" and not staged):
+        print(f"envsync: {root} is a linked worktree; using the main checkout {checkout}", file=sys.stderr)
+        return checkout
+    command = f"{args.command} --staged" if staged else args.command
+    raise EnvironmentSyncError(
+        f"{command} must run from the project's main checkout, not the linked worktree {root}; "
+        f"run it from {checkout} or pass --root {checkout}"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    root = args.root.resolve()
-    config_path = (
-        args.config or Path(os.environ.get("RIGSYNC_CONFIG", root / "sync.toml"))
-    ).resolve()
-    registry_path = (
-        args.registry
-        or Path(os.environ.get("RIGSYNC_REGISTRY", "~/.config/rigsync/machines.toml")).expanduser()
-    ).resolve()
     try:
+        root = project_root(args)
+        config_path = (
+            args.config or Path(os.environ.get("RIGSYNC_CONFIG", root / "sync.toml"))
+        ).resolve()
+        registry_path = (
+            args.registry
+            or Path(os.environ.get("RIGSYNC_REGISTRY", "~/.config/rigsync/machines.toml")).expanduser()
+        ).resolve()
         settings = load_environment_settings(root, config_path)
         config = rigsync.load_config(root, config_path, registry_path)
         if args.command == "doctor":

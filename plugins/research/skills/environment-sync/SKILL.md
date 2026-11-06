@@ -29,6 +29,9 @@ directory* — the folder holding the SKILL.md you are reading — not the resea
 Project facts: `../research-project-init/references/conventions.md`. A new environment key is
 additive and never touches one an active wave uses.
 
+Run these from the project's main checkout: from a linked worktree (a session's or `.waves/<wave_id>`)
+`doctor` and `verify --wave` use the main checkout instead; `provision` and `verify --staged` refuse, naming its path.
+
 ## Contract
 
 - Require committed `pyproject.toml`, `uv.lock`, `.python-version`, `sync.toml`, and

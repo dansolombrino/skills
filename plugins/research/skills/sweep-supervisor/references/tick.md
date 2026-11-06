@@ -41,7 +41,7 @@ a code problem.
 | `collect-failed` | read the problem. A transient ssh failure needs nothing: the next cycle retries. An identity mismatch (`.run_id.json`/`.run_config.json` differ between rig and hub) → `ask`, and never overwrite either copy |
 | `claim-refused` (lane `waiting for board`) | nothing to do: the lane is in the pool and starts the cycle its holder releases it. If the hold looks stale, `rig-board status --reconcile` evidence goes to the user, never a forced release |
 | one of our cards on a pool rig is free and not yet a lane | `lane add --rig <rig> --gpu <ids> --reason "<why>"`; the service runs the revision and environment gates before it starts the lane. A shared rig's card beyond ours needs the user's grant: `ask` |
-| `rig-down` while the printout shows the rig's SSH certificate expired | nothing to ask: the user already got the notice, and the service resumes the rig when it answers. `decide` what keeps running meanwhile |
+| `rig-down` while the printout shows the rig's SSH certificate expired | nothing to ask: the service already issued its notice and warning, and it resumes the rig when it answers. `decide` what keeps running meanwhile |
 
 ### Tail stealing
 
@@ -74,7 +74,7 @@ Anything outside the pool or the standing authorization:
 `SUP ask --text "<one decision, with the numbers>" --meanwhile "<what stays in force>"`. Then carry
 on with everything that does not depend on the answer. Never wait, never retry the question, and
 never treat silence as consent. Something the user should know but need not decide goes out with
-`SUP say --text "<one or two lines>"`, sparingly: it goes out through `notify_command`.
+`SUP say --text "<one or two lines>"`, sparingly: a watching chat gets it, and `notify_command` if declared.
 
 ## 5. Finish
 

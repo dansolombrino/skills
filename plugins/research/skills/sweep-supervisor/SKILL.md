@@ -1,6 +1,6 @@
 ---
 name: sweep-supervisor
-description: Supervise a dispatched Research 2.0 wave from the hub with no chat needed - a hub service feeds each GPU lane from one pull queue, relaunches lanes after a rig fault, offloads and collects, keeps the fleet board current, pushes notices to the user, and wakes a fresh unattended agent on every event that needs judgment (a failure, a stale heartbeat, an idle lane at the tail) to diagnose, move runs, fetch data, or ask without blocking; it then runs the follow-ups a wave leads to (plots and journal when it finishes, fix-and-redispatch of a deterministic engineering error). Use when a wave is running or about to be launched, when the user asks for a wave's status, ETA, or warnings, to follow a wave from a chat, to rebalance GPUs, to recover after a crash or reboot, to answer a supervisor question, or when woken as the unattended supervisor agent for a tick. Do not use to design, generate, or authorize a wave (sweep-dispatch), or for fleet-wide GPU occupancy across projects (rig-board).
+description: Supervise a dispatched Research 2.0 wave from the hub with no chat needed - a hub service feeds each GPU lane from one pull queue, relaunches lanes after a rig fault, offloads and collects, keeps the fleet board current, reports to a watching chat (and any `notify_command`), and wakes a fresh unattended agent on every event that needs judgment (a failure, a stale heartbeat, an idle lane at the tail) to diagnose, move runs, fetch data, or ask without blocking; it then runs the follow-ups a wave leads to (plots and journal when it finishes, fix-and-redispatch of a deterministic engineering error). Use when a wave is running or about to be launched, when the user asks for a wave's status, ETA, or warnings, to follow a wave from a chat, to rebalance GPUs, to recover after a crash or reboot, to answer a supervisor question, or when woken as the unattended supervisor agent for a tick. Do not use to design, generate, or authorize a wave (sweep-dispatch), or for fleet-wide GPU occupancy across projects (rig-board).
 ---
 
 # sweep-supervisor
@@ -20,11 +20,13 @@ so install them from the same plugin.
 ```bash
 # Absolute path to this skill's own scripts/supervisor.py; see "Resolving this skill's own files".
 SUPERVISOR=/absolute/path/to/sweep-supervisor/scripts/supervisor.py
-python3 "$SUPERVISOR" check                                   # agent profile, board root, cadence
+python3 "$SUPERVISOR" check                                   # agent profile, board root, cadence, notices
+python3 "$SUPERVISOR" check --service                         # and proves the hub service runs
 python3 "$SUPERVISOR" --root <project root> register --wave <wave_id> --manifest <file> --dry-run
 python3 "$SUPERVISOR" --root <project root> table --wave <wave_id>          # status: ETA, one line per rig, warnings
 python3 "$SUPERVISOR" --root <project root> table --wave <wave_id> --full   # the per-GPU table
-python3 "$SUPERVISOR" --root <project root> watch --wave <wave_id>          # returns on a new warning or the wave's end
+python3 "$SUPERVISOR" --root <project root> watch --wave <wave_id>          # returns on anything new or the wave's end
+python3 "$SUPERVISOR" --root <project root> watch --all                     # every live wave of the project
 python3 "$SUPERVISOR" --root <project root> ledger --wave <wave_id>         # what happened since the last tick
 python3 "$SUPERVISOR" --root <project root> answer --wave <wave_id> --id q1 --text "<the user's answer>"
 python3 "$SUPERVISOR" --root <project root> say --wave <wave_id> --text "<the agent's words to the user>"
@@ -45,7 +47,7 @@ python3 "$SUPERVISOR" followups                               # every follow-up,
 | evaluations | `rig-sync collect` from every pool rig to the hub | settle a `collect-failed` identity mismatch with the user | — |
 | tracking | fleet board claim/refresh/release, snapshot, status table | EXPERIMENTS.md (single writer during a wave), `decide` log, journal | status on request |
 | after the wave | `finish`: prune every machine, queue the `analyze` follow-up; run follow-ups one per project | queue a `fix` follow-up for a deterministic engineering error | — |
-| the user | push notices (`notify_command`): wave finished, failures, rig down, blocked lane, certificate expiring | `ask` without blocking; `say` | relay `answer` |
+| the user | notices through `notify_command`, if declared: wave finished, failures, rig down, blocked lane, certificate expiring | `ask` without blocking; `say` | relay `watch`; `answer` |
 
 The queue is ordered once by dispatch. A lane holds at most one run in flight plus one buffered,
 so a fast card simply takes more runs: a wrong initial estimate corrects itself, and an unstarted
@@ -72,10 +74,15 @@ episode). The scheduled tick (`tick_every`, default 30 minutes) is only a safety
   line per warning); `table --full` for the per-GPU table. Post it as printed. The rig-board
   viewer's **Experiments** tab shows every wave's progress.
 - **Following a wave:** after `register --confirm`, and when attaching to a live wave, run `watch
-  --wave <id>` through the host's background-command capability. It returns only on a warning not
-  announced yet, the wave's end, or after six hours; when it does, post its output (plus at most one
-  sentence) and run it again, until it says `wave finished`. On a host without background-command
-  completion notices, say once that status is on request and in the dashboard.
+  --wave <id>`, or one `watch --all` for every live wave of the project, through the host's
+  background-command capability. It returns only on something not told yet (a warning, a question, a
+  `say`, a follow-up report), the wave's end, or after six hours; when it does, post its output (plus
+  at most one sentence) and run it again, until it says `wave finished` (`--all`: `no live wave`).
+  What happened in between comes with the next run.
+  On a host without background-command completion notices, say once that status is on request and in
+  the dashboard.
+- **A resumed chat** has lost its background watches and runs them again; session-start context
+  names a live wave nothing follows.
 - **Fix rounds:** watch returns once on a wave's `fix` follow-up (`… fix follow-up <id> …`)
   and once on its new wave (`continuing as wave <id> (fix round <k>)`; watch it next);
   a fix dispatching nothing ends it with its report.
@@ -99,10 +106,10 @@ work requests that same profile.
 
 ## Without a chat
 
-- **Notices.** With `notify_command` declared, the service pushes one line for a finished wave,
-  failed runs, a rig down, a lane that cannot start, a cluster submission failure, every `ask` and
-  `say`, and every follow-up report — identical notices at most once an hour, across waves. Its
-  `{context}` names the wave and the agent session that wrote, and marks failed runs and a rig down
+- **Notices.** Only a declared `notify_command` pushes (`check` says); else they reach a chat running
+  `watch`. It gets one line for a finished wave, failed runs, a rig down, a lane that cannot start, a
+  cluster submission failure (identical ones at most hourly, across waves), every `ask`, `say` and
+  follow-up report; a failure is logged as `notify-failed`. Its `{context}` names the wave and the agent session that wrote, and marks failed runs and a rig down
   silent (the supervisor is on them).
 - **Certificates.** A rig's `ssh_cert` (a cluster login certificate, such as Leonardo's 12-hour
   one) is watched: a notice an hour before it expires and one when it does, and a `⚠` line. Renewal
@@ -133,8 +140,8 @@ so they outlive the wave, and one interrupted by a service restart runs again.
   round in one chain; a fix that would change the science or anything reserved for the user becomes
   an `ask`.
 
-Each follow-up ends with `followup-report --id <id> --text "<outcome and links>"`, recorded and
-pushed to the user; one that fails or ends without a report is pushed with its log path.
+Each follow-up ends with `followup-report --id <id> --text "<outcome and links>"`: recorded, told by
+`watch`, pushed if `notify_command` is declared; one that fails or ends with no report, with its log.
 
 ## Authority
 
@@ -160,7 +167,7 @@ enforces this and refuses otherwise; never work around a refusal with a hand-wri
 
 ## Stop conditions
 
-- `check` fails, the agent profile is undeclared, or the service is not running: a wave is not
+- `check --service` fails (agent profile undeclared, service not running): a wave is not
   launched (`sweep-dispatch` gate) and an attached chat says so instead of promising status.
 - A wave with no `.waves/_state/<wave_id>/queue.json` (launched before this contract) may be
   reconciled by `experiments-tracking`, never supervised or recovered here.

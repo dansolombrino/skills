@@ -35,8 +35,8 @@ Each gate names what enforces it; a failure stops the wave and is reported as is
    `rig-sync activity --machines <pool>` shows live lanes, statuses, and Slurm jobs per wave.
 5. **Rigs** — `rig-sync doctor` and `environment-sync doctor` pass for every pool rig; each rig's
    path and storage floor come from `rig-sync repo-path`/`storage-env`, never typed by hand.
-6. **Supervisor** — `sweep-supervisor check` passes: its hub service is active with a declared
-   agent profile. A wave nobody supervises is not launched.
+6. **Supervisor** — `sweep-supervisor check --service` passes: hub service running, agent profile
+   declared. A wave nobody supervises is not launched.
 
 ## Pool and queue
 

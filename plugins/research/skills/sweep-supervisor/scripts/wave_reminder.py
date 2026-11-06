@@ -7,6 +7,11 @@ Runs as a SessionStart hook on both hosts. Reads the hook payload on stdin, look
 
     Live wave <id> in this project: <done>/<total> done, ETA <clock>, <n> warnings. Dashboard: <url>.
 
+A wave with no fresh marker from a running `supervisor.py watch` (`watching.json` in its state
+directory: not expired and, on this machine, its pid alive) also gets the fact that no chat is
+following it and the exact command that does. Two or more such waves, with none followed, share one
+closing line naming `watch --all`.
+
 The numbers come from the supervisor's own `brief_view` of the wave's snapshot (the same data the
 printout and the rig-board viewer show); the dashboard is the rig-board viewer's Experiments tab,
 named only when the machine registry declares the viewer's port. Prints nothing for any other hook
@@ -22,7 +27,9 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import sys
+import time
 import tomllib
 from pathlib import Path
 
@@ -74,6 +81,26 @@ def dashboard_url() -> str | None:
     return f"http://{host}:{port}/#experiments"
 
 
+def followed(root: Path, wave_id: str) -> bool:
+    """Whether a running watch keeps this wave's marker fresh. Local files and this machine's pids only."""
+    try:
+        marker = json.loads((root / ".waves" / "_state" / wave_id / "watching.json").read_text())
+        if time.time() >= float(marker["until"]):
+            return False
+        if marker.get("host") == os.uname().nodename:
+            os.kill(int(marker["pid"]), 0)
+    except PermissionError:  # alive, under another user
+        return True
+    except (OSError, ValueError, KeyError, TypeError, OverflowError):
+        return False
+    return True
+
+
+def watch_command(root: Path, scope: str) -> str:
+    script = Path(__file__).resolve().with_name("supervisor.py")
+    return f"`python3 {shlex.quote(str(script))} --root {shlex.quote(str(root))} watch {scope}`"
+
+
 def load_supervisor():
     path = Path(__file__).resolve().with_name("supervisor.py")
     spec = importlib.util.spec_from_file_location("wave_reminder_supervisor", path)
@@ -106,6 +133,8 @@ def fact(root: Path, wave_id: str, queue: dict, sup, board_config, url: str | No
 
 
 def main() -> int:
+    if os.environ.get("SWEEP_SUPERVISOR_MODEL"):  # a supervisor agent: it owns the wave, and a watch from it would take a chat's notices
+        return 0
     try:
         payload = json.loads(sys.stdin.read() or "{}")
     except ValueError:
@@ -128,11 +157,18 @@ def main() -> int:
             board_config = None
     url = dashboard_url()
     lines = []
+    unfollowed = {wave_id for wave_id, _queue in waves if not followed(root, wave_id)}
+    together = len(unfollowed) >= 2 and len(unfollowed) == len(waves)
     for wave_id, queue in waves:
         try:
-            lines.append(fact(root, wave_id, queue, sup, board_config, url))
+            line = fact(root, wave_id, queue, sup, board_config, url)
         except Exception:
-            lines.append(fact(root, wave_id, queue, None, None, url))
+            line = fact(root, wave_id, queue, None, None, url)
+        if wave_id in unfollowed and not together:
+            line += f" No chat is following it; {watch_command(root, f'--wave {wave_id}')} follows it."
+        lines.append(line)
+    if together:
+        lines.append(f"No chat is following these waves; {watch_command(root, '--all')} follows them all.")
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "\n".join(lines)}}))
     return 0
 

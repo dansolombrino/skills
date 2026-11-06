@@ -19,7 +19,8 @@ to an older layout: [references/legacy-layouts.md](references/legacy-layouts.md)
 **Resolving this skill's own files.** `scripts/runid.py` means *this skill's installed directory*,
 not the research project. It loads `rig-sync` and `rig-board` by sibling path and pipes its
 worker `scripts/runid_agent.py` to every machine over the rig-sync transport, so a rig needs
-nothing installed.
+nothing installed. `<root>` is the project's main checkout: from a linked worktree `lookup` uses the
+main checkout instead and `migrate` refuses, naming its path.
 
 ```bash
 RUNID=/absolute/path/to/run-identity/scripts/runid.py

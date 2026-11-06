@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import os
 import subprocess
 import sys
 import tempfile
@@ -10,7 +11,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 
 
 ROOT = Path(__file__).parents[1]
@@ -540,6 +541,173 @@ class EnvironmentSyncTests(unittest.TestCase):
         ), mock.patch.object(envsync, "uv_version", return_value="0.11.32"), redirect_stdout(stream):
             envsync.doctor(self.settings(root), config, [cluster])
         self.assertIn("OK cluster: host=Linux/x86_64 libc=glibc; gpus=deferred to job; uv=0.11.32 (ready)", stream.getvalue())
+
+
+class MainCheckoutTests(unittest.TestCase):
+    """The real CLI on a real project with real linked worktrees; only uv, the venv and host probes are faked."""
+
+    LIVE = "20260802-120000"
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name).resolve()
+        self.project = base / "proj"
+        self.registry = base / "machines.toml"
+        self.uv_log = base / "uv.log"
+        write(self.registry, f'[machines.hub]\nssh = "hub"\nhostname = "{envsync.rigsync.socket.gethostname()}"\n')
+        self.git("init", "-q", "-b", "main", str(self.project), cwd=base)
+        self.git("config", "user.name", "Test User")
+        self.git("config", "user.email", "test@example.com")
+        write(self.project / ".gitignore", ".waves/\n.envs/\n.rigsync_cache/\n.claude/\nevaluations/\n")
+        write(
+            self.project / "sync.toml",
+            f"""
+            version = 1
+            [git]
+            remote = "origin"
+            branch = "main"
+            [environment]
+            manager = "uv"
+            name = ".venv"
+            gpu_smoke = ["python", "code/common/environment_smoke.py"]
+            [artifacts.evaluations]
+            path = "evaluations"
+            depth = 2
+            [machines.hub]
+            repo_path = {str(self.project)!r}
+            """,
+        )
+        write(self.project / "pyproject.toml", '[project]\nname = "p"\n[tool.uv]\nrequired-version = "==0.11.32"\n')
+        write(self.project / ".python-version", "3.12.11\n")
+        write(self.project / "uv.lock", "version = 1\n")
+        write(self.project / "code/common/environment.py", "print('helper')\n")
+        write(self.project / "code/common/environment_smoke.py", "print('gpu ok')\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "initial")
+        self.revision = subprocess.run(["git", "-C", str(self.project), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+        self.session = self.project / ".claude" / "worktrees" / "x"
+        self.git("worktree", "add", "-q", "-b", "session-x", str(self.session))
+        self.wave_tree = self.project / ".waves" / self.LIVE
+        self.git("worktree", "add", "-q", "--detach", str(self.wave_tree))
+        self.key = envsync.rigsync.env_key_for_revision(self.project, self.revision)
+        self.fake_tools()
+        # A lane between runs: only its tmux session shows the environment is in use.
+        self.lane = f"proj_000_exp_{self.LIVE}_hub_gpu0"
+        real_remote = envsync.rigsync.remote
+
+        def fake_host(machine, argv, **kwargs):
+            if argv[0] == "tmux":
+                return subprocess.CompletedProcess(argv, 0, f"{self.lane}\n".encode(), b"")
+            if argv[0] == "nvidia-smi":
+                return subprocess.CompletedProcess(argv, 0, b"GPU, 1\n", b"")
+            return real_remote(machine, argv, **kwargs)
+
+        patch = mock.patch.object(envsync.rigsync, "remote", side_effect=fake_host)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.addCleanup(os.chdir, Path.cwd())
+
+    def git(self, *args: str, cwd: Path | None = None) -> None:
+        subprocess.run(["git", *args], cwd=cwd or self.project, check=True, capture_output=True)
+
+    def fake_tools(self) -> None:
+        uv = self.project / ".rigsync_cache/tools/uv/0.11.32/uv"
+        python = self.project / ".envs" / self.key / "bin/python"
+        write(uv, f'#!/bin/sh\nif [ "$1" = --version ]; then echo "uv 0.11.32"; else echo "$*" >> "{self.uv_log}"; fi\n')
+        write(python, f"#!/bin/sh\necho {'a' * 64}\n")
+        uv.chmod(0o755)
+        python.chmod(0o755)
+
+    def cli(self, cwd: Path, *argv: str) -> tuple[int, str, str]:
+        os.chdir(cwd)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = envsync.main(["--registry", str(self.registry), *argv])
+        return code, out.getvalue(), err.getvalue()
+
+    def wave_args(self) -> tuple[str, ...]:
+        return ("--wave", self.LIVE, "--revision", self.revision, "--machines", "hub")
+
+    def real_syncs(self) -> list[str]:
+        if not self.uv_log.exists():
+            return []
+        return [line for line in self.uv_log.read_text().splitlines() if line.startswith("sync") and "--dry-run" not in line]
+
+    def test_provision_from_the_main_checkout_refuses_a_live_lanes_environment(self) -> None:
+        code, _out, err = self.cli(self.project, "provision", *self.wave_args(), "--confirm")
+        self.assertEqual(code, 2, err)
+        self.assertIn("active work blocks environment mutation", err)
+        self.assertEqual(self.real_syncs(), [])
+
+    def test_provision_from_a_linked_worktree_cannot_touch_a_live_lanes_environment(self) -> None:
+        for tree in (self.session, self.wave_tree):
+            with self.subTest(tree=tree.name):
+                code, _out, err = self.cli(tree, "provision", *self.wave_args(), "--confirm")
+                self.assertEqual(self.real_syncs(), [], f"live environment re-synced; exit {code}, stderr {err!r}")
+                self.assertEqual(code, 2, err)
+                self.assertIn(f"provision must run from the project's main checkout, not the linked worktree {tree}", err)
+                self.assertIn(f"--root {self.project}", err)
+
+    def test_an_explicit_worktree_root_is_refused_too(self) -> None:
+        code, out, err = self.cli(self.project, "--root", str(self.session), "provision", *self.wave_args(), "--dry-run")
+        self.assertEqual((code, out), (2, ""), err)
+        self.assertIn("main checkout", err)
+
+    def test_every_writing_form_refuses_from_a_linked_worktree(self) -> None:
+        forms = {
+            "provision --wave dry run": ("provision", *self.wave_args(), "--dry-run"),
+            "provision --staged": ("provision", "--staged", "--machines", "hub", "--dry-run"),
+            "verify --staged": ("verify", "--staged", "--machines", "hub"),
+        }
+        for label, argv in forms.items():
+            with self.subTest(label):
+                code, out, err = self.cli(self.session, *argv)
+                self.assertEqual((code, out), (2, ""), err)
+                self.assertIn(f"--root {self.project}", err)
+
+    def test_verify_staged_cannot_report_another_trees_lock(self) -> None:
+        # The worktree staged a new lock; resolving would print the main checkout's key as if it were this one.
+        write(self.session / "uv.lock", "version = 1\n# changed\n")
+        self.git("add", "uv.lock", cwd=self.session)
+        code, out, err = self.cli(self.session, "verify", "--staged", "--machines", "hub")
+        self.assertEqual((code, out), (2, ""), err)
+        self.assertIn("verify --staged must run from the project's main checkout", err)
+
+    def test_verify_resolves_to_the_main_checkout_with_the_same_stdout(self) -> None:
+        argv = ("verify", *self.wave_args(), "--lane", "hub:0")
+        from_main = self.cli(self.project, *argv)
+        self.assertEqual(from_main[0], 0, from_main[2])
+        self.assertIn(f"ENVIRONMENT_KEY={self.key}", from_main[1])
+        self.assertEqual(from_main[2], "")
+        for tree in (self.session, self.wave_tree):
+            with self.subTest(tree=tree.name):
+                code, out, err = self.cli(tree, *argv)
+                self.assertEqual((code, out), (0, from_main[1]), err)
+                self.assertIn(f"using the main checkout {self.project}", err)
+
+    def test_doctor_resolves_to_the_main_checkout(self) -> None:
+        seen = []
+        with mock.patch.object(envsync.rigsync, "doctor", side_effect=lambda config, machines: seen.append(config.root)):
+            code, out, err = self.cli(self.session, "doctor", "--machines", "hub")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(seen, [self.project])
+        self.assertIn("OK hub", out)
+        self.assertIn(f"using the main checkout {self.project}", err)
+
+    def test_the_supervisors_verify_call_works_from_anywhere(self) -> None:
+        # sweep-supervisor's verify_lane: --root is the project, whatever the working directory.
+        argv = ("--root", str(self.project), "verify", *self.wave_args(), "--lane", "hub:0")
+        for cwd in (self.project, self.session, self.wave_tree):
+            with self.subTest(cwd=cwd.name):
+                code, out, err = self.cli(cwd, *argv)
+                self.assertEqual((code, err), (0, ""))
+                self.assertIn("OK hub: GPU smoke passed on 0", out)
+
+    def test_every_subcommand_has_a_decision(self) -> None:
+        # New subcommand: decide how it treats a linked worktree, and add it to these tests.
+        parser_commands = set(next(a for a in envsync.build_parser()._actions if a.dest == "command").choices)
+        self.assertEqual(parser_commands, {"doctor", "provision", "verify"})
 
 
 if __name__ == "__main__":

@@ -1188,6 +1188,472 @@ class SupervisorTests(unittest.TestCase):
         self.assertIn("not registered", err)
         self.assertEqual(self.cli("watch", "--wave", WAVE, "--poll", "0")[0], 2)
 
+    # ── what else watch tells, once ──
+
+    def watch_all(self, timeout: str = "0") -> str:
+        code, out, err = self.cli("watch", "--all", "--poll", "1", "--timeout", timeout)
+        self.assertEqual(code, 0, err)
+        return out
+
+    def second_wave(self) -> None:
+        code, _out, err = self.cli("register", "--wave", FIX_WAVE, "--confirm", "--manifest", str(self.manifest(wave_id=FIX_WAVE)))
+        self.assertEqual(code, 0, err)
+
+    def test_watch_tells_a_say_once_even_from_the_gap_between_watches(self) -> None:
+        self.register()
+        self.snap()
+        self.assertTrue(self.watch().startswith("watch: timeout"))
+        self.cli("say", "--wave", WAVE, "--text", "moved m3 to the 4090")  # nobody is watching
+        out = self.watch()
+        self.assertTrue(out.startswith("watch: say: moved m3 to the 4090\n"), out)
+        self.assertIn("Status written ", out)
+        self.assertTrue(self.watch().startswith("watch: timeout"), "re-arming repeats nothing")
+
+        def later(_seconds: float) -> None:
+            self.cli("say", "--wave", WAVE, "--text", "and m4")
+
+        with mock.patch.object(supervisor.time, "sleep", side_effect=later):
+            self.assertTrue(self.watch(timeout="3600").startswith("watch: say: and m4\n"))
+
+    def test_watch_tells_a_question_at_once_without_waiting_for_a_snapshot(self) -> None:
+        self.register()
+        self.snap()
+        self.cli("ask", "--wave", WAVE, "--text", "use gpu 5?", "--meanwhile", "unused")
+        self.assertTrue(self.watch().startswith("watch: new ⚠ needs you [q1] use gpu 5? — meanwhile: unused\n"))
+        self.assertTrue(self.watch().startswith("watch: timeout"))
+        self.snap(questions=[{"id": "q1", "text": "use gpu 5?", "meanwhile": "unused", "status": "open"}])
+        self.assertTrue(self.watch().startswith("watch: timeout"), "the snapshot naming it later is the same question")
+
+    def test_watch_tells_every_kind_of_follow_up_report_once(self) -> None:
+        self.register()
+        self.snap()
+        board_config = board.load_config(self.registry)
+        wave = supervisor.Wave(self.hub, WAVE)
+        for kind in ("analyze", "fix"):
+            with self.subTest(kind):
+                record = supervisor.enqueue_followup(board_config, wave, self.queue(), kind, "x")
+                self.assertTrue(self.watch().startswith("watch: timeout"), "queued, no report yet")
+                self.assertEqual(self.cli("followup-report", "--id", record["id"], "--text", "plots at http://x/1\nand http://x/2")[0], 0)
+                out = self.watch()
+                self.assertTrue(out.startswith(f"watch: follow-up {kind} {record['id']} report: plots at http://x/1\nand http://x/2\n"), out)
+                self.assertTrue(self.watch().startswith("watch: timeout"))
+
+    def test_a_finished_wave_stays_open_until_its_analyze_report_is_told(self) -> None:
+        self.register()
+        board_config = board.load_config(self.registry)
+        wave = supervisor.Wave(self.hub, WAVE)
+        with supervisor.WaveLock(wave):
+            queue = self.queue()
+            for run in queue["runs"]:
+                run["state"] = "done"
+            wave.save(queue)
+        self.snap(finished_at=supervisor.iso(supervisor.now()))
+        out = self.watch()
+        self.assertTrue(out.startswith(f"watch: wave {WAVE} ended: 5 done, 0 failed; its closing tick is still running; "), out)
+        self.assertTrue(self.watch().startswith("watch: timeout"), "the end is told once")
+        record = supervisor.enqueue_followup(board_config, wave, self.queue(), "analyze", "5 done")
+        self.closing_tick()
+        self.assertTrue(self.watch().startswith("watch: timeout"), "the report is awaited in silence")
+        path, _ = supervisor.find_followup(board_config, record["id"])
+        board.write_json(path, {**record, "status": "running", "report": "the plots"})
+        self.assertTrue(self.watch().startswith(f"watch: follow-up analyze {record['id']} report: the plots\n"))
+        board.write_json(path, {**record, "status": "done", "outcome": "exit 0", "report": "the plots"})
+        self.assertTrue(self.watch().startswith("watch: wave finished"))
+
+    def test_a_finish_still_pruning_is_not_the_end_of_the_wave(self) -> None:
+        """`finish` drops the pointer, prunes, and only then queues `analyze`."""
+        self.register()
+        board_config = board.load_config(self.registry)
+        wave = supervisor.Wave(self.hub, WAVE)
+        self.snap(finished_at=supervisor.iso(supervisor.now()))
+        queue = self.queue()
+        supervisor.index_path(board_config, queue["project"], WAVE).unlink()
+        wave.log("finish", abandoned=False)
+        self.assertTrue(self.watch().startswith("watch: timeout"))
+        wave.log("finish-closed")
+        self.assertTrue(self.watch().startswith("watch: wave finished"))
+
+    def test_watch_tells_a_failed_analyze_after_the_wave_ended(self) -> None:
+        self.register()
+        board_config = board.load_config(self.registry)
+        wave = supervisor.Wave(self.hub, WAVE)
+        self.snap(finished_at=supervisor.iso(supervisor.now()))
+        self.closing_tick()
+        record = supervisor.enqueue_followup(board_config, wave, self.queue(), "analyze", "x")
+        self.assertIn(f"analyze follow-up {record['id']} queued; run watch again for its report", self.watch())
+        path, _ = supervisor.find_followup(board_config, record["id"])
+        board.write_json(path, {**record, "status": "failed", "outcome": "exit 1", "log": "/tmp/f.log"})
+        self.assertEqual(self.watch().splitlines()[:2], ["watch: new ⚠ follow-up analyze exit 1 without a report; log /tmp/f.log", "watch: wave finished"])
+
+    def test_watch_tells_events_the_snapshot_never_shows_or_that_cleared_in_the_gap(self) -> None:
+        self.register()
+        wave = supervisor.Wave(self.hub, WAVE)
+        self.snap()
+        self.assertTrue(self.watch().startswith("watch: timeout"))
+        cases = [
+            ("submit-failed", dict(rig="cluster", run="model=m0", problem="sbatch: quota"), "submission to cluster failed: "),
+            ("rig-down", dict(rig="cluster", since=supervisor.iso(supervisor.now())), "cluster unreachable since "),
+            ("run-failed", dict(run="model=m1", rig="hub", gpu="0", rc=1), "failed: `model=m1` on hub gpu0 (exit 1)"),
+            ("job-failed", dict(run="model=m2", slurm_state="FAILED", exit="1:0"), "failed: `model=m2` (FAILED)"),
+            ("recovery-blocked", dict(rig="peer", gpu="0", problem="env drift"), "peer gpu0 cannot start: env drift"),
+            ("cert-expiring", dict(rig="cluster", expires_at=supervisor.iso(supervisor.now())), "cluster: SSH certificate expires"),
+            ("cert-expired", dict(rig="cluster", expired_at=supervisor.iso(supervisor.now())), "cluster: SSH certificate expired"),
+        ]
+        for event, fields, line in cases:
+            with self.subTest(event):
+                wave.log(event, **fields)
+                self.snap()  # the cycle that logged it writes its snapshot after; nothing stands in it now
+                self.assertIn(f"watch: new ⚠ {line}", self.watch())
+                self.assertTrue(self.watch().startswith("watch: timeout"))
+
+    def test_an_event_waits_for_its_snapshot_and_a_standing_warning_tells_it_only_once(self) -> None:
+        self.register()
+        wave = supervisor.Wave(self.hub, WAVE)
+        self.snap(written_ago_s=30)
+        wave.log("rig-down", rig="peer", since=supervisor.iso(supervisor.now()))
+        self.assertTrue(self.watch().startswith("watch: timeout"), "its cycle has not written the snapshot yet")
+        self.snap(lanes=[self.row("peer", "rig down", problem="down since 09:00")])
+        out = self.watch()
+        self.assertIn("watch: new ⚠ peer gpu0: down since 09:00", out)
+        self.assertNotIn("unreachable", out)
+        self.snap()
+        self.assertTrue(self.watch().startswith("watch: timeout"))
+
+    def test_an_event_repeating_every_cycle_is_told_once_not_every_minute(self) -> None:
+        self.register()
+        wave = supervisor.Wave(self.hub, WAVE)
+        self.snap()
+        self.watch()
+        for _ in range(3):
+            wave.log("submit-failed", rig="cluster", run="model=m0", problem="quota")
+        self.snap()
+        self.assertEqual(self.watch().count("submission to cluster failed"), 1)
+        wave.log("submit-failed", rig="cluster", run="model=m1", problem="quota")
+        self.snap()
+        self.assertTrue(self.watch().startswith("watch: timeout"), "the same notice within the hour")
+
+    def test_a_chat_attaching_late_gets_the_newest_notices_and_a_pointer_to_the_rest(self) -> None:
+        self.register()
+        for index in range(25):
+            self.cli("say", "--wave", WAVE, "--text", f"note {index}")
+        self.snap()
+        lines = self.watch().splitlines()
+        self.assertIn("… and 5 earlier notices; `ledger --wave", lines[0])
+        self.assertEqual((lines[1], lines[20]), ("watch: say: note 5", "watch: say: note 24"))
+
+    def test_a_watch_on_a_fix_round_still_hears_the_old_wave(self) -> None:
+        self.register()
+        board_config = board.load_config(self.registry)
+        code, _out, err = self.cli("register", "--wave", FIX_WAVE, "--confirm", "--manifest", str(self.manifest(wave_id=FIX_WAVE, fix_depth=1, fixes_wave=WAVE)))
+        self.assertEqual(code, 0, err)
+        self.snap(wave=FIX_WAVE)
+        record = supervisor.enqueue_followup(board_config, supervisor.Wave(self.hub, WAVE), self.queue(), "fix", "x")
+        self.cli("followup-report", "--id", record["id"], "--text", "dispatched the new wave")
+        self.cli("say", "--wave", WAVE, "--text", "last words")
+        out = self.watch(wave=FIX_WAVE)
+        self.assertIn("watch: say: last words", out)
+        self.assertIn("report: dispatched the new wave", out)
+        self.assertTrue(self.watch(wave=FIX_WAVE).startswith("watch: timeout"))
+
+    # ── one watch for a project ──
+
+    def test_watch_needs_a_wave_or_all_and_not_both(self) -> None:
+        for argv in (("watch",), ("watch", "--all", "--wave", WAVE)):
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                self.cli(*argv)
+
+    def test_watch_from_a_linked_worktree_follows_the_main_checkout(self) -> None:
+        self.register()
+        self.snap()
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(self.hub)]
+        subprocess.run(["git", "init", "-q", str(self.hub)], check=True)
+        subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "first"], check=True)
+        tree = self.base / "session-tree"
+        subprocess.run([*git, "worktree", "add", "-q", "-b", "session", str(tree)], check=True)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = supervisor.main(["--root", str(tree), "--registry", str(self.registry), "watch", "--all", "--poll", "1", "--timeout", "0"])
+        self.assertEqual(code, 0)
+        self.assertTrue(out.getvalue().startswith(f"watch: timeout, nothing new in {WAVE}"), out.getvalue())
+
+    def test_watch_all_names_the_wave_of_each_new_thing(self) -> None:
+        self.register()
+        self.second_wave()
+        self.snap()
+        self.snap(wave=FIX_WAVE)
+        out = self.watch_all()
+        self.assertTrue(out.startswith(f"watch: timeout, nothing new in {WAVE}, {FIX_WAVE}; run watch --all again\n"), out)
+        self.assertIn(f"\nwave {WAVE}:\n", out)
+        self.cli("say", "--wave", FIX_WAVE, "--text", "hello")
+        self.snap(wave=FIX_WAVE, failed=[{"run": "model=m3", "note": None}])
+        out = self.watch_all()
+        self.assertTrue(out.startswith(f"watch: wave {FIX_WAVE}: new ⚠ failed: `model=m3`\nwatch: wave {FIX_WAVE}: say: hello\n"), out)
+        self.assertNotIn(f"wave {WAVE}:", out)
+        self.assertTrue(self.watch_all().startswith("watch: timeout"))
+        self.assertTrue(self.watch(wave=FIX_WAVE).startswith("watch: timeout"), "--all and --wave share what was told")
+
+    def test_watch_all_picks_up_a_wave_that_appears_while_it_runs(self) -> None:
+        self.register()
+        self.snap()
+
+        def later(_seconds: float) -> None:
+            self.second_wave()
+            self.cli("say", "--wave", FIX_WAVE, "--text", "new wave here")
+
+        with mock.patch.object(supervisor.time, "sleep", side_effect=later):
+            out = self.watch_all(timeout="3600")
+        self.assertTrue(out.startswith(f"watch: wave {FIX_WAVE}: say: new wave here\n"), out)
+
+    def test_watch_all_ends_only_when_no_live_wave_remains(self) -> None:
+        self.assertTrue(self.watch_all().startswith("watch: no live wave in "), "nothing registered")
+        self.register()
+        self.second_wave()
+        self.snap()
+        self.snap(wave=FIX_WAVE)
+        self.watch_all()
+        self.snap(finished_at=supervisor.iso(supervisor.now()))
+        self.closing_tick()
+        self.assertEqual(self.watch_all().splitlines()[0], f"watch: wave {WAVE}: wave finished")
+        out = self.watch_all()
+        self.assertTrue(out.startswith("watch: timeout"), "the other wave is still live; the finished one is told once")
+        self.assertNotIn(f"wave {WAVE}:", out)
+        self.snap(wave=FIX_WAVE, finished_at=supervisor.iso(supervisor.now()))
+        self.closing_tick(FIX_WAVE)
+        self.assertEqual(self.watch_all().splitlines()[0], f"watch: wave {FIX_WAVE}: wave finished")
+        self.assertEqual(self.watch_all(), f"watch: no live wave in {self.hub.resolve()}; nothing left to follow\n")
+
+    def test_watch_all_ignores_old_waves_but_tells_one_it_followed_that_ended_in_the_gap(self) -> None:
+        self.register()
+        board_config = board.load_config(self.registry)
+        queue = self.queue()
+        self.snap()
+        self.watch_all()  # followed from here on; then it ends, finished and all, with nobody watching
+        wave = supervisor.Wave(self.hub, WAVE)
+        with supervisor.WaveLock(wave):
+            queue["finished_at"] = supervisor.iso(supervisor.now())
+            wave.save(queue)
+        supervisor.index_path(board_config, queue["project"], WAVE).unlink()
+        self.cli("say", "--wave", WAVE, "--text", "last words")
+        out = self.watch_all()
+        self.assertEqual(out.splitlines()[:2], [f"watch: wave {WAVE}: say: last words", f"watch: wave {WAVE}: wave finished"])
+        self.assertTrue(self.watch_all().startswith("watch: no live wave"))
+        # the same end on a wave no new watch ever followed is history
+        (wave.dir / "watch.json").unlink()
+        self.assertTrue(self.watch_all().startswith("watch: no live wave"))
+
+    def test_watch_all_follows_a_fix_round_and_drops_the_old_wave(self) -> None:
+        self.register()
+        self.snap(failed=[{"run": "model=m0", "note": None}], finished_at=supervisor.iso(supervisor.now()))
+        self.closing_tick()
+        code, _out, err = self.cli("register", "--wave", FIX_WAVE, "--confirm", "--manifest", str(self.manifest(wave_id=FIX_WAVE, fix_depth=1, fixes_wave=WAVE)))
+        self.assertEqual(code, 0, err)
+        self.snap(wave=FIX_WAVE)
+        self.assertEqual(self.watch_all().splitlines()[:2], [
+            f"watch: wave {WAVE}: new ⚠ failed: `model=m0`",
+            f"watch: wave {FIX_WAVE}: continuing as wave {FIX_WAVE} (fix round 1)",
+        ])
+        out = self.watch_all()
+        self.assertTrue(out.startswith(f"watch: timeout, nothing new in {FIX_WAVE}; "), out)
+        self.cli("say", "--wave", FIX_WAVE, "--text", "round one")
+        self.assertEqual(self.watch_all().splitlines()[0], f"watch: wave {FIX_WAVE}: say: round one")
+
+    # ── a running watch's marker ──
+
+    def test_a_running_watch_keeps_a_fresh_marker_and_withdraws_it(self) -> None:
+        self.register()
+        self.snap()
+        wave = supervisor.Wave(self.hub, WAVE)
+        seen: list[dict] = []
+        spot_check: list[float] = []  # when the marker was read
+
+        def later(_seconds: float) -> None:
+            seen.append(json.loads(wave.watching_path.read_text()))
+            spot_check.append(supervisor.time.time())
+            self.cli("say", "--wave", WAVE, "--text", "done")
+
+        with mock.patch.object(supervisor.time, "sleep", side_effect=later):
+            self.watch(timeout="3600")
+        self.assertEqual(seen[0]["pid"], os.getpid())
+        self.assertGreater(seen[0]["until"], spot_check[0] + 60)
+        self.assertFalse(wave.watching_path.exists(), "a watch that returned follows nothing")
+        board.write_json(wave.watching_path, {"pid": os.getpid() + 1, "until": 9e12})
+        supervisor.unmark_watching(wave)
+        self.assertTrue(wave.watching_path.exists(), "another running watch's marker stays")
+
+    def test_watch_all_marks_every_wave_it_follows(self) -> None:
+        self.register()
+        self.second_wave()
+        self.snap()
+        self.snap(wave=FIX_WAVE)
+        paths = [supervisor.Wave(self.hub, wave).watching_path for wave in (WAVE, FIX_WAVE)]
+        seen: list[list[bool]] = []
+
+        def later(_seconds: float) -> None:
+            seen.append([path.exists() for path in paths])
+            self.cli("say", "--wave", WAVE, "--text", "x")
+
+        with mock.patch.object(supervisor.time, "sleep", side_effect=later):
+            self.watch_all(timeout="3600")
+        self.assertEqual(seen, [[True, True]])
+        self.assertEqual([path.exists() for path in paths], [False, False])
+
+    # ── honest about where a notice went ──
+
+    def failing_notify_registry(self, command: str = '["sh", "-c", "echo sink is down >&2; exit 3", "{text}"]') -> None:
+        self.registry.write_text(self.registry.read_text().replace("cycle_every = 60", f"cycle_every = 60\nnotify_command = {command}"))
+
+    def test_with_no_sink_check_is_ok_and_ask_and_say_do_not_claim_sent(self) -> None:
+        code, out, err = self.cli("check")
+        self.assertEqual(code, 0, err)
+        self.assertIn("OK notices: none declared; ", out)
+        self.register()
+        code, out, _err = self.cli("ask", "--wave", WAVE, "--text", "q?", "--meanwhile", "m")
+        self.assertEqual(code, 0)
+        self.assertIn("[ask] recorded, not pushed: no notify_command is declared", out)
+        self.assertNotIn("sent", out)
+        code, out, _err = self.cli("say", "--wave", WAVE, "--text", "hello")
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "[say] recorded, not pushed: no notify_command is declared\n")
+
+    def test_with_a_sink_check_names_only_its_program_and_notices_say_sent(self) -> None:
+        self.notice_registry()
+        _code, out, _err = self.cli("check")
+        self.assertIn("OK notices: notify_command declared (sh)\n", out)
+        self.assertNotIn("printf", out)
+        self.register()
+        self.assertIn("[ask] sent", self.cli("ask", "--wave", WAVE, "--text", "q?", "--meanwhile", "m")[1])
+        self.assertEqual(self.cli("say", "--wave", WAVE, "--text", "hello")[1], "[say] sent\n")
+
+    def test_a_failed_notify_command_is_logged_and_reported_not_claimed_sent(self) -> None:
+        self.failing_notify_registry()
+        self.register()
+        wave = supervisor.Wave(self.hub, WAVE)
+        code, out, _err = self.cli("say", "--wave", WAVE, "--text", "hello")
+        self.assertEqual(code, 0, "the words are recorded; a dead sink stops nothing")
+        self.assertEqual(out, "[say] recorded, not pushed: notify_command failed: exit 3: sink is down\n")
+        self.assertIn("failed: exit 3", self.cli("ask", "--wave", WAVE, "--text", "q?", "--meanwhile", "m")[1])
+        failures = self.events("notify-failed")
+        self.assertEqual([record["kind"] for record in failures], ["say", "ask"])
+        self.assertEqual(failures[0]["problem"], "exit 3: sink is down")
+        self.assertEqual(len(wave.questions()), 1)
+
+    def test_a_notify_command_that_cannot_run_or_hangs_is_a_failure_too(self) -> None:
+        self.failing_notify_registry('["/nonexistent/sink", "{text}"]')
+        self.register()
+        self.assertIn("could not run", self.cli("say", "--wave", WAVE, "--text", "hello")[1])
+        settings = supervisor.load_settings(self.registry)
+        with mock.patch.object(supervisor.subprocess, "run", side_effect=subprocess.TimeoutExpired("x", 30)):
+            self.assertEqual(supervisor.notify(settings, "t"), "failed: timed out after 30s")
+
+    def test_a_failed_event_notice_is_logged_and_tried_again_at_the_next_occurrence(self) -> None:
+        self.failing_notify_registry()
+        self.register()
+        settings = supervisor.load_settings(self.registry)
+        wave = supervisor.Wave(self.hub, WAVE)
+        sent: dict = {}
+        blocked = {"event": "recovery-blocked", "rig": "peer", "gpu": "0", "problem": "env drift"}
+        supervisor.notify_events(wave, settings, [blocked], sent)
+        self.assertEqual(sent, {})
+        supervisor.notify_events(wave, settings, [blocked], sent)
+        self.assertEqual(len(self.events("notify-failed")), 2)
+
+    def test_a_follow_up_report_says_where_it_went(self) -> None:
+        self.failing_notify_registry()
+        self.register()
+        board_config = board.load_config(self.registry)
+        record = supervisor.enqueue_followup(board_config, supervisor.Wave(self.hub, WAVE), self.queue(), "analyze", "x")
+        code, out, _err = self.cli("followup-report", "--id", record["id"], "--text", "plots")
+        self.assertEqual(code, 0)
+        self.assertIn(f"[followup-report] {record['id']}: recorded\n[followup-report] recorded, not pushed: notify_command failed: exit 3", out)
+        self.assertEqual(self.events("notify-failed")[0]["kind"], "followup-report")
+
+    # ── check proves the service only when asked ──
+
+    def fake_systemctl(self, state: str, rc: int) -> None:
+        write(self.bin / "systemctl", f'#!/bin/sh\necho "$*" >> "{self.base / "systemctl.log"}"\necho {state}\nexit {rc}\n', executable=True)
+
+    def heartbeat(self, **fields) -> None:
+        beat = {"at": supervisor.iso(supervisor.now()), "pid": os.getpid(), "host": os.uname().nodename, **fields}
+        board.write_json(supervisor.heartbeat_path(board.load_config(self.registry)), beat)
+
+    def test_check_service_fails_clearly_with_the_service_down(self) -> None:
+        self.fake_systemctl("inactive", 3)
+        code, out, err = self.cli("check", "--service")
+        self.assertEqual(code, 2)
+        self.assertIn("the supervisor service is not running on this machine: no heartbeat", err)
+        self.assertIn("is-active sweep-supervisor.service` says inactive", err)
+        self.assertIn("--user is-active sweep-supervisor.service", (self.base / "systemctl.log").read_text())
+        self.assertIn("OK agent profile", out, "what check proved before that still shows")
+
+    def test_check_service_fails_with_no_systemd_to_ask(self) -> None:
+        with mock.patch.object(supervisor.subprocess, "run", side_effect=FileNotFoundError("systemctl")):
+            code, _out, err = self.cli("check", "--service")
+        self.assertEqual(code, 2)
+        self.assertIn("could not ask systemctl", err)
+
+    def test_check_service_passes_on_a_fresh_heartbeat_without_asking_systemd(self) -> None:
+        self.fake_systemctl("inactive", 3)
+        self.heartbeat()
+        code, out, err = self.cli("check", "--service")
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"from pid {os.getpid()}", out)
+        self.assertFalse((self.base / "systemctl.log").exists())
+
+    def test_a_stale_or_dead_or_foreign_heartbeat_proves_nothing(self) -> None:
+        old = supervisor.iso(supervisor.now() - supervisor.timedelta(seconds=supervisor.SERVICE_SILENT_S + 60))
+        dead = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True, check=True)
+        for name, fields in (("stale", dict(at=old)), ("dead pid", dict(pid=int(dead.stdout))), ("other host", dict(host="elsewhere"))):
+            with self.subTest(name):
+                self.fake_systemctl("inactive", 3)
+                self.heartbeat(**fields)
+                self.assertEqual(self.cli("check", "--service")[0], 2)
+                self.fake_systemctl("active", 0)
+                code, out, err = self.cli("check", "--service")
+                self.assertEqual(code, 0, err)
+                self.assertIn("OK service: sweep-supervisor.service is active", out)
+
+    def test_the_service_writes_its_heartbeat_every_pass_with_no_wave_live(self) -> None:
+        settings = supervisor.load_settings(self.registry)
+        board_config = board.load_config(self.registry)
+        with mock.patch.object(supervisor.time, "sleep", side_effect=KeyboardInterrupt), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(supervisor.serve(board_config, settings), 0)
+        beat = board.read_json(supervisor.heartbeat_path(board_config))
+        self.assertEqual((beat["pid"], beat["host"]), (os.getpid(), os.uname().nodename))
+        self.assertEqual(supervisor.active_waves(board_config), [], "the heartbeat is no wave pointer")
+        self.assertEqual(self.cli("check", "--service")[0], 0)
+
+    def test_plain_check_needs_no_service_because_a_copy_is_validated_before_one_runs(self) -> None:
+        self.fake_systemctl("inactive", 3)
+        self.assertEqual(self.cli("check")[0], 0)
+        self.assertFalse((self.base / "systemctl.log").exists())
+
+    def test_self_update_validates_a_new_copy_with_the_service_check_off(self) -> None:
+        self.fake_systemctl("inactive", 3)  # what `--service` would fail on, were the probe to ask it
+        settings = supervisor.load_settings(self.registry)
+        with (mock.patch.object(supervisor, "newer_installed_copy", return_value=SCRIPT),
+              mock.patch.object(supervisor.os, "execv") as execv, contextlib.redirect_stdout(io.StringIO())):
+            supervisor.maybe_self_update(settings, busy=False)
+        execv.assert_called_once()
+        self.assertEqual(execv.call_args.args[1][-1], "serve")
+
+    def test_the_launcher_starts_an_installed_copy_with_no_service_running(self) -> None:
+        self.fake_systemctl("inactive", 3)
+        home = self.base / "home"
+        version_dir = home / ".claude/plugins/cache/market/research/9.9.9"
+        version_dir.parent.mkdir(parents=True)
+        version_dir.symlink_to(ROOT / "plugins/research")
+        launcher = ROOT / "plugins/research/skills/sweep-supervisor/assets/launch_supervisor.py"
+        env = {**os.environ, "HOME": str(home), "RIGSYNC_REGISTRY": str(self.registry), "PYTHONDONTWRITEBYTECODE": "1"}
+        proc = subprocess.run([sys.executable, str(launcher), "waves"], capture_output=True, text=True, env=env, cwd=self.hub)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("launch_supervisor: starting", proc.stdout)
+        self.assertFalse((self.base / "systemctl.log").exists())
+
+    def test_the_docs_name_the_service_check_at_the_gates(self) -> None:
+        skills = ROOT / "plugins/research/skills"
+        self.assertIn("`sweep-supervisor check --service` passes", (skills / "sweep-dispatch/SKILL.md").read_text())
+        self.assertIn("`check --service` fails", (skills / "sweep-supervisor/SKILL.md").read_text())
+
     def test_the_service_follows_a_newer_installed_release(self) -> None:
         root = self.base / "cache" / "research"
         relative = Path("skills/sweep-supervisor/scripts/supervisor.py")

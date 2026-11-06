@@ -74,6 +74,9 @@ SERVICE_SILENT_S = 10 * 60  # the service cycles every wave each minute; this lo
 WATCH_POLL_S = 20
 WATCH_TIMEOUT_S = 6 * 3600
 WATCH_SETTLE_S = 3600  # longest watch waits on an ended wave's closing agent tick, where a `fix` follow-up is queued
+WATCH_MARK_MIN_S = 120  # a running watch's marker holds at least this long past its last refresh
+WATCH_BACKLOG_LINES = 20  # most ledger notices one return prints; a chat attaching late is pointed at `ledger` for the rest
+SERVICE_UNIT = "sweep-supervisor.service"
 BOARD_REFRESH_EVERY_S = 600
 RESERVED_EXITS = {86: "source drift", 87: "environment drift", 88: "insufficient storage"}
 LANE_STOPPING = {86, 87}
@@ -107,8 +110,11 @@ URGENT_EVENTS = frozenset(
         "lane-idle-tail",
     }
 )
-# What reaches the user (`notify_command`) without any chat open. `ask` always does too.
+# What goes out through `notify_command`, when one is declared. `ask` and `say` always do too.
 NOTIFY_EVENTS = frozenset({"wave-terminal", "rig-down", "recovery-blocked", "cert-expiring", "cert-expired", "submit-failed"})
+# The same notices for a chat's `watch`, from the ledger so one that came and went between two watches
+# is still told. The wave's end has its own path through `watch`.
+WATCH_EVENTS = (NOTIFY_EVENTS - {"wave-terminal"}) | {"run-failed", "job-failed"}
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 
@@ -291,6 +297,10 @@ class Wave:
     @property
     def runtime_path(self) -> Path:
         return self.dir / "runtime.json"
+
+    @property
+    def watching_path(self) -> Path:
+        return self.dir / "watching.json"
 
     @property
     def agent_logs(self) -> Path:
@@ -1654,6 +1664,10 @@ def cert_status(snapshot: dict, at: datetime) -> list[dict]:
     return items
 
 
+def question_line(question: dict) -> str:
+    return f"needs you [{question['id']}] {question['text']} — meanwhile: {question.get('meanwhile') or 'status quo'}"
+
+
 def cert_warnings(snapshot: dict, at: datetime) -> list[str]:
     return [item["line"] for item in cert_status(snapshot, at)]
 
@@ -1706,7 +1720,7 @@ def brief_view(snapshot: dict, at: datetime | None = None) -> dict:
     for q in snapshot["questions"]:
         warnings.append({
             "kind": "question", "id": q["id"], "text": q["text"], "meanwhile": q.get("meanwhile"), "asked_at": q.get("asked_at"),
-            "line": f"needs you [{q['id']}] {q['text']} — meanwhile: {q.get('meanwhile') or 'status quo'}",
+            "line": question_line(q),
         })
     return {
         "eta": eta, "done": counts["done"], "failed": counts.get("failed", 0), "total": total,
@@ -1807,14 +1821,36 @@ def render_table(snapshot: dict, fmt: str) -> str:
 #
 # A chat's way to follow a wave without a timer: one blocking command, run in the background,
 # that returns only when there is something to say. It reads local files only (the snapshot the
-# service writes each cycle, the queue, the follow-up records), never a rig. A wave replaced by an
-# automatic fix round is followed into the wave that replaces it, linked by that wave's `fixes_wave`.
+# service writes each cycle, the ledger, the queue, the follow-up records), never a rig. A wave
+# replaced by an automatic fix round is followed into the wave that replaces it, linked by that
+# wave's `fixes_wave`. What was told lives in the wave's `watch.json`, so what happens between two
+# watches is told by the next one, and once.
+
+
+def wave_followups(wave: Wave, board_config) -> list[dict]:
+    if board_config is None:
+        return []
+    return [
+        record for _path, record in followup_records(board_config)
+        if record.get("wave_id") == wave.wave_id and record.get("project_root") == str(wave.project_root)
+    ]
+
+
+def followup_warnings(wave: Wave, board_config) -> list[dict]:
+    return [
+        {
+            "key": f"followup:{record['id']}",
+            "line": f"follow-up {record['kind']} {record.get('outcome') or record['status']} without a report" + (f"; log {record['log']}" if record.get("log") else ""),
+        }
+        for record in wave_followups(wave, board_config)
+        if record.get("status") == "failed" or (record.get("status") == "done" and not record.get("report"))
+    ]
 
 
 def wave_warnings(wave: Wave, snapshot: dict | None, at: datetime, board_config=None) -> list[dict]:
     """Every warning a person should see for this wave right now, each with a stable `key`: the
-    printout's `⚠` lines (from `brief_view`, one per failed run), a follow-up that failed or ended
-    without a report, and a service that stopped writing snapshots. A key names the condition, not
+    printout's `⚠` lines (from `brief_view`, one per failed run), an open question, a follow-up that
+    failed or ended without a report, and a service that stopped writing snapshots. A key names the condition, not
     its wording, so a countdown in a line never makes an old warning look new."""
     items: list[dict] = []
     if snapshot:
@@ -1840,16 +1876,14 @@ def wave_warnings(wave: Wave, snapshot: dict | None, at: datetime, board_config=
         registered = parse_iso((board.read_json(wave.queue_path) or {}).get("registered_at"))
         if registered and (at - registered).total_seconds() > SERVICE_SILENT_S:
             items.append({"key": "service:silent", "line": f"no first supervisor cycle {humanize((at - registered).total_seconds())} after registration: is the sweep-supervisor service running?"})
-    if board_config is not None:
-        for _path, record in followup_records(board_config):
-            if record.get("wave_id") != wave.wave_id or record.get("project_root") != str(wave.project_root):
-                continue
-            if record.get("status") == "failed" or (record.get("status") == "done" and not record.get("report")):
-                items.append({
-                    "key": f"followup:{record['id']}",
-                    "line": f"follow-up {record['kind']} {record.get('outcome') or record['status']} without a report" + (f"; log {record['log']}" if record.get("log") else ""),
-                })
-    return items
+    # read directly, so a question reaches a chat before the next cycle and with the service down
+    shown = {item["key"] for item in items}
+    items += [
+        {"key": f"question:{q['id']}", "line": question_line(q)}
+        for q in wave.questions()
+        if q.get("status") == "open" and f"question:{q['id']}" not in shown
+    ]
+    return items + followup_warnings(wave, board_config)
 
 
 def wave_over(wave: Wave, snapshot: dict | None) -> bool:
@@ -1872,17 +1906,86 @@ def unannounced(wave: Wave, items: list[dict], at: datetime) -> list[dict]:
     return new
 
 
-def first_time(wave: Wave, key: str, at: datetime) -> bool:
-    """Whether this step of a fix round (`fix:<id>`, `round:<wave>`) is told for the first time; it is
-    recorded in the wave's `watch.json` and, unlike a warning, never forgotten."""
+def first_times(wave: Wave, keys: list[str], at: datetime) -> set[str]:
+    """Which of these things to tell (a fix round's step, a `say`, a report) are told for the first
+    time; they are recorded in the wave's `watch.json` and, unlike a warning, never forgotten."""
     state_path = wave.dir / "watch.json"
     with (wave.dir / ".watch.lock").open("a+") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         state = board.read_json(state_path) or {}
-        if key in state.get("rounds", []):
-            return False
-        board.write_json(state_path, {**state, "rounds": sorted({*state.get("rounds", []), key}), "at": iso(at)})
-    return True
+        told = set(state.get("rounds", []))
+        new = set(keys) - told
+        if new:
+            board.write_json(state_path, {**state, "rounds": sorted(told | new), "at": iso(at)})
+    return new
+
+
+def first_time(wave: Wave, key: str, at: datetime) -> bool:
+    return bool(first_times(wave, [key], at))
+
+
+def event_covered(record: dict, warning_keys: set[str]) -> bool:
+    """Whether a warning standing right now already tells this ledger event."""
+    event, rig = record.get("event"), record.get("rig")
+    if event in ("run-failed", "job-failed"):
+        return f"failed:{record.get('run')}" in warning_keys
+    if event == "rig-down":
+        return any(key.startswith(f"lane:{rig}:") and ":rig down:" in key for key in warning_keys)
+    if event == "recovery-blocked":
+        return any(key.startswith(f"lane:{rig}:{record.get('gpu')}:") for key in warning_keys)
+    if event in ("cert-expiring", "cert-expired"):
+        return any(key.startswith(f"cert:{rig}:") for key in warning_keys)
+    return False
+
+
+def event_body(wave: Wave, record: dict) -> str | None:
+    event = record.get("event")
+    if event == "run-failed":
+        return f"failed: `{record.get('run')}` on {record.get('rig')} gpu{record.get('gpu')} (exit {record.get('rc')})"
+    if event == "job-failed":
+        return f"failed: `{record.get('run')}` ({record.get('problem') or record.get('slurm_state')})"
+    return event_notice(wave, record)
+
+
+def ledger_notices(wave: Wave, snapshot: dict | None, warnings: list[dict], at: datetime, *, says_only: bool = False) -> list[str]:
+    """Each `say`, and each event a `notify_command` would be given, not told to a chat yet. The
+    service logs an event before it writes that cycle's snapshot, so an event newer than the snapshot
+    waits for it: then a warning that already tells it is seen, and the event is only recorded as told.
+    Identical events are told at most once an hour, as `notify_events` sends them."""
+    written = parse_iso((snapshot or {}).get("written_at"))
+    warning_keys = {item["key"] for item in warnings}
+    pending: dict[str, tuple[str | None, str | None]] = {}
+    for record in wave.ledger():
+        event, moment = record.get("event"), record.get("at")
+        if event == "say":
+            text = str(record.get("text"))
+            digest = hashlib.sha1(text.encode()).hexdigest()[:12]
+            pending.setdefault(f"say:{moment}:{digest}", (f"watch: say: {text}", moment))
+        elif not says_only and event in WATCH_EVENTS and written and (parse_iso(moment) or at) <= written:
+            body = event_body(wave, record)
+            if body:
+                digest = hashlib.sha1(f"{event}:{body}".encode()).hexdigest()[:12]
+                line = None if event_covered(record, warning_keys) else f"watch: new ⚠ {body} (at {clock(moment, at)})"
+                pending.setdefault(f"event:{str(moment)[:13]}:{digest}", (line, moment))
+    new = first_times(wave, list(pending), at)
+    told = [(line, moment) for key, (line, moment) in pending.items() if key in new and line]
+    if len(told) <= WATCH_BACKLOG_LINES:
+        return [line for line, _moment in told]
+    older = len(told) - WATCH_BACKLOG_LINES
+    return [f"watch: … and {older} earlier notices; `ledger --wave {wave.wave_id} --since {told[0][1]}` lists them"] + [
+        line for line, _moment in told[older:]
+    ]
+
+
+def followup_reports(waves: list[Wave], board_config, skip: dict | None, at: datetime) -> list[str]:
+    """Each follow-up report, of any kind, not told yet. It is recorded on the wave the follow-up
+    belongs to, so it is told once however the wave is being followed."""
+    lines: list[str] = []
+    for wave in waves:
+        records = [record for record in wave_followups(wave, board_config) if record.get("report") and record["id"] != (skip or {}).get("id")]
+        new = first_times(wave, [f"report:{record['id']}" for record in records], at)
+        lines += [f"watch: follow-up {record['kind']} {record['id']} report: {record['report']}" for record in records if f"report:{record['id']}" in new]
+    return lines
 
 
 def fix_round_after(wave: Wave) -> Wave | None:
@@ -1893,25 +1996,42 @@ def fix_round_after(wave: Wave) -> Wave | None:
     return None
 
 
+def fix_ancestors(wave: Wave) -> list[Wave]:
+    """The waves this one continues through automatic fix rounds, nearest first; they are over, but
+    what they still have to say (a `say`, a follow-up's report) reaches whoever follows this one."""
+    chain: list[Wave] = []
+    current = wave
+    while len(chain) <= MAX_FIX_DEPTH:
+        parent = (board.read_json(current.queue_path) or {}).get("fixes_wave")
+        if not isinstance(parent, str) or not rigsync.WAVE_RE.fullmatch(parent):
+            break
+        current = Wave(wave.project_root, parent)
+        if not current.queue_path.exists():
+            break
+        chain.append(current)
+    return chain
+
+
 def fix_round(wave: Wave) -> object:
     return (board.read_json(wave.queue_path) or {}).get("fix_depth")
 
 
 def latest_fix(wave: Wave, board_config) -> dict | None:
-    fixes = [
-        record for _path, record in (followup_records(board_config) if board_config is not None else [])
-        if record.get("kind") == "fix" and record.get("wave_id") == wave.wave_id and record.get("project_root") == str(wave.project_root)
-    ]
+    fixes = [record for record in wave_followups(wave, board_config) if record.get("kind") == "fix"]
     return fixes[-1] if fixes else None
 
 
 def closing_tick_done(wave: Wave, queue: dict, snapshot: dict | None, board_config, at: datetime) -> bool:
     """Whether the agent has had its say on an ended wave: `finish` ran, or an agent tick that started
-    after the end has ended. That tick is where a `fix` follow-up gets queued; a service that never
-    runs it is not waited on past WATCH_SETTLE_S."""
+    after the end has ended. That tick is where a `fix` follow-up gets queued, and `finish` is where
+    the `analyze` one does; a service that never runs it is not waited on past WATCH_SETTLE_S."""
     ended = parse_iso(queue.get("finished_at") or (snapshot or {}).get("finished_at"))
-    if board_config is None or ended is None or not index_path(board_config, queue["project"], wave.wave_id).exists():
+    if board_config is None or ended is None:
         return True
+    if not index_path(board_config, queue["project"], wave.wave_id).exists():
+        # `finish` drops the pointer before its prune, and queues the `analyze` follow-up after it
+        events = {record.get("event") for record in wave.ledger()}
+        return "finish" not in events or "finish-closed" in events or (at - ended).total_seconds() > WATCH_SETTLE_S
     runtime = board.read_json(wave.runtime_path) or {}
     started, ticked = parse_iso(runtime.get("agent_tick_started_at")), parse_iso(runtime.get("agent_ticked_at"))
     if started and ticked and ended <= started <= ticked:
@@ -1919,73 +2039,214 @@ def closing_tick_done(wave: Wave, queue: dict, snapshot: dict | None, board_conf
     return (at - ended).total_seconds() > WATCH_SETTLE_S
 
 
+def mark_watching(wave: Wave, poll: float) -> None:
+    """Say that a watch is running: its pid, and how long to believe it without a refresh. The
+    session-start facts read this; a failure here must never cost the watch."""
+    marker = {"pid": os.getpid(), "host": os.uname().nodename, "at": iso(now()), "until": time.time() + max(3 * poll, WATCH_MARK_MIN_S)}
+    with contextlib.suppress(OSError):
+        board.write_json(wave.watching_path, marker)
+
+
+def unmark_watching(wave: Wave) -> None:
+    """Withdraw this watch's marker, never another running watch's."""
+    with contextlib.suppress(OSError):
+        if (board.read_json(wave.watching_path) or {}).get("pid") == os.getpid():
+            wave.watching_path.unlink(missing_ok=True)
+
+
+@dataclass
+class WatchLook:
+    """One look at a wave: the wave it ended on (a fix round moves it on), what to tell, and from where."""
+    wave: Wave
+    reasons: list[str]
+    snapshot: dict | None
+    continuing: bool = False  # the reason itself names the new wave
+
+
+def naming_the_wave(line: str, wave_id: str) -> str:
+    if not line.startswith("watch: ") or line.startswith(f"watch: wave {wave_id}"):
+        return line
+    return f"watch: wave {wave_id}: " + line.removeprefix("watch: ").split(f"; run watch --wave {wave_id} next")[0]
+
+
+def watch_look(wave: Wave, board_config, at: datetime, *, named: bool = False) -> WatchLook:
+    """Everything new on this wave right now, each thing recorded as told. Nothing new is an empty
+    `reasons`; `named` has each line name its wave. A file caught mid-write is simply read again by
+    the next look."""
+    def label(lines: list[str], wave_id: str) -> list[str]:
+        return [naming_the_wave(line, wave_id) for line in lines] if named else lines
+
+    snapshot = board.read_json(wave.snapshot_path)
+    told: list[str] = []
+    reasons: list[str] = []
+    tail: list[str] = []
+    try:
+        first_time(wave, "followed", at)
+        over = wave_over(wave, snapshot)
+        ancestors = fix_ancestors(wave)
+        warnings = wave_warnings(wave, snapshot, at, board_config)
+        for ancestor in ancestors:
+            warnings += followup_warnings(ancestor, board_config)
+        told += [f"watch: new ⚠ {item['line']}" for item in unannounced(wave, warnings, at)]
+        told += ledger_notices(wave, snapshot, warnings, at)
+        for ancestor in ancestors:
+            told += ledger_notices(ancestor, None, [], at, says_only=True)
+        queue = board.read_json(wave.queue_path) or {} if over else {}
+        fix, child = (latest_fix(wave, board_config), fix_round_after(wave)) if over else (None, None)
+        # the fix that ends a wave without a new one is told by the ending below
+        closing_fix = fix if child is None and fix and fix.get("status") not in ("pending", "running") else None
+        told += followup_reports([wave, *ancestors], board_config, closing_fix, at)
+        if over:
+            ended = queue.get("finished_at") or (snapshot or {}).get("finished_at")
+            finished_key = f"finished:{ended}"
+            done = sum(run["state"] == "done" for run in queue["runs"])
+            failed = sum(run["state"] == "failed" for run in queue["runs"])
+            tally = f"{done} done, {failed} failed"
+            if child is not None:
+                first_time(wave, finished_key, at)
+                if first_time(wave, f"round:{child.wave_id}", at):
+                    continuing = f"watch: continuing as wave {child.wave_id} (fix round {fix_round(child)}); run watch --wave {child.wave_id} next"
+                    return WatchLook(child, label(told, wave.wave_id) + label([continuing], child.wave_id), board.read_json(child.snapshot_path), continuing=True)
+                look = watch_look(child, board_config, at, named=named)
+                look.reasons = label(told, wave.wave_id) + look.reasons
+                return look
+            still_open = [record for record in wave_followups(wave, board_config) if record.get("status") in ("pending", "running")]
+            if fix and fix.get("status") in ("pending", "running"):
+                over = False
+                if first_time(wave, f"fix:{fix['id']}", at):
+                    reasons = [f"watch: wave {wave.wave_id} ended: {tally}; fix follow-up {fix['id']} "
+                               f"{'queued' if fix['status'] == 'pending' else 'running'}; run watch again for the wave it dispatches"]
+            elif not closing_tick_done(wave, queue, snapshot, board_config, at):
+                over = False
+                if all(run["state"] == "done" for run in queue["runs"]) and first_time(wave, f"ended:{ended}", at):
+                    reasons = [f"watch: wave {wave.wave_id} ended: {tally}; its closing tick is still running; run watch again for what follows"]
+            elif still_open:
+                over = False
+                if first_time(wave, f"ended:{ended}", at):
+                    record = still_open[0]
+                    reasons = [f"watch: wave {wave.wave_id} ended: {tally}; {record['kind']} follow-up {record['id']} "
+                               f"{'queued' if record['status'] == 'pending' else 'running'}; run watch again for its report"]
+            elif closing_fix:
+                report = (closing_fix.get("report") or "").strip().splitlines()
+                ending = report[0] if report else f"{closing_fix.get('outcome') or closing_fix['status']} without a report" + (f"; log {closing_fix['log']}" if closing_fix.get("log") else "")
+                reasons = [f"watch: fix follow-up {closing_fix['id']} ended without a new wave: {ending}"]
+                if first_time(wave, f"report:{closing_fix['id']}", at):
+                    tail = report[1:]
+            if over:
+                first_time(wave, finished_key, at)
+                reasons += ["watch: wave finished"]
+    except (KeyError, TypeError, ValueError, AttributeError, OSError, board.BoardError):
+        reasons, tail = [], []  # a snapshot from an older script, or a file mid-write: look again next poll
+    return WatchLook(wave, label(told + reasons + tail, wave.wave_id), snapshot)
+
+
+def print_brief(snapshot: dict | None) -> None:
+    if snapshot:
+        with contextlib.suppress(KeyError, TypeError, ValueError, AttributeError):
+            print("\n" + render_brief(snapshot), end="")
+
+
 def watch(wave: Wave, board_config, poll: float = WATCH_POLL_S, timeout: float = WATCH_TIMEOUT_S) -> int:
-    """Block until this wave has a warning not announced yet, or is finished, or `timeout` passes;
-    then print why, followed by the brief printout. What was announced lives in the wave's
-    `watch.json`, so running it again does not repeat a warning; a warning that clears is forgotten
-    and fires again if it comes back. A file caught mid-write is simply read again next poll.
+    """Block until this wave has something not told yet, or is finished, or `timeout` passes; then
+    print why, followed by the brief printout. Something is: a warning, a `say`, a follow-up's report,
+    an event a `notify_command` would be given. What was told lives in the wave's `watch.json`, so
+    running it again repeats nothing and whatever happened in between is told then; a warning that
+    clears is forgotten and fires again if it comes back.
 
     A wave that ends with runs not done is finished only once its closing agent tick is over. A `fix`
     follow-up queued for it returns once (`ended: …; fix follow-up … running`) and keeps the wave
     open; the wave it dispatches returns once (`continuing as wave …`) and is followed from then on,
-    warnings and end included, also by a watch run on the old wave. Each step returns rather than
-    being printed along the way, because a chat sees a background command's output when it ends. A
-    fix that dispatches nothing ends the watch with its report."""
+    warnings and end included, also by a watch run on the old wave. Any other follow-up returns once
+    the same way and keeps the wave open for its report. Each step returns rather than being printed
+    along the way, because a chat sees a background command's output when it ends. A fix that
+    dispatches nothing ends the watch with its report."""
     if not wave.queue_path.exists():
         raise SupervisorError(f"wave {wave.wave_id} is not registered here: {wave.queue_path}")
     deadline = time.monotonic() + timeout
     started = wave.wave_id
-    while True:
-        at = now()
-        snapshot = board.read_json(wave.snapshot_path)
-        reasons: list[str] = []
-        try:
-            over = wave_over(wave, snapshot)
-            new = unannounced(wave, wave_warnings(wave, snapshot, at, board_config), at)
-            if over:
-                queue = board.read_json(wave.queue_path) or {}
-                fix, child = latest_fix(wave, board_config), fix_round_after(wave)
-                if child is not None:
-                    told = first_time(wave, f"round:{child.wave_id}", at)
-                    wave = child
-                    if told:
-                        snapshot = board.read_json(wave.snapshot_path)
-                        print(f"watch: continuing as wave {wave.wave_id} (fix round {fix_round(wave)}); run watch --wave {wave.wave_id} next")
-                        if snapshot:
-                            with contextlib.suppress(KeyError, TypeError, ValueError, AttributeError):
-                                print("\n" + render_brief(snapshot), end="")
-                        return 0
-                    continue
-                if fix and fix.get("status") in ("pending", "running"):
-                    over = False
-                    if first_time(wave, f"fix:{fix['id']}", at):
-                        done = sum(run["state"] == "done" for run in queue["runs"])
-                        failed = sum(run["state"] == "failed" for run in queue["runs"])
-                        reasons = [f"watch: wave {wave.wave_id} ended: {done} done, {failed} failed; fix follow-up {fix['id']} "
-                                   f"{'queued' if fix['status'] == 'pending' else 'running'}; run watch again for the wave it dispatches"]
-                elif not all(run["state"] == "done" for run in queue["runs"]) and not closing_tick_done(wave, queue, snapshot, board_config, at):
-                    over = False
-                elif fix:
-                    report = (fix.get("report") or "").strip().splitlines()[:1]
-                    ending = report[0] if report else f"{fix.get('outcome') or fix['status']} without a report" + (f"; log {fix['log']}" if fix.get("log") else "")
-                    reasons = [f"watch: fix follow-up {fix['id']} ended without a new wave: {ending}"]
-        except (KeyError, TypeError, ValueError, AttributeError, OSError, board.BoardError):
-            over, new = False, []  # a snapshot from an older script, or a file mid-write: look again next poll
-        if over:
-            reasons += ["watch: wave finished"]
-        elif new:
-            reasons = [f"watch: new ⚠ {item['line']}" for item in new] + reasons
-        elif not reasons and time.monotonic() >= deadline:
-            reasons = ["watch: timeout, nothing new; run watch again"]
-        if reasons:
-            if wave.wave_id != started:
-                reasons.insert(0, f"watch: following wave {wave.wave_id} (fix round {fix_round(wave)} after wave {started})")
-            print("\n".join(reasons))
-            if snapshot:
-                with contextlib.suppress(KeyError, TypeError, ValueError, AttributeError):
-                    print("\n" + render_brief(snapshot), end="")
-            return 0
-        time.sleep(max(0.05, min(poll, deadline - time.monotonic())))
+    marked = {wave.wave_id: wave}
+    try:
+        while True:
+            mark_watching(wave, poll)
+            look = watch_look(wave, board_config, now())
+            wave = look.wave
+            marked[wave.wave_id] = wave
+            reasons = look.reasons
+            if not reasons and time.monotonic() >= deadline:
+                reasons = ["watch: timeout, nothing new; run watch again"]
+            if reasons:
+                if wave.wave_id != started and not look.continuing:
+                    reasons.insert(0, f"watch: following wave {wave.wave_id} (fix round {fix_round(wave)} after wave {started})")
+                print("\n".join(reasons))
+                print_brief(look.snapshot)
+                return 0
+            time.sleep(max(0.05, min(poll, deadline - time.monotonic())))
+    finally:
+        for item in marked.values():
+            unmark_watching(item)
+
+
+def project_waves(root: Path, board_config) -> list[Wave]:
+    """The waves `watch --all` follows: every wave the service supervises, or with a follow-up still
+    to run, or that a watch followed and has not told finished. An older wave nobody followed and
+    with nothing left to run is not news."""
+    root = root.resolve()
+    still_running = {
+        record.get("wave_id") for _path, record in followup_records(board_config)
+        if record.get("project_root") == str(root) and record.get("status") in ("pending", "running")
+    }
+    waves = []
+    for path in sorted((root / rigsync.WAVES_DIR / STATE_DIR).glob("*/queue.json")):
+        wave_id = path.parent.name
+        queue = board.read_json(path)
+        if queue is None or not rigsync.WAVE_RE.fullmatch(wave_id):
+            continue
+        wave = Wave(root, wave_id)
+        told = set((board.read_json(wave.dir / "watch.json") or {}).get("rounds", []))
+        ended = queue.get("finished_at") or (board.read_json(wave.snapshot_path) or {}).get("finished_at")
+        if ended and f"finished:{ended}" in told:
+            continue
+        supervised = index_path(board_config, str(queue.get("project")), wave_id).exists()
+        if supervised or wave_id in still_running or (ended and "followed" in told):
+            waves.append(wave)
+    return waves
+
+
+def watch_all(root: Path, board_config, poll: float = WATCH_POLL_S, timeout: float = WATCH_TIMEOUT_S) -> int:
+    """`watch` over every live wave of this project, including one that appears while it runs. It
+    returns on the first new thing in any wave, naming the wave, and when no live wave remains."""
+    deadline = time.monotonic() + timeout
+    marked: dict[str, Wave] = {}
+    try:
+        while True:
+            waves = project_waves(root, board_config)
+            if not waves:
+                print(f"watch: no live wave in {root.resolve()}; nothing left to follow")
+                return 0
+            looks = []
+            for wave in waves:
+                marked[wave.wave_id] = wave
+                mark_watching(wave, poll)
+                looks.append(watch_look(wave, board_config, now(), named=True))
+            news = [look for look in looks if look.reasons]
+            if not news and time.monotonic() >= deadline:
+                print(f"watch: timeout, nothing new in {', '.join(wave.wave_id for wave in waves)}; run watch --all again")
+                for look in looks:
+                    if look.snapshot:
+                        print(f"\nwave {look.wave.wave_id}:")
+                    print_brief(look.snapshot)
+                return 0
+            if news:
+                print("\n".join(line for look in news for line in look.reasons))
+                for look in news:
+                    if look.snapshot:
+                        print(f"\nwave {look.wave.wave_id}:")
+                    print_brief(look.snapshot)
+                return 0
+            time.sleep(max(0.05, min(poll, deadline - time.monotonic())))
+    finally:
+        for item in marked.values():
+            unmark_watching(item)
 
 
 # ───────────────────────────── agent wake-up ─────────────────────────────
@@ -2099,13 +2360,39 @@ def notice_context(wave: Wave | None, kind: str, *, session: str | None = None, 
     return context
 
 
-def notify(settings: Settings, text: str, context: dict | None = None) -> None:
+NOTICE_SENT = "sent"
+NOTICE_UNDECLARED = "undeclared"
+
+
+def notify(settings: Settings, text: str, context: dict | None = None, wave: Wave | None = None) -> str:
+    """Run `notify_command`. Returns NOTICE_SENT, NOTICE_UNDECLARED, or `failed: <why>`; a failure is
+    also logged in `wave`'s ledger and never raises, since a notice must not stop anything."""
     if not settings.notify_command:
-        return
+        return NOTICE_UNDECLARED
     payload = json.dumps(context or {"kind": "notice", "silent": False}, sort_keys=True)
-    with contextlib.suppress(OSError, subprocess.SubprocessError):
-        subprocess.run([part.replace("{text}", text).replace("{context}", payload) for part in settings.notify_command],
-                       timeout=30, check=False, capture_output=True)
+    argv = [part.replace("{text}", text).replace("{context}", payload) for part in settings.notify_command]
+    try:
+        result = subprocess.run(argv, timeout=30, check=False, capture_output=True, text=True, errors="replace")
+        if result.returncode == 0:
+            return NOTICE_SENT
+        problem = f"exit {result.returncode}: {short((result.stderr or result.stdout).strip(), 160)}"
+    except subprocess.TimeoutExpired:
+        problem = "timed out after 30s"
+    except (OSError, subprocess.SubprocessError) as exc:
+        problem = f"could not run: {exc}"
+    if wave is not None:
+        with contextlib.suppress(OSError):
+            wave.log("notify-failed", kind=(context or {}).get("kind"), problem=problem, text=short(text, 160))
+    return f"failed: {problem}"
+
+
+def notice_outcome(outcome: str) -> str:
+    """What a command that sends a notice tells its caller."""
+    if outcome == NOTICE_SENT:
+        return "sent"
+    if outcome == NOTICE_UNDECLARED:
+        return "recorded, not pushed: no notify_command is declared"
+    return f"recorded, not pushed: notify_command {outcome}"
 
 
 def event_notice(wave: Wave, record: dict) -> str | None:
@@ -2151,7 +2438,8 @@ def notify_events(wave: Wave, settings: Settings, events: list[dict], sent: dict
         if clock_now - sent.get(text, 0.0) < 3600:
             continue
         sent[text] = clock_now
-        notify(settings, text, context)
+        if notify(settings, text, context, wave).startswith("failed"):
+            sent.pop(text)  # not sent: the next occurrence tries again
 
 
 # ───────────────────────────── follow-ups ─────────────────────────────
@@ -2266,7 +2554,7 @@ def run_followup(path: Path, settings: Settings) -> None:
         wave.log("followup-ended", id=record["id"], kind=record["kind"], outcome=outcome, session=session)
     if record["status"] != "done" or not record.get("report"):
         body = f"follow-up {record['kind']} {outcome} without a report; log {log_path}"
-        notify(settings, f"{record['project']} wave {record['wave_id']}: {body}", notice_context(wave, "followup", session=session, body=body, project=record["project"]))
+        notify(settings, f"{record['project']} wave {record['wave_id']}: {body}", notice_context(wave, "followup", session=session, body=body, project=record["project"]), wave)
 
 
 def start_followups(board_config, settings: Settings, threads: dict[str, threading.Thread]) -> None:
@@ -2344,6 +2632,52 @@ def cycle_wave(wave: Wave, board_config, settings: Settings) -> dict:
     return Cycle(wave, project_config(wave, settings), board_config, settings).run()
 
 
+def heartbeat_path(board_config) -> Path:
+    return index_dir(board_config) / "service" / "heartbeat.json"
+
+
+def write_heartbeat(board_config) -> None:
+    """The running service's proof of life, for `check --service`, written whether or not any wave is live."""
+    with contextlib.suppress(OSError):
+        board.write_json(heartbeat_path(board_config), {"at": iso(now()), "pid": os.getpid(), "host": os.uname().nodename, "script": str(Path(__file__).resolve())})
+
+
+def pid_alive(pid: object) -> bool:
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def service_status(board_config, settings: Settings) -> str:
+    """Proof the hub service runs on this machine, or SupervisorError: a fresh heartbeat from a live
+    process, else systemd's word (a service too old to write a heartbeat, or deep in a long cycle)."""
+    path = heartbeat_path(board_config)
+    beat = board.read_json(path) or {}
+    moment = parse_iso(beat.get("at"))
+    age = (now() - moment).total_seconds() if moment else None
+    if age is not None and age <= max(SERVICE_SILENT_S, 3 * settings.cycle_every) and beat.get("host") == os.uname().nodename and pid_alive(beat.get("pid")):
+        return f"heartbeat {humanize(age)} ago from pid {beat['pid']}"
+    heard = f"last heartbeat {humanize(age)} ago" if age is not None else "no heartbeat"
+    try:
+        result = subprocess.run(["systemctl", "--user", "is-active", SERVICE_UNIT], capture_output=True, text=True, timeout=10, check=False)
+        state = result.stdout.strip() or result.stderr.strip() or f"exit {result.returncode}"
+        active = result.returncode == 0
+    except (OSError, subprocess.SubprocessError) as exc:
+        state, active = f"could not ask systemctl: {exc}", False
+    if active:
+        return f"{SERVICE_UNIT} is active ({heard})"
+    raise SupervisorError(
+        f"the supervisor service is not running on this machine: {heard} ({path}), and `systemctl --user is-active {SERVICE_UNIT}` says {state}. "
+        "A wave is not supervised until it runs; references/setup.md installs and starts it"
+    )
+
+
 def serve(board_config, settings: Settings) -> int:
     require_agent(settings)
     print(f"[serve] {Path(__file__).resolve()}: cycle every {settings.cycle_every}s, agent tick every {settings.tick_every}s", flush=True)
@@ -2362,9 +2696,11 @@ def serve(board_config, settings: Settings) -> int:
 
     try:
         while True:
+            write_heartbeat(board_config)
             busy = any(thread.is_alive() for thread in (*wakers.values(), *followups.values()))
             maybe_self_update(settings, busy)
             for wave in active_waves(board_config):
+                write_heartbeat(board_config)  # a long cycle over several waves stays proven alive
                 try:
                     outcome = cycle_wave(wave, board_config, settings)
                 except (SupervisorError, rigsync.RigSyncError, board.BoardError, OSError) as exc:
@@ -2612,8 +2948,9 @@ def ask(wave: Wave, settings: Settings, args: argparse.Namespace) -> int:
         wave.save_questions(items)
         wave.log("ask", id=identifier, text=args.text, session=session)
     body = f"❓ [{identifier}] {args.text} — until you answer: {args.meanwhile}"
-    notify(settings, f"{wave.project_root.name} wave {wave.wave_id}: {body}", notice_context(wave, "ask", session=session, question=identifier, body=body))
+    outcome = notify(settings, f"{wave.project_root.name} wave {wave.wave_id}: {body}", notice_context(wave, "ask", session=session, question=identifier, body=body), wave)
     print(f"[ask] {identifier}: {args.text}")
+    print(f"[ask] {notice_outcome(outcome)}")
     return 0
 
 
@@ -2637,13 +2974,13 @@ def answer(wave: Wave, args: argparse.Namespace) -> int:
 
 
 def say(wave: Wave, settings: Settings, args: argparse.Namespace) -> int:
-    """An agent's words to the user, pushed through `notify_command`."""
+    """An agent's words to the user: in the ledger for a chat's `watch`, and through `notify_command` when one is declared."""
     session = os.environ.get("SWEEP_SUPERVISOR_SESSION")
     text = args.text.strip()
     with WaveLock(wave):
         wave.log("say", text=text, session=session)
-    notify(settings, f"{wave.project_root.name} wave {wave.wave_id}: {text}", notice_context(wave, "say", session=session, body=text))
-    print("[say] sent" if settings.notify_command else "[say] recorded; no notify_command reaches the user")
+    outcome = notify(settings, f"{wave.project_root.name} wave {wave.wave_id}: {text}", notice_context(wave, "say", session=session, body=text), wave)
+    print(f"[say] {notice_outcome(outcome)}")
     return 0
 
 
@@ -2714,6 +3051,7 @@ def finish(wave: Wave, board_config, settings: Settings, args: argparse.Namespac
         if done and not args.no_analysis:
             record = enqueue_followup(board_config, wave, queue, "analyze", f"{done} done, {failed} failed")
             print(f"[finish] queued follow-up {record['id']}: plots and journal for this wave's results")
+    wave.log("finish-closed")
     return 0
 
 
@@ -2735,7 +3073,8 @@ def build_parser() -> argparse.ArgumentParser:
         item.add_argument("--dry-run", action="store_true")
         item.add_argument("--confirm", action="store_true")
 
-    sub.add_parser("check", help="verify the registry declares the agent profile and the board")
+    check_p = sub.add_parser("check", help="verify the registry declares the agent profile and the board")
+    check_p.add_argument("--service", action="store_true", help="also prove the hub service is running; the dispatch gate. Without it, check also passes with no service, as it must for a copy about to start one")
     register_p = wave_parser("register")
     register_p.add_argument("--manifest", type=Path, required=True)
     confirmable(register_p)
@@ -2746,7 +3085,10 @@ def build_parser() -> argparse.ArgumentParser:
     table_p.add_argument("--format", choices=("md", "text"), default="md")
     table_p.add_argument("--full", action="store_true", help="the per-GPU table instead of the brief chat printout")
     table_p.add_argument("--cycle", action="store_true", help="run one cycle first instead of reading the last snapshot")
-    watch_p = wave_parser("watch", help="block until a new warning, the wave's end, or the timeout; then print why and the printout")
+    watch_p = sub.add_parser("watch", help="block until something new (a warning, a say, a follow-up report, an event), the wave's end, or the timeout; then print why and the printout")
+    watch_scope = watch_p.add_mutually_exclusive_group(required=True)
+    watch_scope.add_argument("--wave")
+    watch_scope.add_argument("--all", action="store_true", help="follow every live wave of --root, including one that appears meanwhile; ends when none remains")
     watch_p.add_argument("--poll", type=float, default=WATCH_POLL_S, help=f"seconds between reads of the wave's files (default {WATCH_POLL_S})")
     watch_p.add_argument("--timeout", type=float, default=WATCH_TIMEOUT_S, help=f"seconds before giving up with nothing new (default {WATCH_TIMEOUT_S})")
     wave_parser("snapshot")
@@ -2790,14 +3132,14 @@ def build_parser() -> argparse.ArgumentParser:
     answer_p = wave_parser("answer")
     answer_p.add_argument("--id", required=True)
     answer_p.add_argument("--text", required=True)
-    say_p = wave_parser("say", help="an agent's words to the user, pushed through notify_command")
+    say_p = wave_parser("say", help="an agent's words to the user: told to a watching chat, and pushed when notify_command is declared")
     say_p.add_argument("--text", required=True)
     decide_p = wave_parser("decide")
     decide_p.add_argument("text")
     followup_p = wave_parser("followup", help="queue unattended work this wave leads to: analyze its results, or fix and redispatch")
     followup_p.add_argument("--kind", choices=FOLLOWUP_KINDS, required=True)
     followup_p.add_argument("--text", required=True, help="analyze: what finished; fix: the diagnosis with its evidence")
-    report_p = sub.add_parser("followup-report", help="a follow-up agent's closing line, pushed to the user")
+    report_p = sub.add_parser("followup-report", help="a follow-up agent's closing line: told to a watching chat, and pushed when notify_command is declared")
     report_p.add_argument("--id", required=True)
     report_p.add_argument("--text", required=True)
     sub.add_parser("followups", help="every follow-up and its state")
@@ -2821,6 +3163,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"OK agent profile: {profile.model}/{profile.effort}")
             print(f"OK board root: {board_config.root}")
             print(f"OK cycle every {settings.cycle_every}s, agent tick every {settings.tick_every}s")
+            if settings.notify_command:
+                print(f"OK notices: notify_command declared ({settings.notify_command[0]})")
+            else:
+                print("OK notices: none declared; nothing is pushed, so notices reach a chat running watch, the printout and the viewer")
+            if args.service:
+                print(f"OK service: {service_status(board_config, settings)}")
             return 0
         if args.command == "serve":
             return serve(board_config, settings)
@@ -2837,11 +3185,20 @@ def main(argv: list[str] | None = None) -> int:
             path, record = find_followup(board_config, args.id)
             record["report"] = args.text
             board.write_json(path, record)
-            context = notice_context(Wave(Path(record["project_root"]), record["wave_id"]), "followup-report", project=record["project"],
+            wave = Wave(Path(record["project_root"]), record["wave_id"])
+            context = notice_context(wave, "followup-report", project=record["project"],
                                      session=os.environ.get("SWEEP_SUPERVISOR_SESSION") or record.get("session"), body=f"{record['kind']}: {args.text}")
-            notify(settings, f"{record['project']} wave {record['wave_id']} {record['kind']}: {args.text}", context)
+            outcome = notify(settings, f"{record['project']} wave {record['wave_id']} {record['kind']}: {args.text}", context, wave)
             print(f"[followup-report] {args.id}: recorded")
+            print(f"[followup-report] {notice_outcome(outcome)}")
             return 0
+        if args.command == "watch":
+            if args.poll < 1 or args.timeout < 0:
+                raise SupervisorError("--poll must be at least 1 second and --timeout not negative")
+            watch_root = rigsync.linked_worktree_main(args.root) or args.root  # a worktree holds no wave state
+            if args.all:
+                return watch_all(watch_root, board_config, args.poll, args.timeout)
+            return watch(Wave(watch_root, args.wave), board_config, args.poll, args.timeout)
         wave = Wave(args.root, args.wave)
         if args.command == "register":
             return register(wave, args.manifest, project_config(wave, settings), board_config, settings, args.dry_run, args.confirm)
@@ -2858,10 +3215,6 @@ def main(argv: list[str] | None = None) -> int:
                 raise SupervisorError(f"wave {wave.wave_id} has no snapshot yet; is the supervisor service running?")
             print(render_table(snapshot, args.format) if args.full else render_brief(snapshot), end="")
             return 0
-        if args.command == "watch":
-            if args.poll < 1 or args.timeout < 0:
-                raise SupervisorError("--poll must be at least 1 second and --timeout not negative")
-            return watch(wave, board_config, args.poll, args.timeout)
         if args.command == "snapshot":
             print(json.dumps(board.read_json(wave.snapshot_path) or {}, indent=2, sort_keys=True))
             return 0

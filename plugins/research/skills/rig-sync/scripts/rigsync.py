@@ -2703,12 +2703,50 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def linked_worktree_main(root: Path) -> Path | None:
+    """The main checkout of the repository `root` is a linked worktree of, else None.
+
+    A session or wave worktree carries a tracked sync.toml but not the project's state: its
+    directory name is not the tmux prefix, and it holds no `.waves/_state`, `evaluations/` or `.env`.
+    """
+    try:
+        result = run(["git", "-C", str(root), "rev-parse", "--git-dir", "--git-common-dir"], check=False)
+    except OSError:
+        return None
+    lines = result.stdout.decode(errors="replace").splitlines()
+    if result.returncode or len(lines) != 2:
+        return None
+    git_dir, common_dir = ((root / line).resolve() for line in lines)
+    if git_dir == common_dir:
+        return None
+    return common_dir.parent if common_dir.name == ".git" else common_dir
+
+
+# Change nothing anywhere and answer correctly from the main checkout, so a linked worktree resolves
+# to it. Every other command, dry runs included, refuses there. `collect --check` also resolves.
+RESOLVING_COMMANDS = {"doctor", "check-paths", "repo-path", "storage-env", "status", "verify-revision", "activity"}
+
+
+def project_root(args: argparse.Namespace) -> Path:
+    root = args.root.resolve()
+    checkout = linked_worktree_main(root)
+    if checkout is None:
+        return root
+    if args.command in RESOLVING_COMMANDS or (args.command == "collect" and args.check):
+        print(f"rigsync: {root} is a linked worktree; using the main checkout {checkout}", file=sys.stderr)
+        return checkout
+    raise RigSyncError(
+        f"{args.command} must run from the project's main checkout, not the linked worktree {root}; "
+        f"run it from {checkout} or pass --root {checkout}"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    root = args.root.resolve()
-    config_path = (args.config or Path(os.environ.get("RIGSYNC_CONFIG", root / "sync.toml"))).resolve()
-    registry_path = (args.registry or Path(os.environ.get("RIGSYNC_REGISTRY", "~/.config/rigsync/machines.toml")).expanduser()).resolve()
     try:
+        root = project_root(args)
+        config_path = (args.config or Path(os.environ.get("RIGSYNC_CONFIG", root / "sync.toml"))).resolve()
+        registry_path = (args.registry or Path(os.environ.get("RIGSYNC_REGISTRY", "~/.config/rigsync/machines.toml")).expanduser()).resolve()
         config = load_config(root, config_path, registry_path)
         if args.command == "doctor":
             doctor(config, selected_machines(config, args.machines))

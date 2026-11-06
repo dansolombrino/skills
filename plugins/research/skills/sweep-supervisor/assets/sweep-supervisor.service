@@ -4,7 +4,7 @@ After=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env python3 __SUPERVISOR_PY__ serve
+ExecStart=/usr/bin/env python3 __LAUNCHER_OR_SUPERVISOR_PY__ serve
 Restart=on-failure
 RestartSec=10
 

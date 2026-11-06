@@ -1,10 +1,15 @@
 {
-  "description": "sweep-supervisor: at session start, state the facts (progress, ETA, warnings, dashboard) of each live wave in this project. Silent otherwise.",
+  "description": "At session start in a project tagged research, state its working mode (the main chat orchestrates, subagents do bounded work) and the facts (progress, ETA, warnings, dashboard, whether a chat follows it) of each live wave. Silent elsewhere.",
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "startup|resume|clear|compact",
+        "matcher": "startup|resume|clear|compact|fork",
         "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/orchestration_note.py\"",
+            "timeout": 5
+          },
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/skills/sweep-supervisor/scripts/wave_reminder.py\"",
