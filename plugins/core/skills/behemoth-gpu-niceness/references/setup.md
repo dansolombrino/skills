@@ -28,8 +28,11 @@ systemctl --user daemon-reload && systemctl --user enable --now behemoth-gpu-nic
 curl -s 'http://127.0.0.1:40977/api/stats?window=24h' | head -c 300
 ```
 
-Point the unit at a stable copy of the script (the installed skill path, or a checkout of this
-repository). The page assets are read from `assets/` next to `scripts/` on every request.
+Point the unit at a repository checkout on the machine, or at a small launcher you keep outside
+the install that starts the newest installed copy. Never point it straight at the installed skill
+path: that path contains the plugin version and the host deletes it some time after an update, so
+the unit would stop starting. The page assets are read from `assets/` next to `scripts/` on every
+request.
 
 ## Put it behind service-hub and share it
 

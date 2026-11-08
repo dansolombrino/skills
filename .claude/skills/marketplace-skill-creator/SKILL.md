@@ -10,7 +10,8 @@ Read that file and follow it exactly; it is the single canonical copy for every 
 
 Two host notes while following it:
 
-- It cites the Codex built-ins `$skill-creator` and `$plugin-creator`. Claude Code has no
-  equivalents — apply the general skill-authoring conventions in this repository instead.
+- It cites the Codex built-ins `$skill-creator` and `$plugin-creator`. On Claude Code, use the
+  `skill-creator` skill if the session lists one and `claude plugin init` for a plugin's skeleton,
+  then apply this repository's conventions, which win where they differ.
 - `$marketplace-skill-reviewer` is this repository's other maintenance skill; invoke it here as
   `marketplace-skill-reviewer`.

@@ -27,10 +27,15 @@ writes only three files and touches nothing else:
 | File | What the script owns |
 |---|---|
 | `.project.toml` | the whole file |
-| `.claude/settings.json` | the `enabledPlugins` entry of each known category, explicitly `true` or `false`; every other key is preserved |
+| `.claude/settings.json` | the `enabledPlugins` entry of each known category, explicitly `true` or `false`; in a `research` project, the `Read(./.env)` rule in `permissions.deny`; every other key is preserved |
 | `.codex/config.toml` | one managed block holding a `[plugins."<id>"]` table per known category; everything outside the block is preserved |
 
 The script never edits the user's global host configuration.
+
+The deny rule keeps the project's secrets out of the agent's file tools and recognized read
+commands on the host that reads this file. It also blocks that host's edit and write tools on
+`.env`, including creating it, so a script or the user creates and changes the file. Scripts that
+read `.env` in a subprocess are not affected. Removing the `research` tag leaves the rule in place.
 
 ## Tag a project
 
@@ -46,16 +51,16 @@ The script never edits the user's global host configuration.
 4. Report the Codex trust line. Codex silently ignores a project's `.codex/config.toml` until that
    exact project root is trusted; a trusted parent directory does not count. If it is not
    trusted, tell the user to open the project in Codex and accept the trust prompt.
-5. Tell the user that a host loads plugins at session start, so the new tag takes effect in the
-   next session.
+5. Tell the user that a host loads plugins at session start, so the new tag takes effect after
+   they start a new session, or use the host's plugin reload command if it has one.
 6. Leave the three files uncommitted unless the user asks for a commit, in which case commit only
    those files.
 
 ## Hand off to a domain scaffold
 
 Tagging never scaffolds. When the user also wants a fresh Research 2.0 project and the directory
-is new or empty, tag it with `research` first, then tell the user to start a new session and use
-`research-project-init` there. It accepts a directory that holds only the files this skill
+is new or empty, tag it with `research` first, then tell the user to start a new session, or use
+the host's plugin reload command if it has one, and use `research-project-init` there. It accepts a directory that holds only the files this skill
 writes, and requires the `research` tag.
 
 ## Check a project
@@ -64,12 +69,26 @@ Run `python3 "$PROJECT_INIT" check`. It recomputes the host settings from the
 marker and reports:
 
 - `in sync`, exit 0;
-- `drift <host>: <plugin> is <state>, marker says <want>` lines, exit 1;
+- `drift <host>: ...` lines, where a generated setting disagrees with the marker, exit 1;
+- `mismatch <host>: ...` lines, where the files agree with the marker but the host would still do
+  something else, exit 1;
 - `untagged`, exit 2.
 
-Each result includes the Codex trust line. For drift, show the lines and offer to rerun `apply`
-with the marker's categories; never change the marker to match the settings without the user's
-say-so.
+Each result includes the Codex trust line and the plugin's state in the user's global Codex config.
+With `claude` on PATH it also reports what `claude plugin list --json` says for this project; a
+machine without it skips that part. For drift, show the lines and offer to rerun `apply` with the
+marker's categories; never change the marker to match the settings without the user's say-so. A
+mismatch is not fixed by `apply`: show the line and let the user change the setting it names, since
+it lives outside the project.
 
-When a domain skill does not load where the user expects it, run `check` first. The usual causes
-are a missing tag, drift, an untrusted project in Codex, or a session started before the tag.
+When a domain skill does not load where the user expects it, or loads where it should not, run
+`check` first. The usual causes:
+
+- a missing tag, or drift;
+- a session started before the tag;
+- an untrusted project in Codex, or the plugin left on in the global Codex config, which reinstalling
+  the plugin there does;
+- on Claude, a `.claude/settings.local.json`, user or managed setting overriding the project;
+- the plugin is not installed on this machine, or its marketplace is not registered. A cloned tag
+  does not bring either one; follow the plugin repository's install steps. On Claude, the `/plugin`
+  Errors tab shows load failures.

@@ -7,15 +7,19 @@ The marker `.project.toml` at the project root is the single source of truth:
 
 `core` is implied everywhere and never listed. From the marker this script generates:
 
-    .claude/settings.json   enabledPlugins entry for every known category (true/false);
+    .claude/settings.json   enabledPlugins entry for every known category (true/false), and
+                            for a project with secrets the permissions.deny rule for .env;
                             every other key in the file is preserved
     .codex/config.toml      a managed block holding one [plugins."<id>"] table per known
                             category; everything outside the block is preserved
 
-`apply` writes all three; `check` recomputes them and reports drift plus Codex trust.
-Codex ignores a project's .codex/config.toml unless the project is trusted, and says
-nothing about it, so `check` and `apply` both report the trust state. This script never
-edits the user's global configuration.
+`apply` writes all three; `check` recomputes them and reports drift plus what each host
+would actually do. Codex ignores a project's .codex/config.toml unless the project is
+trusted, and says nothing about it, so `check` and `apply` both report the trust state and
+the user's global Codex state. A settings file does not prove a plugin is on: a local file
+can override it, or the plugin may not be installed, so with `claude` on PATH `check` also
+compares the marker with `claude plugin list --json`. This script never edits the user's
+global configuration.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -31,6 +36,10 @@ from pathlib import Path
 MARKETPLACE = "dansolombrino-skills"
 # category -> plugin id. Every distributed plugin except `core` is a category.
 CATEGORIES = {"research": f"research@{MARKETPLACE}"}
+# Categories whose projects hold a .env. A Read deny also blocks Claude's Edit and Write of the
+# file, so the file is created and changed by scripts or the user, never by the agent's file tools.
+ENV_DENY_CATEGORIES = {"research"}
+ENV_DENY_RULE = "Read(./.env)"
 
 MARKER = ".project.toml"
 CLAUDE_SETTINGS = Path(".claude/settings.json")
@@ -125,7 +134,20 @@ def render_claude(root: Path, categories: list[str]) -> str:
     for name, plugin in sorted(CATEGORIES.items()):
         enabled[plugin] = name in categories
     data["enabledPlugins"] = enabled
+    # Added, never removed: dropping a tag does not make the project's secrets go away, and the
+    # rule may be the user's own.
+    if ENV_DENY_CATEGORIES & set(categories) and not env_deny_present(data):
+        permissions = data.setdefault("permissions", {})
+        if not isinstance(permissions, dict) or not isinstance(permissions.setdefault("deny", []), list):
+            raise InitError(f"{CLAUDE_SETTINGS} permissions.deny must be a list")
+        permissions["deny"].append(ENV_DENY_RULE)
     return json.dumps(data, indent=2) + "\n"
+
+
+def env_deny_present(data: dict) -> bool:
+    permissions = data.get("permissions")
+    deny = permissions.get("deny") if isinstance(permissions, dict) else None
+    return isinstance(deny, list) and ENV_DENY_RULE in deny
 
 
 def claude_state(root: Path) -> dict[str, bool | None]:
@@ -133,6 +155,53 @@ def claude_state(root: Path) -> dict[str, bool | None]:
     if not isinstance(enabled, dict):
         enabled = {}
     return {plugin: enabled.get(plugin) for plugin in CATEGORIES.values()}
+
+
+def claude_effective(root: Path, expected: dict[str, bool]) -> tuple[list[str], list[str]]:
+    """Notes and mismatches from what Claude itself reports here; ([], []) without `claude`.
+
+    `enabled` is the merged settings, which the tracked file alone cannot show: a local file or
+    managed settings can override it, and only the listing knows whether the plugin is installed.
+    """
+    claude = shutil.which("claude")
+    if claude is None:
+        return [], []
+    try:
+        out = subprocess.run(
+            [claude, "plugin", "list", "--json"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            stdin=subprocess.DEVNULL,
+            check=True,
+        )
+        entries = json.loads(out.stdout)
+        by_id = {entry["id"]: entry for entry in entries}
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return ["claude effective: unknown (`claude plugin list --json` failed)"], []
+    notes, mismatches = [], []
+    for plugin, want in sorted(expected.items()):
+        entry = by_id.get(plugin)
+        if entry is None:
+            notes.append(f"claude effective: {plugin} is not installed")
+            if want:
+                mismatches.append(
+                    f"mismatch claude: {plugin} is not installed, marker says True; "
+                    "install it from the marketplace, adding the marketplace first if it is missing"
+                )
+            continue
+        enabled = entry.get("enabled") is True
+        errors = entry.get("errors") or []
+        notes.append(f"claude effective: {plugin} is {'on' if enabled else 'off'}")
+        if enabled != want:
+            mismatches.append(
+                f"mismatch claude: {plugin} is {'on' if enabled else 'off'} in merged settings, "
+                f"marker says {want}; a local, user or managed setting overrides the project"
+            )
+        elif want and errors:
+            mismatches.append(f"mismatch claude: {plugin} failed to load: {'; '.join(map(str, errors))}")
+    return notes, mismatches
 
 
 # ───────────────────────────── codex ─────────────────────────────
@@ -189,20 +258,44 @@ def codex_state(root: Path) -> dict[str, bool | None]:
     return state
 
 
+def codex_user_config_path() -> Path:
+    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "config.toml"
+
+
+def codex_user_config() -> dict | None:
+    """The user's global Codex config, or None when it is missing or cannot be read."""
+    try:
+        data = tomllib.loads(codex_user_config_path().read_text())
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return None
+    return data
+
+
 def codex_trust(root: Path) -> str:
     """trusted | untrusted | unknown. Only an exact entry for the project root counts."""
-    home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
-    config = home / "config.toml"
-    if not config.exists():
+    config = codex_user_config()
+    if config is None:
         return "unknown"
-    try:
-        projects = tomllib.loads(config.read_text()).get("projects", {})
-    except tomllib.TOMLDecodeError:
-        return "unknown"
-    entry = projects.get(str(root))
+    projects = config.get("projects")
+    entry = projects.get(str(root)) if isinstance(projects, dict) else None
     if isinstance(entry, dict) and entry.get("trust_level") == "trusted":
         return "trusted"
     return "untrusted"
+
+
+def codex_global_state() -> dict[str, bool | None] | None:
+    """Each category plugin's global `enabled`, None when unset; None if the config is unreadable."""
+    config = codex_user_config()
+    if config is None:
+        return None
+    plugins = config.get("plugins")
+    plugins = plugins if isinstance(plugins, dict) else {}
+    state = {}
+    for plugin in CATEGORIES.values():
+        entry = plugins.get(plugin)
+        enabled = entry.get("enabled") if isinstance(entry, dict) else None
+        state[plugin] = enabled if isinstance(enabled, bool) else None
+    return state
 
 
 # ───────────────────────────── commands ─────────────────────────────
@@ -225,6 +318,36 @@ def trust_note(root: Path) -> str:
     )
 
 
+def codex_global_notes() -> list[str]:
+    state = codex_global_state()
+    if state is None:
+        return ["codex global: unknown (no readable user config)"]
+    notes = []
+    for plugin, enabled in sorted(state.items()):
+        if enabled:
+            notes.append(
+                f"codex global: {plugin} is on -- it loads in every project that does not turn it "
+                f"off and is trusted; a domain plugin should be off here: set enabled = false in "
+                f"{codex_user_config_path()}"
+            )
+        else:
+            notes.append(f"codex global: {plugin} is {'unset' if enabled is None else 'off'}")
+    return notes
+
+
+def codex_mismatches(root: Path, expected: dict[str, bool]) -> list[str]:
+    """An untrusted project's own config is ignored, so the global state decides there."""
+    state = codex_global_state()
+    if state is None or codex_trust(root) != "untrusted":
+        return []
+    return [
+        f"mismatch codex: {plugin} is {'on' if state[plugin] else 'off'} globally and this project "
+        f"is not trusted, so its config is ignored; marker says {want}"
+        for plugin, want in sorted(expected.items())
+        if state[plugin] is not None and state[plugin] != want
+    ]
+
+
 def cmd_apply(root: Path, categories: list[str]) -> int:
     # Render everything before writing anything, so a refusal leaves the project untouched.
     outputs = {
@@ -240,7 +363,9 @@ def cmd_apply(root: Path, categories: list[str]) -> int:
             print(f"unchanged {path.relative_to(root)}")
     print(f"categories: {', '.join(categories) or '(none; core only)'}")
     print(trust_note(root))
-    print("start a new session so each host reloads its plugins")
+    for line in codex_global_notes():
+        print(line)
+    print("start a new session, or use the host's plugin reload command if it has one")
     return 0
 
 
@@ -249,6 +374,8 @@ def cmd_check(root: Path) -> int:
     if categories is None:
         print(f"untagged: no {MARKER} in {root}")
         print(trust_note(root))
+        for line in codex_global_notes():
+            print(line)
         return 2
     expected = {plugin: name in categories for name, plugin in CATEGORIES.items()}
     drift = []
@@ -256,12 +383,21 @@ def cmd_check(root: Path) -> int:
         for plugin, want in sorted(expected.items()):
             if state[plugin] != want:
                 drift.append(f"{host}: {plugin} is {state[plugin]}, marker says {want}")
+    if ENV_DENY_CATEGORIES & set(categories) and not env_deny_present(read_claude(root)):
+        drift.append(f"claude: permissions.deny lacks {ENV_DENY_RULE}, marker lists a project with secrets")
+    claude_notes, mismatches = claude_effective(root, expected)
+    mismatches += codex_mismatches(root, expected)
     print(f"categories: {', '.join(categories) or '(none; core only)'}")
     for line in drift:
         print(f"drift {line}")
+    for line in mismatches:
+        print(line)
     print(trust_note(root))
+    for line in (*codex_global_notes(), *claude_notes):
+        print(line)
     if drift:
         print("run `project_init.py apply` with the marker's categories to fix")
+    if drift or mismatches:
         return 1
     print("in sync")
     return 0

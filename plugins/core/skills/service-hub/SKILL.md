@@ -1,6 +1,6 @@
 ---
 name: service-hub
-description: Run one web entry point per machine that lists every hosted web service on a landing page and serves each at http://<host>:<port>/<service>/ through a token-gated reverse proxy, so the backends listen on loopback only. Use when the user wants to put dashboards, viewers or other web apps behind one port or URL, add, remove or rename a service on the hub, asks which services a machine hosts or whether they are up, or needs a service's hub URL; also to install or troubleshoot the hub service. Do not use to build the services themselves or to expose a machine to the internet beyond its existing network setup.
+description: Run one web entry point per machine that lists every hosted web service on a landing page and serves each at http://host:port/service/ through a token-gated reverse proxy, so the backends listen on loopback only. Use when the user wants to put dashboards, viewers or other web apps behind one port or URL, add, remove or rename a service on the hub, asks which services a machine hosts or whether they are up, or needs a service's hub URL; also to install or troubleshoot the hub service. Do not use to build the services themselves or to expose a machine to the internet beyond its existing network setup.
 ---
 
 # service-hub

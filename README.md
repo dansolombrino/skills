@@ -5,7 +5,8 @@ Personal skills distributed as a private plugin marketplace for **Codex and Clau
 Skills are organized as domain plugins: one plugin per domain, each containing related skills
 installed as a unit. Two plugins exist:
 
-- **core** — always on in every project: `progress-updates` and `project-init`.
+- **core** — always on in every project: `progress-updates`, `project-init`, `service-hub`, and
+  `behemoth-gpu-niceness`.
 - **research** — Research 2.0 GPU experiment workflow. Off by default; enabled per project.
 
 Both hosts read the same `SKILL.md` files. Only the manifests differ, so a skill is written once
@@ -21,6 +22,8 @@ and stays identical everywhere.
 plugins/<plugin>/
 ├── .codex-plugin/plugin.json             # Codex manifest and version
 ├── .claude-plugin/plugin.json            # Claude manifest and version (kept in lockstep)
+├── agents/<name>.md                      # Claude subagents, where a plugin has them
+├── evals/<case>/                         # trigger evals, run by hand with `claude plugin eval`
 └── skills/<skill>/
     ├── SKILL.md                          # workflow instructions, shared by both hosts
     ├── agents/openai.yaml                # Codex UI metadata; ignored by Claude
@@ -47,14 +50,19 @@ Claude Code:
 /plugin install research@dansolombrino-skills
 ```
 
-Then turn `research` off globally, so it loads only in projects tagged with it:
+`research` must be off globally, so it loads only in projects tagged with it. Claude installs it
+off, through `defaultEnabled: false` in its manifest. Codex has no such field and `codex plugin add`
+always turns a plugin on, so turn it off yourself:
 
-- `~/.claude/settings.json`: `"enabledPlugins": {"core@dansolombrino-skills": true, "research@dansolombrino-skills": false}`
-- `~/.codex/config.toml`: `[plugins."research@dansolombrino-skills"]` with `enabled = false`
-  (and `core` with `enabled = true`)
+```bash
+python3 scripts/codex_plugin_state.py set research@dansolombrino-skills false
+```
 
-Start a new session after installation so the bundled skills are loaded. Claude namespaces them
-as `core:<skill>` and `research:<skill>`; Codex exposes them as `$<skill>`.
+or set `enabled = false` under `[plugins."research@dansolombrino-skills"]` in `~/.codex/config.toml`.
+
+Start a new session after installation so the bundled skills are loaded; Claude Code's
+`/reload-plugins` also applies them to a running session. Claude namespaces them as `core:<skill>`
+and `research:<skill>`; Codex exposes them as `$<skill>`.
 
 ## Per-project plugins
 
@@ -66,10 +74,16 @@ else in both files. `project-init` can also check that the marker and both files
 
 Codex reads a project's `.codex/config.toml` only when that exact project root is trusted — a
 trusted parent does not count — and says nothing otherwise; `project-init` reports the trust
-state. Plugins load at session start, so a new tag takes effect in the next session.
+state. Plugins load at session start, so a new tag takes effect in a new session, or on Claude Code
+after `/reload-plugins`.
+
+`project-init` writes no marketplace into a project, so a tagged clone on a new machine still needs
+the install steps above. In a `research` project it also writes the deny rule `Read(./.env)` to
+`.claude/settings.json`, which blocks Claude Code's own edit and write tools on `.env` as well;
+scripts that read the file in a subprocess keep working.
 
 A fresh Research 2.0 project is tagged first, then scaffolded by `research-project-init` in a new
-session.
+session or after a reload.
 
 Cross-rig workflows require the bundled `rig-sync` and `environment-sync` contracts plus GitHub
 access on every rig; the plugin stops before remote dispatch when source or runtime parity cannot
@@ -108,15 +122,21 @@ codex plugin remove <plugin>@dansolombrino-skills
 codex plugin add <plugin>@dansolombrino-skills
 ```
 
+Codex has no `update`, and `add` turns the plugin on globally. After adding a domain plugin such as
+`research`, turn it off again as in the install steps. `scripts/release.sh` does this for you.
+
 Claude Code:
 
 ```bash
-/plugin marketplace update dansolombrino-skills
-/plugin uninstall <plugin>@dansolombrino-skills
-/plugin install <plugin>@dansolombrino-skills
+claude plugin marketplace update dansolombrino-skills
+claude plugin update <plugin>@dansolombrino-skills --scope user
 ```
 
-Restart the desktop app or start a new CLI session after updating.
+Do not uninstall and reinstall: a user-scope install rewrites the plugin's enabled entry. With
+`autoUpdate` on for the marketplace, Claude Code also updates by itself in the background.
+
+Restart the desktop app or start a new CLI session after updating; Claude Code's `/reload-plugins`
+also applies an update to a running session.
 
 ## Develop skills in this repository
 
@@ -125,12 +145,15 @@ Restart the desktop app or start a new CLI session after updating.
   (Codex invokes both with a `$` prefix.) Edit only the `.agents/skills/` copy — `.claude/skills/`
   just points at it.
 - `python3 scripts/validate_repo.py` validates both marketplaces, both manifests, and every skill.
-- `python3 -m unittest discover tests` runs the contract, dual-host, and script suites.
+- `TMPDIR=/tmp python3 -m unittest discover tests` runs the contract, dual-host, and script suites.
+- `git config core.hooksPath .githooks` once per clone makes every commit run the validator and
+  `scripts/check_version_bump.py`.
+- From a plugin directory, `claude plugin eval . --ablation none --no-publish --max-cost-usd 5` runs
+  its trigger suite by hand. It costs model usage and is not part of the release gate.
 
 Distributed skill content must be host-neutral — see `AGENTS.md`. Any change to a distributed
-skill requires a version bump in `plugins/<plugin>/.codex-plugin/plugin.json`,
-`plugins/<plugin>/.claude-plugin/plugin.json`, and the `.claude-plugin/marketplace.json` entry;
-validation fails if they drift.
+skill requires a version bump in `plugins/<plugin>/.codex-plugin/plugin.json` and
+`plugins/<plugin>/.claude-plugin/plugin.json`; validation fails if they drift.
 
 ## Release
 
@@ -143,24 +166,24 @@ scripts/release.sh --plugin research
 
 One command validates, tags, pushes, and installs the new version on both hosts. It **fails unless
 both hosts end up reporting the released version**, so publishing and installing cannot drift
-apart. Restart Claude Code and Codex afterwards; running sessions keep the version they launched
-with.
+apart. Before pushing it runs `claude plugin validate --strict` and `claude plugin tag --dry-run`,
+so a forgotten bump stops it there. It keeps each plugin's `enabled` state in the global Codex
+config across Codex's remove-then-add, and fails if a domain plugin ends up on there. Restart
+Claude Code and Codex afterwards; running sessions keep the version they launched with.
 
-Check for drift at any time without changing anything:
+Check for drift at any time without tagging, pushing, or touching either host:
 
 ```bash
 scripts/release.sh --dry-run --plugin <plugin>
 ```
 
-This prints the target version against what each host actually has installed, and exits non-zero if
-they disagree.
+This prints the target version against what each host actually has installed, warns if the plugin
+changed since the tag of that version, and exits non-zero if the hosts disagree or a domain plugin
+is on globally in Codex. It does run `git fetch origin main`, which updates `origin/main`, and the
+full test suite.
 
-A version bump must land in **four** places, all checked before the release proceeds:
-
-- `plugins/<plugin>/.codex-plugin/plugin.json`
-- `plugins/<plugin>/.claude-plugin/plugin.json`
-- the `.claude-plugin/marketplace.json` entry
-- the pin in `tests/test_<plugin>_contracts.py`
+A version bump goes in `plugins/<plugin>/.codex-plugin/plugin.json` and
+`plugins/<plugin>/.claude-plugin/plugin.json`, the only two places a version lives.
 
 Manual fallback, if the script cannot run: validate and test, `git push origin main`,
 `claude plugin tag plugins/<plugin> --push`, then the update commands above for each host.

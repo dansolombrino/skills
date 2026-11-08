@@ -28,14 +28,7 @@ def load_project_init():
 
 
 class CoreContractTests(unittest.TestCase):
-    def test_plugin_version_and_distributed_skills(self) -> None:
-        manifest = json.loads((CORE / ".codex-plugin/plugin.json").read_text())
-        self.assertEqual(manifest["version"], "5.3.0")
-        claude_manifest = json.loads((CORE / ".claude-plugin/plugin.json").read_text())
-        catalog = json.loads((ROOT / ".claude-plugin/marketplace.json").read_text())
-        entry = next(plugin for plugin in catalog["plugins"] if plugin["name"] == "core")
-        self.assertEqual(claude_manifest["version"], manifest["version"])
-        self.assertEqual(entry["version"], manifest["version"])
+    def test_distributed_skills(self) -> None:
         self.assertEqual(
             {path.parent.name for path in (CORE / "skills").glob("*/SKILL.md")},
             {"behemoth-gpu-niceness", "progress-updates", "project-init", "service-hub"},
@@ -82,6 +75,10 @@ class ProjectInitTests(unittest.TestCase):
         env = mock.patch.dict(os.environ, {"CODEX_HOME": str(self.codex_home)})
         env.start()
         self.addCleanup(env.stop)
+        # No real `claude` unless a test installs a fake one: check must not depend on this machine.
+        which = mock.patch.object(self.module.shutil, "which", return_value=None)
+        self.which = which.start()
+        self.addCleanup(which.stop)
         self.addCleanup(self.tmp.cleanup)
         self.plugin = self.module.CATEGORIES["research"]
 
@@ -125,7 +122,7 @@ class ProjectInitTests(unittest.TestCase):
         self.run_cli("apply", "--categories", "research")
         after = {p: p.read_text() for p in self.root.rglob("*") if p.is_file() and ".git" not in p.parts}
         self.assertEqual(before, after)
-        self.assertEqual(self.claude()["permissions"], {"allow": ["Bash(ls)"]})
+        self.assertEqual(self.claude()["permissions"]["allow"], ["Bash(ls)"])
         self.assertIs(self.claude()["enabledPlugins"]["x@y"], True)
         codex = self.codex()
         self.assertEqual(codex["model"], "m")
@@ -176,6 +173,124 @@ class ProjectInitTests(unittest.TestCase):
         config.write_text(f'[projects."{self.root}"]\ntrust_level = "trusted"\n')
         self.assertEqual(self.module.codex_trust(self.root), "trusted")
         self.assertIn("codex trust: trusted", self.run_cli("check")[1])
+
+    def test_codex_reads_are_tolerant_of_a_broken_user_config(self) -> None:
+        self.run_cli("apply", "--categories", "research")
+        (self.codex_home / "config.toml").write_bytes(b"\xff not = [toml")
+        code, output = self.run_cli("check")
+        self.assertEqual(code, 0, output)
+        self.assertIn("codex trust: unknown", output)
+        self.assertIn("codex global: unknown", output)
+
+    def test_check_reports_the_global_codex_state(self) -> None:
+        config = self.codex_home / "config.toml"
+        self.run_cli("apply", "--categories", "research")
+        trust = f'[projects."{self.root}"]\ntrust_level = "trusted"\n'
+        config.write_text(f'{trust}[plugins."{self.plugin}"]\nenabled = false\n')
+        self.assertIn(f"codex global: {self.plugin} is off", self.run_cli("check")[1])
+        config.write_text(f'{trust}[plugins."{self.plugin}"]\nenabled = true\n')
+        code, output = self.run_cli("check")
+        self.assertEqual(code, 0, "a trusted project's own config decides")
+        self.assertIn(f"codex global: {self.plugin} is on", output)
+        self.assertIn("in sync", output)
+        self.assertIn(f"codex global: {self.plugin} is on", self.run_cli("apply", "--categories", "research")[1])
+
+    def test_untrusted_project_falls_back_to_the_global_codex_state(self) -> None:
+        config = self.codex_home / "config.toml"
+        self.run_cli("apply", "--categories")
+        config.write_text(f'[plugins."{self.plugin}"]\nenabled = true\n')
+        code, output = self.run_cli("check")
+        self.assertEqual(code, 1)
+        self.assertIn(f"mismatch codex: {self.plugin} is on globally", output)
+        self.assertNotIn("in sync", output)
+        config.write_text(f'[plugins."{self.plugin}"]\nenabled = false\n')
+        self.assertEqual(self.run_cli("check")[0], 0)
+
+    def fake_claude(self, listing: str, code: int = 0) -> None:
+        script = Path(self.tmp.name) / "claude"
+        script.write_text(f"#!/bin/sh\ncat <<'EOF'\n{listing}\nEOF\nexit {code}\n")
+        script.chmod(0o755)
+        self.which.return_value = str(script)
+
+    def test_check_reports_a_plugin_the_merged_settings_turn_off(self) -> None:
+        self.run_cli("apply", "--categories", "research")
+        self.fake_claude(json.dumps([{"id": self.plugin, "enabled": False, "projectEnabled": True}]))
+        code, output = self.run_cli("check")
+        self.assertEqual(code, 1)
+        self.assertIn(f"mismatch claude: {self.plugin} is off in merged settings, marker says True", output)
+        self.assertNotIn("in sync", output)
+        self.assertNotIn("run `project_init.py apply`", output, "apply cannot fix a setting outside the project")
+
+    def test_check_agrees_with_the_host_listing(self) -> None:
+        self.run_cli("apply", "--categories", "research")
+        self.fake_claude(json.dumps([{"id": self.plugin, "enabled": True}]))
+        code, output = self.run_cli("check")
+        self.assertEqual(code, 0, output)
+        self.assertIn(f"claude effective: {self.plugin} is on", output)
+        self.assertIn("in sync", output)
+
+    def test_check_reports_a_tagged_plugin_that_is_not_installed(self) -> None:
+        self.fake_claude("[]")
+        self.run_cli("apply", "--categories", "research")
+        code, output = self.run_cli("check")
+        self.assertEqual(code, 1)
+        self.assertIn(f"mismatch claude: {self.plugin} is not installed", output)
+        self.run_cli("apply", "--categories")
+        self.assertEqual(self.run_cli("check")[0], 0, "an off plugin may be absent")
+
+    def test_check_reports_a_load_error(self) -> None:
+        self.run_cli("apply", "--categories", "research")
+        self.fake_claude(json.dumps([{"id": self.plugin, "enabled": True, "errors": ["bad hook"]}]))
+        code, output = self.run_cli("check")
+        self.assertEqual(code, 1)
+        self.assertIn("failed to load: bad hook", output)
+
+    def test_check_survives_a_broken_host_listing(self) -> None:
+        self.run_cli("apply", "--categories", "research")
+        for listing, code in (("not json", 0), ("[]", 3), ('{"a": 1}', 0)):
+            self.fake_claude(listing, code)
+            status, output = self.run_cli("check")
+            self.assertEqual(status, 0, output)
+            self.assertIn("claude effective: unknown", output)
+
+    def test_research_tag_denies_reading_env_and_keeps_other_keys(self) -> None:
+        (self.root / ".claude").mkdir()
+        (self.root / ".claude/settings.json").write_text(
+            json.dumps({"model": "m", "permissions": {"allow": ["Bash(ls)"], "deny": ["Read(./x)"]}})
+        )
+        self.run_cli("apply", "--categories", "research")
+        settings = self.claude()
+        self.assertEqual(settings["model"], "m")
+        self.assertEqual(settings["permissions"]["allow"], ["Bash(ls)"])
+        self.assertEqual(settings["permissions"]["deny"], ["Read(./x)", "Read(./.env)"])
+        self.run_cli("apply", "--categories", "research")
+        self.assertEqual(self.claude()["permissions"]["deny"].count("Read(./.env)"), 1)
+
+    def test_core_only_project_gets_no_env_rule_and_retag_keeps_it(self) -> None:
+        self.run_cli("apply", "--categories")
+        self.assertNotIn("permissions", self.claude())
+        self.run_cli("apply", "--categories", "research")
+        self.run_cli("apply", "--categories")
+        self.assertIn("Read(./.env)", self.claude()["permissions"]["deny"])
+
+    def test_check_reports_a_missing_env_rule_as_drift(self) -> None:
+        self.run_cli("apply", "--categories", "research")
+        settings = self.claude()
+        del settings["permissions"]
+        (self.root / ".claude/settings.json").write_text(json.dumps(settings))
+        code, output = self.run_cli("check")
+        self.assertEqual(code, 1)
+        self.assertIn("drift claude: permissions.deny lacks Read(./.env)", output)
+        self.run_cli("apply", "--categories", "research")
+        self.assertEqual(self.run_cli("check")[0], 0)
+
+    def test_malformed_permissions_are_refused_without_writing(self) -> None:
+        (self.root / ".claude").mkdir()
+        (self.root / ".claude/settings.json").write_text(json.dumps({"permissions": {"deny": "x"}}))
+        code, output = self.run_cli("apply", "--categories", "research")
+        self.assertEqual(code, 3)
+        self.assertIn("permissions.deny must be a list", output)
+        self.assertFalse((self.root / ".project.toml").exists())
 
 
 if __name__ == "__main__":

@@ -14,11 +14,31 @@ NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 LINK_RE = re.compile(r"\[[^]]*]\(([^)]+)\)")
 SKILL_SIGIL_RE = re.compile(r"\$([a-z0-9]+(?:-[a-z0-9]+)+)\b")
+# Host product names as written in prose. Lower-case commands and paths are not matched.
+HOST_NAME_RE = re.compile(r"\b(Claude|Codex|Anthropic|OpenAI|ChatGPT)\b")
+# Files where a host name identifies a real install target or per-host configuration.
+HOST_NAME_ALLOWLIST = {
+    "plugins/core/skills/project-init/SKILL.md",  # generates each host's settings
+    "plugins/research/skills/sweep-supervisor/references/setup.md",  # per-host agent commands
+}
+SKILL_KEYS = {"name", "description"}
+# A Claude pointer may add Claude-only guardrails. A distributed skill may not: the field would do
+# nothing on Codex, so the two hosts would behave differently.
+POINTER_KEYS = SKILL_KEYS | {"disallowed-tools"}
+EVAL_CASE_KEYS = {
+    "schema_version", "name", "description", "tags", "plugins", "runs", "expected_outcome",
+    "model", "max_turns", "timeout_seconds", "allowed_tools", "append_system_prompt", "env",
+}
+EVAL_GRADER_TYPES = {"regex", "tool_used", "tool_order", "file_exists", "llm", "baseline"}
+EVAL_SKILL_RE = re.compile(r"([a-z0-9]+(?:-[a-z0-9]+)+)\"'?$")
+FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---(?:\n|\Z)", re.DOTALL)
 
 
-def parse_frontmatter(path: Path, errors: list[str]) -> dict[str, str]:
+def parse_frontmatter(
+    path: Path, errors: list[str], allowed: set[str] = SKILL_KEYS
+) -> dict[str, str]:
     text = path.read_text()
-    match = re.match(r"\A---\n(.*?)\n---(?:\n|\Z)", text, re.DOTALL)
+    match = FRONTMATTER_RE.match(text)
     if not match:
         errors.append(f"{path}: missing YAML frontmatter")
         return {}
@@ -32,15 +52,16 @@ def parse_frontmatter(path: Path, errors: list[str]) -> dict[str, str]:
             errors.append(f"{path}: unsupported or empty frontmatter line: {line!r}")
             continue
         fields[key.strip()] = value.strip().strip('"')
-    if set(fields) != {"name", "description"}:
+    if not SKILL_KEYS <= set(fields) <= allowed:
         errors.append(
-            f"{path}: frontmatter keys must be exactly name and description; got {sorted(fields)}"
+            f"{path}: frontmatter keys must be name and description, "
+            f"and at most {sorted(allowed)}; got {sorted(fields)}"
         )
     return fields
 
 
 def validate_skill(skill_dir: Path, errors: list[str], *, shared: bool = True) -> None:
-    """Validate one skill. `shared` skills ship to every host; repo-local ones are Codex-only."""
+    """Validate one skill. `shared` skills ship to every host; repo-local ones stay in this repo."""
     skill_md = skill_dir / "SKILL.md"
     if not skill_md.is_file():
         errors.append(f"{skill_dir}: missing SKILL.md")
@@ -88,15 +109,30 @@ def validate_skill(skill_dir: Path, errors: list[str], *, shared: bool = True) -
                 errors.append(f"{markdown}: relative link {target!r} leaves its plugin")
 
     # Skills are shared verbatim by every supported host, so instructions must not carry a
-    # host-specific invocation sigil. Host product names are allowed where they name a real
-    # install target (for example the Flywheel per-host setup docs).
+    # host-specific invocation sigil. Host product names are checked by validate_host_names.
     if not shared:
         return
+    # Claude's skill listing shows angle brackets in a description as &lt; and &gt;.
+    if "<" in description or ">" in description:
+        errors.append(f"{skill_md}: description must not contain angle brackets")
     for markdown in skill_dir.rglob("*.md"):
         for match in SKILL_SIGIL_RE.finditer(markdown.read_text()):
             errors.append(
                 f"{markdown}: host-specific skill invocation {match.group(0)!r}; "
                 f"write {match.group(1)!r} without the leading '$'"
+            )
+
+
+def validate_host_names(root: Path, plugin_root: Path, errors: list[str]) -> None:
+    """Prose in distributed skills and agents stays host-neutral. evals/ is exempt: it is not read
+    by the agent, and `claude plugin eval` is Claude-only."""
+    for markdown in [*plugin_root.glob("skills/**/*.md"), *plugin_root.glob("agents/*.md")]:
+        if markdown.relative_to(root).as_posix() in HOST_NAME_ALLOWLIST:
+            continue
+        for match in HOST_NAME_RE.finditer(markdown.read_text()):
+            errors.append(
+                f"{markdown}: host name {match.group(0)!r}; describe the capability generically, "
+                f"or add the file to HOST_NAME_ALLOWLIST if it names a real install target"
             )
 
 
@@ -135,6 +171,54 @@ def validate_hooks(plugin_root: Path, errors: list[str]) -> None:
                 for relative in HOOK_SCRIPT_RE.findall(command):
                     if not (plugin_root / relative).is_file():
                         errors.append(f"{hooks_path}: {event} hook runs missing file {relative}")
+
+
+def validate_agents(plugin_root: Path, errors: list[str]) -> None:
+    """A plugin's agents/*.md need a name, a useful description, and skills that exist here."""
+    for agent in sorted((plugin_root / "agents").glob("*.md")):
+        match = FRONTMATTER_RE.match(agent.read_text())
+        if not match:
+            errors.append(f"{agent}: missing YAML frontmatter")
+            continue
+        block = match.group(1)
+        name = re.search(r"^name:[ \t]*(.*)$", block, re.MULTILINE)
+        if not name or name.group(1).strip() != agent.stem:
+            errors.append(f"{agent}: name must match the file name {agent.stem!r}")
+        description = re.search(r"^description:[ \t]*(.*)$", block, re.MULTILINE)
+        if not description or len(description.group(1)) < 40:
+            errors.append(f"{agent}: description is too short to define useful delegation")
+        skills = re.search(r"^skills:[ \t]*(.*(?:\n[ \t]+-.*)*)", block, re.MULTILINE)
+        for skill in re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)*", skills.group(1)) if skills else []:
+            if not (plugin_root / "skills" / skill / "SKILL.md").is_file():
+                errors.append(f"{agent}: skills lists {skill!r}, which this plugin does not have")
+
+
+def validate_evals(plugin_root: Path, errors: list[str]) -> None:
+    """`claude plugin eval` has no free format check, so hold cases to its documented layout."""
+    evals = plugin_root / "evals"
+    for prompt in sorted(evals.rglob("prompt.md")) if evals.is_dir() else []:
+        if "results" in prompt.relative_to(evals).parts:
+            continue
+        match = FRONTMATTER_RE.match(prompt.read_text())
+        if not match or not prompt.read_text()[match.end():].strip():
+            errors.append(f"{prompt}: needs frontmatter and a prompt body")
+            continue
+        keys = set(re.findall(r"^([A-Za-z_]+):", match.group(1), re.MULTILINE))
+        if keys - EVAL_CASE_KEYS:
+            errors.append(f"{prompt}: unknown frontmatter keys {sorted(keys - EVAL_CASE_KEYS)}")
+        graders = sorted((prompt.parent / "graders").glob("*.md"))
+        if not graders:
+            errors.append(f"{prompt.parent}: a case needs at least one graders/*.md")
+        for grader in graders:
+            head = FRONTMATTER_RE.match(grader.read_text())
+            block = head.group(1) if head else ""
+            kind = re.search(r"^type:\s*(\S+)", block, re.MULTILINE)
+            if not kind or kind.group(1) not in EVAL_GRADER_TYPES:
+                errors.append(f"{grader}: type must be one of {sorted(EVAL_GRADER_TYPES)}")
+            pattern = re.search(r"^input_match:\s*(.+)$", block, re.MULTILINE)
+            named = EVAL_SKILL_RE.search(pattern.group(1).strip()) if pattern else None
+            if named and not (plugin_root / "skills" / named.group(1) / "SKILL.md").is_file():
+                errors.append(f"{grader}: names skill {named.group(1)!r}, not in this plugin")
 
 
 def main() -> int:
@@ -223,8 +307,16 @@ def main() -> int:
                     f"{claude_manifest_path}: {field} must match {manifest_path} "
                     f"({claude_manifest.get(field)!r} != {manifest.get(field)!r})"
                 )
-        if claude_entry is not None and claude_entry.get("version") != manifest.get("version"):
-            errors.append(f"{claude_marketplace_path}: {name} version must match {manifest_path}")
+        # The two manifests are the only version source: Claude reads the manifest's version first
+        # and the Codex catalog has none, so a catalog copy could only drift.
+        if claude_entry is not None and "version" in claude_entry:
+            errors.append(
+                f"{claude_marketplace_path}: {name} must not set version; its manifests hold it"
+            )
+        # Off on Claude from a plugin's first install. Codex has no such field: there, off comes
+        # from the user's config, which scripts/release.sh keeps and checks.
+        if name != "core" and claude_manifest.get("defaultEnabled") is not False:
+            errors.append(f"{claude_manifest_path}: a non-core plugin must set defaultEnabled: false")
         if "interface" in claude_manifest:
             errors.append(
                 f"{claude_manifest_path}: 'interface' is Codex-only and warns under "
@@ -236,6 +328,9 @@ def main() -> int:
             )
 
         validate_hooks(plugin_root, errors)
+        validate_agents(plugin_root, errors)
+        validate_evals(plugin_root, errors)
+        validate_host_names(root, plugin_root, errors)
 
         skill_root = plugin_root / "skills"
         skill_dirs = sorted(path for path in skill_root.iterdir() if path.is_dir()) if skill_root.is_dir() else []
@@ -278,7 +373,7 @@ def main() -> int:
         if not pointer.is_file():
             errors.append(f"{skill_dir}: missing SKILL.md")
             continue
-        fields = parse_frontmatter(pointer, errors)
+        fields = parse_frontmatter(pointer, errors, POINTER_KEYS)
         if fields.get("name") != skill_dir.name:
             errors.append(f"{pointer}: name must match folder {skill_dir.name!r}")
         canonical = agents_root / "skills" / skill_dir.name / "SKILL.md"
@@ -286,6 +381,8 @@ def main() -> int:
             errors.append(f"{pointer}: must point at {canonical}")
         elif not canonical.is_file():
             errors.append(f"{pointer}: points at missing {canonical}")
+        elif fields.get("description") != parse_frontmatter(canonical, []).get("description"):
+            errors.append(f"{pointer}: description must equal the one in {canonical}")
 
     for leftover in sorted(claude_entries):
         errors.append(f"{claude_marketplace_path}: {leftover!r} is absent from the Codex catalog")

@@ -30,10 +30,9 @@ skill authoring and `$plugin-creator` guidance when creating a plugin.
 - Create or refresh `agents/openai.yaml` with `display_name`, a 25–64 character
   `short_description`, and a one-sentence `default_prompt` that names `$<skill>`. The `$` form is
   correct here — this file is Codex-only metadata that Claude never reads.
-- Bump the plugin version in `.codex-plugin/plugin.json`, `.claude-plugin/plugin.json`, the
-  `.claude-plugin/marketplace.json` entry, and the pin in `tests/test_<plugin>_contracts.py`, all
-  to the same value: patch for compatible fixes,
-  minor for a new skill or backward-compatible capability, major for breaking behavior.
+- Bump the plugin version in `.codex-plugin/plugin.json` and `.claude-plugin/plugin.json`, to the
+  same value: patch for compatible fixes, minor for a new skill or backward-compatible capability,
+  major for breaking behavior. These two manifests are the only place the version lives.
 
 ## New plugins
 
@@ -41,14 +40,14 @@ skill authoring and `$plugin-creator` guidance when creating a plugin.
   built-in plugin creator's schema.
 - Create `plugins/<plugin>/.claude-plugin/plugin.json` mirroring the Codex manifest's `name`,
   `version`, `description`, `author`, `repository`, and `keywords`. Omit `interface` and `skills`:
-  the first is Codex-only, and Claude auto-discovers `./skills/`.
+  the first is Codex-only, and Claude auto-discovers `./skills/`. Unless the plugin belongs in every
+  project like `core`, set `"defaultEnabled": false` so it installs off on Claude; on Codex, off
+  comes from the user's config, which `scripts/release.sh` keeps and checks.
 - Add the plugin to `.agents/plugins/marketplace.json` with a local `./plugins/<plugin>` source,
   explicit installation/authentication policies, and a category.
-- Add the plugin to `.claude-plugin/marketplace.json` with a `"./plugins/<plugin>"` string source,
-  the same version, and a category.
-- Create `tests/test_<plugin>_contracts.py` with the version pin
-  `self.assertEqual(manifest["version"], "<version>")`; `scripts/release.sh --plugin <plugin>`
-  refuses to release without it.
+- Add the plugin to `.claude-plugin/marketplace.json` with a `"./plugins/<plugin>"` string source
+  and a category, and no `version`.
+- Create `tests/test_<plugin>_contracts.py` for the plugin's own contracts.
 - Unless the plugin belongs in every project like `core`, add it to `CATEGORIES` in
   `plugins/core/skills/project-init/scripts/project_init.py` and to the known-categories line of
   `project-init`'s `SKILL.md`, then bump `core`.

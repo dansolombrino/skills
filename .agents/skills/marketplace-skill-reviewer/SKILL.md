@@ -21,13 +21,15 @@ the marketplace entry. Do not edit files unless the user asks for fixes.
 - Confirm `agents/openai.yaml` matches the skill, its short description is 25–64 characters, and
   its default prompt explicitly names `$<skill>`.
 - For distributed skills, confirm `.codex-plugin/plugin.json`, `.claude-plugin/plugin.json`, both
-  marketplace entries, topical fit, and a matching version bump across all three plus the pin in
-  `tests/test_<plugin>_contracts.py`, relative to the latest `<plugin>--v<version>` tag.
+  marketplace entries, topical fit, and a matching version bump across both manifests, relative to
+  the latest `<plugin>--v<version>` tag (`scripts/check_version_bump.py` checks this).
 - Flag relative links that leave the skill's plugin, and a domain plugin missing from
   `project-init`'s `CATEGORIES`.
 - Confirm distributed instructions are host-neutral: no `$<skill>` sigil in any `.md`, no host
   product name outside a genuine per-host install target, and no capability described in terms
-  only one host provides.
+  only one host provides. The validator catches the names, not the capabilities.
+- When a skill's description changed and its plugin has an `evals/` suite, suggest running it by hand
+  (see `AGENTS.md`); reading a description cannot show whether it fires.
 
 Run `python3 scripts/validate_repo.py` and `python3 -m unittest discover tests`, and include their
 results. Report findings in severity order as
