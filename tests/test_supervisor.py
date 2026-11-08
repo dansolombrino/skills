@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -24,6 +25,7 @@ sys.modules["supervisor"] = supervisor
 SPEC.loader.exec_module(supervisor)
 rigsync = supervisor.rigsync
 board = supervisor.board
+REGISTER_GATES = supervisor.register_gates  # setUp stands in for these; their own tests put them back
 
 WAVE = "20260921-093000"
 FIX_WAVE = "20260921-101500"  # the wave an automatic fix round dispatched to replace WAVE
@@ -44,7 +46,7 @@ echo "$@" >> "$FAKE_SLURM/submitted"; echo "$n"
 """
 FAKE_SQUEUE = """#!/bin/sh
 case "$*" in
-  *--name=*--format=%i) name=$(echo "$*" | sed 's/.*--name=\\([^ ]*\\).*/\\1/'); awk -F'|' -v n="$name" '$2 == n {print $1}' "$FAKE_SLURM/squeue" 2>/dev/null ;;
+  *--name=*) echo "squeue --name splits on commas" >&2; exit 1 ;;
   *--format=%j) cut -d'|' -f2 "$FAKE_SLURM/squeue" 2>/dev/null ;;
   *) cat "$FAKE_SLURM/squeue" 2>/dev/null ;;
 esac
@@ -105,6 +107,7 @@ class SupervisorTests(unittest.TestCase):
             mock.patch.object(rigsync, "remote", side_effect=local_remote),
             mock.patch.object(supervisor.Cycle, "verify_lane", return_value=None),
             mock.patch.object(supervisor, "run_rigsync", side_effect=self.fake_rigsync),
+            mock.patch.object(supervisor, "register_gates", return_value=[]),
             mock.patch.object(rigsync.socket, "gethostname", return_value="hub-host"),  # this host is the hub
         ]
         self.rigsync_calls: list[tuple[str, ...]] = []
@@ -584,6 +587,14 @@ class SupervisorTests(unittest.TestCase):
         self.assertIn("job-adopted", events)
         self.assertNotIn("claim-refused", events)
 
+    def test_a_legacy_job_name_with_commas_is_matched_exactly_and_adopted(self) -> None:
+        pool = {"cluster": {"max_jobs": 1, "default_walltime_s": 3600}}
+        self.register(runs=1, pool=pool, run_extra={0: {"id": "lr=0.1,bs=8"}})
+        write(self.base / "slurm" / "squeue", f"776|{WAVE}__lr=0.1,bs=88|RUNNING|0:00|1:30:00|n1\n777|{WAVE}__lr=0.1,bs=8|PENDING|0:00|1:30:00|Priority\n")
+        self.cli("cycle", "--wave", WAVE)
+        self.assertEqual(self.queue()["runs"][0]["job_id"], 777)
+        self.assertFalse((self.base / "slurm" / "submitted").exists())
+
     def test_a_superseded_cluster_job_is_cancelled_by_id_and_never_resubmitted(self) -> None:
         pool = {"cluster": {"max_jobs": 1, "core_hours_cap": 1000, "default_walltime_s": 3600}}
         self.register(runs=1, pool=pool)
@@ -930,6 +941,475 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(notices["recovery-blocked"][1]["wave"], WAVE)
         self.assertFalse(notices["recovery-blocked"][1]["silent"])
         self.assertTrue(notices["run-failed"][1]["silent"], "the supervisor is already on it")
+
+    # ── the ledger cursor ──
+
+    def backdate(self, wave, **fields: float) -> None:
+        runtime = wave.runtime()
+        runtime.update({key: supervisor.iso(supervisor.now() - supervisor.timedelta(seconds=seconds)) for key, seconds in fields.items()})
+        wave.save_runtime(runtime)
+
+    def test_the_default_ledger_shows_an_event_from_during_the_last_tick(self) -> None:
+        self.register()
+        wave = supervisor.Wave(self.hub, WAVE)
+        self.registry.write_text(self.registry.read_text().replace(
+            'command = ["sh", "-c", "echo model={model} effort={effort}; echo \\"$0\\"", "{prompt}"]',
+            'command = ["sh", "-c", "sleep 1.1; echo \\"$0\\"", "{prompt}"]'))
+        settings = supervisor.load_settings(self.registry)
+        real = supervisor.run_agent
+
+        def agent_with_an_event_meanwhile(*args, **kwargs):
+            wave.log("run-failed", run="during-the-tick", rig="hub", gpu="0", rc=1)
+            return real(*args, **kwargs)
+
+        with mock.patch.object(supervisor, "run_agent", side_effect=agent_with_an_event_meanwhile), contextlib.redirect_stdout(io.StringIO()):
+            supervisor.wake(wave, settings, "test")
+        self.assertEqual(supervisor.wake_due(wave, settings), "event: run-failed", "the event wakes the next tick")
+        self.assertIn("during-the-tick", self.cli("ledger", "--wave", WAVE)[1], "and that tick must be able to read it")
+
+    def test_the_default_ledger_keeps_what_a_failed_tick_never_handled(self) -> None:
+        self.register()
+        wave = supervisor.Wave(self.hub, WAVE)
+        self.assertEqual(self.cli("wake", "--wave", WAVE)[0], 0)
+        wave.log("run-failed", run="behind-the-failure", rig="hub", gpu="0", rc=1)
+        self.registry.write_text(self.registry.read_text().replace(
+            'command = ["sh", "-c", "echo model={model} effort={effort}; echo \\"$0\\"", "{prompt}"]',
+            'command = ["sh", "-c", "exit 1", "{prompt}"]'))
+        self.assertEqual(self.cli("wake", "--wave", WAVE)[0], 1)
+        self.assertIn("behind-the-failure", self.cli("ledger", "--wave", WAVE)[1])
+
+    # ── which scheduled ticks run ──
+
+    def ticked(self, *, result: str = "exit 0", ago_s: int = 2000) -> supervisor.Wave:
+        """A wave whose last tick began and ended `ago_s` ago, and nothing logged since."""
+        self.register()
+        wave = supervisor.Wave(self.hub, WAVE)
+        wave.ledger_path.write_text("")
+        runtime = wave.runtime()
+        runtime["agent_last_result"] = result
+        wave.save_runtime(runtime)
+        fields = {"agent_tick_started_at": ago_s, "agent_ticked_at": ago_s}
+        if result == "exit 0":
+            fields["agent_ok_started_at"] = ago_s
+        self.backdate(wave, **fields)
+        return wave
+
+    def test_a_scheduled_tick_with_nothing_new_is_skipped_until_the_idle_period(self) -> None:
+        wave = self.ticked()
+        settings = supervisor.load_settings(self.registry)
+        self.assertEqual(settings.idle_tick_every, 6 * 3600)
+        self.assertIsNone(supervisor.wake_due(wave, settings))
+        self.backdate(wave, agent_ticked_at=6 * 3600 + 5, agent_ok_started_at=6 * 3600 + 5)
+        self.assertEqual(supervisor.wake_due(wave, settings), "idle tick")
+        self.registry.write_text(self.registry.read_text().replace("cycle_every = 60", "cycle_every = 60\nidle_tick_every = 90000"))
+        self.assertIsNone(supervisor.wake_due(wave, supervisor.load_settings(self.registry)), "the registry can set it")
+
+    def test_a_ledger_record_since_the_last_good_tick_keeps_the_half_hourly_tick(self) -> None:
+        wave = self.ticked()
+        settings = supervisor.load_settings(self.registry)
+        wave.log("agent-tick", reason="x", outcome="exit 0")
+        self.assertIsNone(supervisor.wake_due(wave, settings), "a tick's own record is not news")
+        wave.log("run-done", run="m0", rig="hub", gpu="0")
+        self.assertEqual(supervisor.wake_due(wave, settings), "scheduled tick")
+
+    def test_a_failed_tick_forces_the_next_one_at_the_tick_period_not_each_cycle(self) -> None:
+        wave = self.ticked(result="exit 1")
+        settings = supervisor.load_settings(self.registry)
+        self.assertEqual(supervisor.wake_due(wave, settings), "scheduled tick (the last one failed)")
+        self.backdate(wave, agent_ticked_at=60)
+        self.assertIsNone(supervisor.wake_due(wave, settings))
+
+    def test_a_persons_edit_of_the_tracking_file_is_news_and_a_ticks_own_is_not(self) -> None:
+        wave = self.ticked()
+        settings = supervisor.load_settings(self.registry)
+        tracking = self.hub / "EXPERIMENTS.md"
+        tracking.write_text("| run | state |\n")
+        written_during_the_tick = supervisor.now().timestamp() - 2100
+        os.utime(tracking, (written_during_the_tick, written_during_the_tick))
+        self.assertIsNone(supervisor.wake_due(wave, settings))
+        os.utime(tracking)
+        self.assertEqual(supervisor.wake_due(wave, settings), "scheduled tick")
+
+    def test_a_terminal_wave_nobody_finished_keeps_its_scheduled_tick(self) -> None:
+        wave = self.ticked()
+        queue = self.queue()
+        queue["finished_at"] = supervisor.iso(supervisor.now())
+        wave.save(queue)
+        self.assertEqual(supervisor.wake_due(wave, supervisor.load_settings(self.registry)), "scheduled tick")
+
+    def test_only_a_closing_tick_gets_the_longer_limit(self) -> None:
+        self.register()
+        wave = supervisor.Wave(self.hub, WAVE)
+        settings = supervisor.load_settings(self.registry)
+        with mock.patch.object(supervisor, "run_agent", return_value=("exit 0", None)) as run, contextlib.redirect_stdout(io.StringIO()):
+            supervisor.wake(wave, settings, "scheduled tick")
+            queue = self.queue()
+            queue["finished_at"] = supervisor.iso(supervisor.now())
+            wave.save(queue)
+            supervisor.wake(wave, settings, "event: wave-terminal")
+        self.assertEqual([call.args[4] for call in run.call_args_list], [900, 2700])
+        self.assertLess(settings.closing_timeout, supervisor.WATCH_SETTLE_S, "watch waits on this tick")
+
+    # ── a failing agent ──
+
+    def failing_agent(self) -> None:
+        self.registry.write_text(re.sub(r'^command = .*$', lambda _m: 'command = ["sh", "-c", "exit 3", "{prompt}"]', self.registry.read_text(), flags=re.M))
+
+    def test_two_failed_ticks_in_a_row_raise_a_warning_and_one_notice(self) -> None:
+        sink = self.notice_registry()
+        self.register()
+        wave = supervisor.Wave(self.hub, WAVE)
+        self.failing_agent()
+        self.assertEqual(self.cli("wake", "--wave", WAVE)[0], 1)
+        self.cli("cycle", "--wave", WAVE)
+        self.assertNotIn("agent ticks are failing", self.cli("table", "--wave", WAVE)[1], "one failure may be a blip")
+        self.assertEqual(self.notices(sink), [])
+        self.cli("wake", "--wave", WAVE)
+        self.cli("wake", "--wave", WAVE)
+        self.cli("cycle", "--wave", WAVE)
+        brief = self.cli("table", "--wave", WAVE)[1]
+        self.assertIn("⚠ agent ticks are failing: 3 in a row, the last exit 3", brief)
+        self.assertIn("agent ticks are failing", self.cli("table", "--wave", WAVE, "--full")[1])
+        notices = [text for text, context in self.notices(sink) if context["kind"] == "agent-failing"]
+        self.assertEqual(len(notices), 1)
+        self.assertIn("2 in a row", notices[0])
+        snapshot = board.read_json(wave.snapshot_path)
+        keys = {item["key"] for item in supervisor.wave_warnings(wave, snapshot, supervisor.now())}
+        self.assertIn("agent:ticks", keys, "a stable key, though the line counts")
+
+    def test_a_good_tick_clears_the_warning(self) -> None:
+        self.register()
+        wave = supervisor.Wave(self.hub, WAVE)
+        good = self.registry.read_text()
+        self.failing_agent()
+        self.cli("wake", "--wave", WAVE)
+        self.cli("wake", "--wave", WAVE)
+        self.registry.write_text(good)
+        self.assertEqual(self.cli("wake", "--wave", WAVE)[0], 0)
+        self.assertEqual(wave.runtime()["agent_failures"], 0)
+        self.cli("cycle", "--wave", WAVE)
+        self.assertNotIn("agent ticks are failing", self.cli("table", "--wave", WAVE)[1])
+
+    def health_registry(self, rc: int, secret: str = "") -> None:
+        script = self.base / "health.sh"
+        write(script, f"#!/bin/sh\necho '{secret}'\necho '{secret}' >&2\nexit {rc}\n", executable=True)
+        self.registry.write_text(self.registry.read_text().replace('model = "opus"', f'health_command = ["{script}"]\nmodel = "opus"'))
+
+    def test_a_failing_health_command_warns_check_and_fails_the_dispatch_gate_without_its_output(self) -> None:
+        self.health_registry(1, secret="sk-secret-token")
+        code, out, err = self.cli("check")
+        self.assertEqual(code, 0, "the launcher and self-update run check: a login must not keep the service from starting")
+        self.assertIn("WARN agent health: ", out)
+        self.assertIn("exit 1", out)
+        self.heartbeat()
+        code, out, err = self.cli("check", "--service")
+        self.assertEqual(code, 2)
+        self.assertIn("health_command fails", err)
+        self.assertNotIn("sk-secret-token", out + err)
+
+    def test_a_passing_health_command_says_so_and_none_is_defaulted(self) -> None:
+        self.assertNotIn("agent health", self.cli("check")[1])
+        self.assertEqual(supervisor.load_settings(self.registry).agent.health_command, ())
+        self.health_registry(0)
+        self.assertIn("OK agent health", self.cli("check")[1])
+
+    def test_a_health_command_that_cannot_run_is_a_failure(self) -> None:
+        self.registry.write_text(self.registry.read_text().replace('model = "opus"', 'health_command = ["/no/such/program"]\nmodel = "opus"'))
+        self.assertIn("could not run", self.cli("check")[1])
+
+    def test_the_service_checks_health_hourly_and_tells_every_wave_and_notifies_once(self) -> None:
+        sink = self.notice_registry()
+        self.health_registry(1, secret="sk-secret-token")
+        self.register()
+        settings = supervisor.load_settings(self.registry)
+        board_config = board.load_config(self.registry)
+        with (mock.patch.object(supervisor, "agent_health", wraps=supervisor.agent_health) as check,
+              mock.patch.object(supervisor, "wake_due", return_value=None),
+              mock.patch.object(supervisor, "start_followups", side_effect=[None, KeyboardInterrupt]),
+              mock.patch.object(supervisor.time, "sleep"), contextlib.redirect_stdout(io.StringIO())):
+            self.assertEqual(supervisor.serve(board_config, settings), 0)
+        self.assertEqual(check.call_count, 1, "two passes inside the hour run it once")
+        supervisor.record_agent_health(board_config, settings)
+        notices = [text for text, context in self.notices(sink) if context["kind"] == "agent-health"]
+        self.assertEqual(len(notices), 1, "said when it starts failing, not every hour")
+        self.assertNotIn("sk-secret-token", " ".join(notices))
+        self.assertIn("health_command fails", self.cli("table", "--wave", WAVE)[1])
+        write(self.base / "health.sh", "#!/bin/sh\nexit 0\n", executable=True)
+        supervisor.record_agent_health(board_config, settings)
+        self.cli("cycle", "--wave", WAVE)
+        self.assertNotIn("health_command fails", self.cli("table", "--wave", WAVE)[1])
+
+    # ── what `register --confirm` reruns ──
+
+    def gated_register(self, *flags: str) -> tuple[int, str, str]:
+        with mock.patch.object(supervisor, "register_gates", REGISTER_GATES):
+            return self.cli("register", "--wave", WAVE, "--manifest", str(self.manifest()), *flags)
+
+    def test_register_refuses_with_the_service_down_and_registers_nothing(self) -> None:
+        self.fake_systemctl("inactive", 3)
+        code, _out, err = self.gated_register("--confirm")
+        self.assertEqual(code, 2)
+        self.assertIn(f"wave {WAVE} not registered: the supervisor service is not running", err)
+        self.assertFalse(supervisor.Wave(self.hub, WAVE).queue_path.exists())
+        self.assertFalse((self.base / "board" / "supervisor" / f"proj__{WAVE}.json").exists())
+
+    def test_register_passes_its_gates_with_the_service_up_and_a_dry_run_runs_none(self) -> None:
+        self.fake_systemctl("inactive", 3)
+        self.assertEqual(self.gated_register("--dry-run")[0], 0, "a preview, as it was")
+        self.assertFalse((self.base / "systemctl.log").exists())
+        self.heartbeat()
+        code, out, err = self.gated_register("--confirm")
+        self.assertEqual(code, 0, err)
+        self.assertIn("[register] gate passed: supervisor service: heartbeat", out)
+
+    def test_register_refuses_a_failing_health_command(self) -> None:
+        self.heartbeat()
+        self.health_registry(1)
+        code, _out, err = self.gated_register("--confirm")
+        self.assertEqual(code, 2)
+        self.assertIn("health_command fails", err)
+
+    def test_register_refuses_a_checkout_off_its_branch(self) -> None:
+        self.heartbeat()
+        self.git_hub()
+        self.git("switch", "-c", "analyze/x")
+        code, _out, err = self.gated_register("--confirm")
+        self.assertEqual(code, 2)
+        self.assertIn("is on branch analyze/x, not main", err)
+        self.git("switch", "main")
+        self.assertEqual(self.gated_register("--confirm")[0], 0)
+
+    # ── the project checkout ──
+
+    def git(self, *argv: str) -> None:
+        subprocess.run(["git", "-C", str(self.hub), *argv], check=True, capture_output=True)
+
+    def git_hub(self) -> None:
+        self.git("init", "-b", "main")
+        self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-m", "first")
+        sync = self.hub / "sync.toml"
+        sync.write_text(sync.read_text() + '\n[git]\nremote = "origin"\nbranch = "main"\n')
+
+    def test_a_checkout_off_its_branch_is_a_warning_and_one_notice_and_nothing_moves_it(self) -> None:
+        sink = self.notice_registry()
+        self.register()
+        self.git_hub()
+        wave = supervisor.Wave(self.hub, WAVE)
+        self.cli("cycle", "--wave", WAVE)
+        self.assertNotIn("project checkout", self.cli("table", "--wave", WAVE)[1])
+        self.git("switch", "-c", "by-hand")
+        settings = supervisor.load_settings(self.registry)
+        for _ in range(2):
+            outcome = supervisor.cycle_wave(wave, board.load_config(self.registry), settings)
+            supervisor.notify_events(wave, settings, outcome["events"], {})
+        self.assertIn("⚠ project checkout is on branch by-hand, not main", self.cli("table", "--wave", WAVE)[1])
+        self.assertEqual(len(self.events("checkout-off-branch")), 1)
+        self.assertEqual(sum(context["kind"] == "checkout-off-branch" for _text, context in self.notices(sink)), 1)
+        self.assertEqual(supervisor.current_branch(self.hub), "by-hand", "a person may be working there")
+        self.git("switch", "main")
+        self.cli("cycle", "--wave", WAVE)
+        self.assertNotIn("project checkout", self.cli("table", "--wave", WAVE)[1])
+
+    def test_a_checkout_off_its_branch_means_nothing_without_a_declared_branch(self) -> None:
+        self.register()
+        self.git("init", "-b", "whatever")
+        self.cli("cycle", "--wave", WAVE)
+        self.assertNotIn("project checkout", self.cli("table", "--wave", WAVE)[1])
+
+    def run_one_followup(self, board_config, settings) -> None:
+        threads: dict = {}
+        supervisor.start_followups(board_config, settings, threads)
+        for thread in threads.values():
+            thread.join(30)
+
+    def test_a_followup_that_leaves_the_checkout_off_its_branch_is_told_though_the_wave_is_over(self) -> None:
+        sink = self.notice_registry()
+        self.register()
+        self.git_hub()
+        script = self.base / "branching_agent.sh"
+        write(script, f'#!/bin/sh\ngit -C "{self.hub}" switch -c analyze/wave-{WAVE}\n', executable=True)
+        self.registry.write_text(re.sub(r'^command = .*$', lambda _m: f'command = ["{script}", "{{prompt}}"]', self.registry.read_text(), flags=re.M))
+        board_config = board.load_config(self.registry)
+        settings = supervisor.load_settings(self.registry)
+        wave = supervisor.Wave(self.hub, WAVE)
+        record = supervisor.enqueue_followup(board_config, wave, self.queue(), "analyze", "5 done")
+        self.run_one_followup(board_config, settings)
+        self.assertEqual(self.followups()[0]["off_branch"], {"branch": f"analyze/wave-{WAVE}", "expected": "main"})
+        self.assertEqual(len(self.events("checkout-off-branch")), 1)
+        self.assertEqual(sum(context["kind"] == "checkout-off-branch" for _text, context in self.notices(sink)), 1)
+        lines = [item["line"] for item in supervisor.followup_warnings(wave, board_config)]
+        self.assertTrue(any(f"on branch analyze/wave-{WAVE}, not main" in line for line in lines), lines)
+        self.git("switch", "main")
+        self.assertFalse(any("project checkout" in item["line"] for item in supervisor.followup_warnings(wave, board_config)), record["id"])
+
+    def test_a_followup_waits_while_the_checkout_is_off_its_branch_then_runs(self) -> None:
+        sink = self.notice_registry()
+        self.register()
+        self.git_hub()
+        self.git("switch", "-c", "by-hand")
+        board_config = board.load_config(self.registry)
+        settings = supervisor.load_settings(self.registry)
+        wave = supervisor.Wave(self.hub, WAVE)
+        supervisor.enqueue_followup(board_config, wave, self.queue(), "analyze", "5 done")
+        for _ in range(2):
+            self.run_one_followup(board_config, settings)
+        record = self.followups()[0]
+        self.assertEqual(record["status"], "pending", "never on a branch a person may be working on")
+        self.assertEqual(sum(context["kind"] == "checkout-off-branch" for _text, context in self.notices(sink)), 1)
+        self.assertTrue(any("waits for it" in item["line"] for item in supervisor.followup_warnings(wave, board_config)))
+        self.git("switch", "main")
+        self.run_one_followup(board_config, settings)
+        record = self.followups()[0]
+        self.assertEqual(record["status"], "done")
+        self.assertNotIn("off_branch", record)
+
+    # ── prompts ──
+
+    def test_unattended_prompts_name_this_copy_of_the_script_and_the_tick_procedure(self) -> None:
+        self.register()
+        self.assertEqual(self.cli("followup", "--wave", WAVE, "--kind", "analyze", "--text", "done")[0], 0)
+        wave = supervisor.Wave(self.hub, WAVE)
+        tick = supervisor.agent_prompt(wave, "test")
+        followup = supervisor.followup_prompt(self.followups()[0])
+        self.assertIn(str(SCRIPT.resolve()), tick)
+        self.assertIn(str(SCRIPT.resolve().parents[1] / "references/tick.md"), tick)
+        self.assertIn(f"{SCRIPT.resolve()} --root . followup-report", followup)
+        self.assertNotIn("<the sweep-supervisor skill", followup)
+        self.assertTrue(supervisor.TICK_DOC.is_file())
+
+    def test_an_agent_is_told_the_scripts_path_in_its_environment(self) -> None:
+        self.registry.write_text(self.registry.read_text().replace(
+            'command = ["sh", "-c", "echo model={model} effort={effort}; echo \\"$0\\"", "{prompt}"]',
+            'command = ["sh", "-c", "echo script=$SWEEP_SUPERVISOR_SCRIPT", "{prompt}"]'))
+        self.register()
+        self.cli("wake", "--wave", WAVE)
+        log = Path(supervisor.Wave(self.hub, WAVE).runtime()["agent_last_log"]).read_text()
+        self.assertIn(f"script={SCRIPT.resolve()}", log)
+
+    def test_prompts_put_commits_on_the_configured_branch_against_any_host_default(self) -> None:
+        self.register()
+        self.git_hub()
+        self.assertEqual(self.cli("followup", "--wave", WAVE, "--kind", "analyze", "--text", "done")[0], 0)
+        self.assertEqual(self.cli("followup", "--wave", WAVE, "--kind", "fix", "--text", "bug")[0], 0)
+        wave = supervisor.Wave(self.hub, WAVE)
+        git = supervisor.project_git(wave, supervisor.load_settings(self.registry))
+        for record in self.followups():
+            prompt = supervisor.followup_prompt(record, git)
+            self.assertIn("directly on `main` and push it to origin without force", prompt)
+            self.assertIn("overrides any default of your host about branching first", prompt)
+            self.assertIn("Never create or switch to another branch or worktree", prompt)
+        tick = supervisor.agent_prompt(wave, "test", git)
+        self.assertIn("directly on `main`:", tick)
+        self.assertNotIn("push it", tick, "a tick leaves publishing to its follow-up or dispatch")
+
+    # ── certificate renewal ──
+
+    def renewal_registry(self, command: str = "") -> Path:
+        """`cluster` with a certificate and a renewal command that records each run and exits as $RENEW_EXIT says."""
+        script = self.base / "renew.sh"
+        write(script, f'#!/bin/sh\necho run >> "{self.base / "renewed"}"\necho sk-secret-token\nexit ${{RENEW_EXIT:-0}}\n', executable=True)
+        self.registry.write_text(self.registry.read_text().replace(
+            'gpus = "job"', f'gpus = "job"\nssh_cert = "~/.ssh/id_cluster-cert.pub"\ncert_renew_command = "{command or script}"'))
+        return script
+
+    def renewals(self) -> int:
+        path = self.base / "renewed"
+        return len(path.read_text().splitlines()) if path.exists() else 0
+
+    def register_cluster(self) -> supervisor.Wave:
+        self.register(pool={"hub": {"lanes": ["0"]}, "cluster": {"max_jobs": 1, "default_walltime_s": 3600}})
+        return supervisor.Wave(self.hub, WAVE)
+
+    def test_a_certificate_in_its_last_hour_is_renewed_once_and_the_notice_says_so(self) -> None:
+        self.renewal_registry()
+        wave = self.register_cluster()
+        soon = supervisor.now() + supervisor.timedelta(minutes=30)
+        later = supervisor.now() + supervisor.timedelta(hours=12)
+        expiries = iter([soon, later])
+        with mock.patch.object(supervisor, "cert_expiry", side_effect=lambda _path: next(expiries, later)):
+            self.cli("cycle", "--wave", WAVE)
+            self.cli("cycle", "--wave", WAVE)
+        self.assertEqual(self.renewals(), 1)
+        ledger = wave.ledger()
+        renewed = [r for r in ledger if r["event"] == "cert-renewed"]
+        self.assertEqual(renewed[0]["expires_at"], supervisor.iso(later))
+        self.assertTrue([r for r in ledger if r["event"] == "cert-expiring"][0]["auto_renew"])
+        self.assertNotIn("sk-secret-token", wave.ledger_path.read_text())
+        self.assertNotIn("SSH certificate expire", self.cli("table", "--wave", WAVE)[1])
+        self.assertIsNone(supervisor.event_notice(wave, [r for r in ledger if r["event"] == "cert-expiring"][0]), "the outcome is the notice")
+        self.assertIn("renewed automatically", supervisor.event_notice(wave, renewed[0]))
+
+    def test_a_failed_renewal_is_recorded_tried_once_and_keeps_the_expired_notice(self) -> None:
+        self.renewal_registry()
+        wave = self.register_cluster()
+        soon = supervisor.now() + supervisor.timedelta(minutes=30)
+        with mock.patch.dict(os.environ, {"RENEW_EXIT": "4"}), mock.patch.object(supervisor, "cert_expiry", return_value=soon):
+            self.cli("cycle", "--wave", WAVE)
+            self.cli("cycle", "--wave", WAVE)
+        self.assertEqual(self.renewals(), 1)
+        failed = [r for r in wave.ledger() if r["event"] == "cert-renew-failed"]
+        self.assertEqual(failed[0]["problem"], "exit 4")
+        self.assertIn("automatic certificate renewal failed (exit 4)", supervisor.event_notice(wave, failed[0]))
+        self.assertIn("cluster: SSH certificate expires", self.cli("table", "--wave", WAVE)[1])
+        settings = supervisor.load_settings(self.registry)
+        cycle = supervisor.Cycle(wave, supervisor.project_config(wave, settings), board.load_config(self.registry), settings)
+        cycle.at = soon + supervisor.timedelta(minutes=1)
+        with mock.patch.object(supervisor, "cert_expiry", return_value=soon):
+            runtime = wave.runtime()
+            cycle.watch_certs(self.queue(), runtime)
+        self.assertEqual(self.renewals(), 1, "the same window: not tried again")
+        self.assertEqual([e["event"] for e in cycle.events], ["cert-expired"])
+
+    def test_a_renewal_that_exits_0_but_changes_nothing_has_failed(self) -> None:
+        self.renewal_registry()
+        wave = self.register_cluster()
+        soon = supervisor.now() + supervisor.timedelta(minutes=30)
+        with mock.patch.object(supervisor, "cert_expiry", return_value=soon):
+            self.cli("cycle", "--wave", WAVE)
+        self.assertIn("did not get a later expiry", [r for r in wave.ledger() if r["event"] == "cert-renew-failed"][0]["problem"])
+
+    def test_two_waves_on_one_cluster_share_one_attempt_per_window(self) -> None:
+        self.renewal_registry()
+        wave = self.register_cluster()
+        other = supervisor.Wave(self.hub, "20260921-093001")
+        settings = supervisor.load_settings(self.registry)
+        board_config = board.load_config(self.registry)
+        soon = supervisor.now() + supervisor.timedelta(minutes=30)
+        config = supervisor.project_config(wave, settings)
+        with mock.patch.dict(os.environ, {"RENEW_EXIT": "1"}), mock.patch.object(supervisor, "cert_expiry", return_value=soon):
+            for item in (wave, other):
+                cycle = supervisor.Cycle(item, config, board_config, settings)
+                cycle.watch_certs(self.queue(), {})
+        self.assertEqual(self.renewals(), 1)
+        told = [r for r in other.ledger() if r["event"] == "cert-expiring"]
+        self.assertNotIn("auto_renew", told[0], "the other wave has no attempt to wait for")
+
+    def test_an_already_expired_certificate_gets_its_one_attempt_too(self) -> None:
+        self.renewal_registry()
+        wave = self.register_cluster()
+        past = supervisor.now() - supervisor.timedelta(minutes=5)
+        later = supervisor.now() + supervisor.timedelta(hours=12)
+        expiries = iter([past, later])
+        with mock.patch.object(supervisor, "cert_expiry", side_effect=lambda _path: next(expiries, later)):
+            self.cli("cycle", "--wave", WAVE)
+        events = [r["event"] for r in wave.ledger()]
+        self.assertIn("cert-renewed", events)
+        self.assertNotIn("cert-expired", events)
+
+    def test_the_renew_command_takes_a_string_or_a_list_and_a_bad_one_is_refused(self) -> None:
+        self.renewal_registry("systemctl --user start cineca-cert-renew.service")
+        settings = supervisor.load_settings(self.registry)
+        self.assertEqual(settings.cert_renew, (("cluster", ("systemctl", "--user", "start", "cineca-cert-renew.service")),))
+        self.assertIn("OK certificate renewal: cluster through systemctl", self.cli("check")[1])
+        self.registry.write_text(self.registry.read_text().replace(
+            'cert_renew_command = "systemctl --user start cineca-cert-renew.service"', 'cert_renew_command = ["renew", "--quiet"]'))
+        self.assertEqual(supervisor.load_settings(self.registry).cert_renew, (("cluster", ("renew", "--quiet")),))
+        self.registry.write_text(self.registry.read_text().replace('cert_renew_command = ["renew", "--quiet"]', "cert_renew_command = 3"))
+        self.assertEqual(self.cli("check")[0], 2)
+
+    def test_check_flags_a_renew_command_with_no_certificate_to_watch(self) -> None:
+        self.registry.write_text(self.registry.read_text().replace('gpus = "job"', 'gpus = "job"\ncert_renew_command = "renew"'))
+        self.assertIn("WARN certificate renewal: cluster declares cert_renew_command but no ssh_cert", self.cli("check")[1])
 
     # ── events that wake the agent, and the chat's watch ──
 

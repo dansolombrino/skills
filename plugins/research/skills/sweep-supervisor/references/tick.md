@@ -6,11 +6,17 @@ scripts; write down what you decided; exit. Read the wave README first: everythi
 inside the **pool** and the **standing authorization** written there; anything beyond them is the
 user's (the Authority section of [SKILL.md](../SKILL.md)) and goes through `ask`.
 
-`SUP` below is `python3 <this skill's scripts/supervisor.py> --root . <command> --wave <wave_id>`.
+`SUP` below is `python3 "$SWEEP_SUPERVISOR_SCRIPT" --root . <command> --wave <wave_id>`; your prompt
+spells out the path.
+
+Any commit you make goes directly on the branch `sync.toml` names under `[git]`, whatever your host's
+default about branching before a commit. Never create or switch to another branch or worktree here.
 
 ## 1. Read
 
-- `SUP ledger` — every event since the previous tick. `SUP snapshot` — lanes, runs, ETAs.
+- `SUP ledger` — every event since the last tick that exited cleanly began, so nothing that arrived
+  during it or behind a failed tick is hidden, and something already handled can reappear (its `decide`
+  line says). `SUP snapshot` — lanes, runs, ETAs.
 - For each `run-failed` / `job-failed`: the tail of that run's newest log under
   `logs/<NNN_exp>/<run_id folder>/wave_<wave_id>/` **on the rig that ran it** (the ledger names
   the rig), and its `.status.json`. Use bounded, non-interactive SSH
@@ -18,9 +24,11 @@ user's (the Authority section of [SKILL.md](../SKILL.md)) and goes through `ask`
 - `questions.json` — answers that arrived.
 - Any `collect-failed` event: the rig, the run, and whether it is a transient ssh failure or an
   identity mismatch.
-- A `scheduled tick` with nothing new in the ledger is the safety net (every half hour by default;
-  every event that needs judgment wakes you at once): check the snapshot, record "nothing to do",
-  and exit.
+- Every event that needs judgment wakes you at once. A `scheduled tick` (half-hourly by default) runs
+  only when something changed since the last good tick, or that tick failed. An `idle tick` (six hours
+  of nothing, by default) is the safety net for what raises no event: one of our cards free and not
+  yet a lane, a run stalled under a live heartbeat, drift in `EXPERIMENTS.md`. Check for those, record
+  "nothing to do" if so, and exit.
 
 ## 2. Judge, then act
 
@@ -41,7 +49,8 @@ a code problem.
 | `collect-failed` | read the problem. A transient ssh failure needs nothing: the next cycle retries. An identity mismatch (`.run_id.json`/`.run_config.json` differ between rig and hub) → `ask`, and never overwrite either copy |
 | `claim-refused` (lane `waiting for board`) | nothing to do: the lane is in the pool and starts the cycle its holder releases it. If the hold looks stale, `rig-board status --reconcile` evidence goes to the user, never a forced release |
 | one of our cards on a pool rig is free and not yet a lane | `lane add --rig <rig> --gpu <ids> --reason "<why>"`; the service runs the revision and environment gates before it starts the lane. A shared rig's card beyond ours needs the user's grant: `ask` |
-| `rig-down` while the printout shows the rig's SSH certificate expired | nothing to ask: the service already issued its notice and warning, and it resumes the rig when it answers. `decide` what keeps running meanwhile |
+| `rig-down` while the printout shows the rig's SSH certificate expired | nothing to ask: the service already tried any declared `cert_renew_command` and issued its notice and warning, and it resumes the rig when it answers. `decide` what keeps running meanwhile |
+| `checkout-off-branch` (`⚠ project checkout is on branch …`) | a person may be working there: never merge, switch or commit around it, and leave `deploy-revision` blocked. `say` what it blocks, once |
 
 ### Tail stealing
 

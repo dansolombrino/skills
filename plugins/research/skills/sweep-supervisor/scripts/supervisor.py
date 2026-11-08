@@ -49,6 +49,8 @@ def _load_sibling(skill: str, script: str, alias: str):
 rigsync = _load_sibling("rig-sync", "rigsync.py", "sweep_supervisor_rigsync")
 board = _load_sibling("rig-board", "board.py", "sweep_supervisor_board")
 
+SUPERVISOR_SCRIPT = Path(__file__).resolve()
+TICK_DOC = SUPERVISOR_SCRIPT.parents[1] / "references" / "tick.md"
 RIGSYNC_SCRIPT = Path(rigsync.__file__)
 ENVSYNC_SCRIPT = Path(__file__).resolve().parents[2] / "environment-sync" / "scripts" / "envsync.py"
 
@@ -62,7 +64,13 @@ STATE_DIR = "_state"  # under .waves/, already ignored by every supported projec
 BUFFER_DEPTH = 2  # the run in flight plus one waiting: shallow, so late data can still re-route
 DEFAULT_CYCLE_EVERY_S = 60
 DEFAULT_TICK_EVERY_S = 1800  # a safety net: every event that needs judgment wakes the agent at once
+DEFAULT_IDLE_TICK_EVERY_S = 6 * 3600  # with nothing new since the last good tick, a real tick only this often
 DEFAULT_AGENT_TIMEOUT_S = 900
+DEFAULT_CLOSING_TIMEOUT_S = 2700  # a terminal wave's tick does the most work; below WATCH_SETTLE_S, which waits on it
+AGENT_FAILING_AFTER = 2  # consecutive failed ticks before a warning and a notice
+AGENT_HEALTH_EVERY_S = 3600
+AGENT_HEALTH_TIMEOUT_S = 30
+CERT_RENEW_TIMEOUT_S = 300
 DEFAULT_FOLLOWUP_TIMEOUT_S = 3 * 3600
 MAX_FIX_DEPTH = 2  # automatic fix-and-redispatch rounds in one chain before a person looks
 CERT_WARN_S = 3600  # an SSH certificate this close to expiry is announced once
@@ -111,7 +119,8 @@ URGENT_EVENTS = frozenset(
     }
 )
 # What goes out through `notify_command`, when one is declared. `ask` and `say` always do too.
-NOTIFY_EVENTS = frozenset({"wave-terminal", "rig-down", "recovery-blocked", "cert-expiring", "cert-expired", "submit-failed"})
+CERT_EVENTS = frozenset({"cert-expiring", "cert-expired", "cert-renewed", "cert-renew-failed"})
+NOTIFY_EVENTS = CERT_EVENTS | {"wave-terminal", "rig-down", "recovery-blocked", "submit-failed", "agent-failing", "checkout-off-branch"}
 # The same notices for a chat's `watch`, from the ledger so one that came and went between two watches
 # is still told. The wave's end has its own path through `watch`.
 WATCH_EVENTS = (NOTIFY_EVENTS - {"wave-terminal"}) | {"run-failed", "job-failed"}
@@ -144,6 +153,7 @@ class AgentProfile:
     command: tuple[str, ...]
     model: str
     effort: str
+    health_command: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -156,6 +166,9 @@ class Settings:
     notify_command: tuple[str, ...]
     followup_timeout: int = DEFAULT_FOLLOWUP_TIMEOUT_S
     ssh_certs: tuple[tuple[str, Path], ...] = ()  # (rig, certificate) pairs from `[machines.<rig>] ssh_cert`
+    cert_renew: tuple[tuple[str, tuple[str, ...]], ...] = ()  # (rig, argv) pairs from `[machines.<rig>] cert_renew_command`
+    idle_tick_every: int = DEFAULT_IDLE_TICK_EVERY_S
+    closing_timeout: int = DEFAULT_CLOSING_TIMEOUT_S
 
 
 def _string_list(value: object, where: str) -> tuple[str, ...]:
@@ -215,8 +228,11 @@ def load_settings(registry_path: Path) -> Settings:
     tick_every = table.get("tick_every", DEFAULT_TICK_EVERY_S)
     agent_timeout = table.get("agent_timeout", DEFAULT_AGENT_TIMEOUT_S)
     followup_timeout = table.get("followup_timeout", DEFAULT_FOLLOWUP_TIMEOUT_S)
+    idle_tick_every = table.get("idle_tick_every", DEFAULT_IDLE_TICK_EVERY_S)
+    closing_timeout = table.get("closing_timeout", DEFAULT_CLOSING_TIMEOUT_S)
     for name, value in (
         ("cycle_every", cycle_every), ("tick_every", tick_every), ("agent_timeout", agent_timeout), ("followup_timeout", followup_timeout),
+        ("idle_tick_every", idle_tick_every), ("closing_timeout", closing_timeout),
     ):
         if not isinstance(value, int) or isinstance(value, bool) or value < MIN_CYCLE_EVERY_S:
             raise SupervisorError(f"{registry_path}: supervisor.{name} must be an integer >= {MIN_CYCLE_EVERY_S}")
@@ -232,12 +248,15 @@ def load_settings(registry_path: Path) -> Settings:
             raise SupervisorError(f"{registry_path}: supervisor.agent.model is required; it is never defaulted")
         if effort not in EFFORT_VALUES:
             raise SupervisorError(f"{registry_path}: supervisor.agent.effort must be one of {', '.join(EFFORT_VALUES)}")
-        agent = AgentProfile(command, model, effort)
+        health = raw_agent.get("health_command")
+        health_command = _string_list(health, f"{registry_path}: supervisor.agent.health_command") if health is not None else ()
+        agent = AgentProfile(command, model, effort, health_command)
     notify = table.get("notify_command")
     notify_command = _string_list(notify, f"{registry_path}: supervisor.notify_command") if notify is not None else ()
     if notify_command and not any("{text}" in part for part in notify_command):
         raise SupervisorError(f"{registry_path}: supervisor.notify_command must contain a {{text}} placeholder")
     certs = []
+    renewals = []
     machines = data.get("machines", {})
     for rig, entry in (machines.items() if isinstance(machines, dict) else ()):
         cert = entry.get("ssh_cert") if isinstance(entry, dict) else None
@@ -245,7 +264,18 @@ def load_settings(registry_path: Path) -> Settings:
             if not isinstance(cert, str) or not cert:
                 raise SupervisorError(f"{registry_path}: machines.{rig}.ssh_cert must be a path")
             certs.append((rig, Path(cert).expanduser()))
-    return Settings(registry_path, cycle_every, tick_every, agent_timeout, agent, notify_command, followup_timeout, tuple(certs))
+        renew = entry.get("cert_renew_command") if isinstance(entry, dict) else None
+        if renew is not None:
+            where = f"{registry_path}: machines.{rig}.cert_renew_command"
+            try:
+                argv = shlex.split(renew) if isinstance(renew, str) else renew
+            except ValueError as exc:
+                raise SupervisorError(f"{where}: {exc}") from exc
+            renewals.append((rig, tuple(os.path.expanduser(part) for part in _string_list(argv, where))))
+    return Settings(
+        registry_path, cycle_every, tick_every, agent_timeout, agent, notify_command, followup_timeout, tuple(certs), tuple(renewals),
+        idle_tick_every, closing_timeout,
+    )
 
 
 def require_agent(settings: Settings) -> AgentProfile:
@@ -612,6 +642,25 @@ def build_queue(manifest: dict, project_root: Path, config, settings: Settings, 
     }
 
 
+def register_gates(wave: Wave, config, board_config, settings: Settings) -> list[str]:
+    """The dispatch gates that have a command, run in seconds on this machine and change nothing; raises
+    on the first failure. The rest stay with dispatch: `collect --check`, `activity` and both `doctor`s
+    ssh to every rig, and the run_id plan is a call into the project's own code over the planned configs."""
+    passed = [f"supervisor service: {service_status(board_config, settings)}"]
+    health = agent_health(settings)
+    if health:
+        raise SupervisorError(f"the agent's health_command fails ({health}): every tick of this wave would too")
+    if settings.agent and settings.agent.health_command:
+        passed.append("agent health_command")
+    off = checkout_off_branch(wave.project_root, config.git)
+    if off:
+        raise SupervisorError(
+            f"{wave.project_root} is on branch {off}, not {config.git.branch}: rig-sync refuses to relaunch this wave's "
+            "lanes from there. Bring its work onto the branch or switch back, then register"
+        )
+    return passed
+
+
 def register(wave: Wave, manifest_path: Path, config, board_config, settings: Settings, dry_run: bool, confirmed: bool) -> int:
     rigsync.require_confirmation(dry_run, confirmed)
     try:
@@ -632,6 +681,11 @@ def register(wave: Wave, manifest_path: Path, config, board_config, settings: Se
     )
     if dry_run:
         return 0
+    try:
+        for line in register_gates(wave, config, board_config, settings):
+            print(f"[register] gate passed: {line}")
+    except SupervisorError as exc:
+        raise SupervisorError(f"wave {wave.wave_id} not registered: {exc}") from exc
     with WaveLock(wave):
         wave.save(queue)
         wave.log("register", runs=len(queue["runs"]), pool=sorted(queue["pool"]))
@@ -1210,7 +1264,8 @@ class Cycle:
             # a live job with this name is one whose submission the queue lost (a restart mid-cycle): adopt it
             result = sh(
                 machine,
-                'cd "$1" && live=$(squeue --me --noheader --name="$2" --format=%i | head -n 1); '
+                # the name is matched here, never with `squeue --name`, which splits its argument on commas
+                'cd "$1" && live=$(squeue --me --noheader --format="%i|%j" | awk -F"|" -v name="$2" \'$2 == name {print $1; exit}\'); '
                 'if [ -n "$live" ]; then echo "ALREADY-QUEUED;$live"; '
                 'else sbatch --parsable --time="$3" --export=ALL,LANE_RIG="$5",LANE_GPUS=1 "$4"; fi',
                 str(machine.repo_path), name, hms, script, rig,
@@ -1314,9 +1369,10 @@ class Cycle:
     # -- certificates -----------------------------------------------------
 
     def watch_certs(self, queue: dict, runtime: dict) -> None:
-        """A cluster login certificate expires on a clock. Say so an hour before and when it does,
-        once per certificate; renewing it is the user's 2FA, so this is a notice, never a question,
-        and the service resumes by itself once the rig answers again."""
+        """A cluster login certificate expires on a clock. In its last hour a declared
+        `cert_renew_command` runs once; otherwise, or when that fails, say so an hour before and when
+        it expires, once per certificate. This is a notice, never a question, and the service resumes
+        by itself once the rig answers again."""
         certs = runtime.setdefault("certs", {})
         for rig, path in self.settings.ssh_certs:
             if rig not in queue["pool"]:
@@ -1330,12 +1386,63 @@ class Cycle:
                 record.clear()  # a renewed certificate starts its own warnings
                 record["expires_at"] = iso(expires)
             left = (expires - self.at).total_seconds()
+            if left <= CERT_WARN_S and self.renew_cert(rig, path, expires, record):
+                continue
             if left <= 0 and not record.get("expired_sent"):
                 record["expired_sent"] = True
                 self.event("cert-expired", rig=rig, expired_at=record["expires_at"], cert=str(path))
             elif 0 < left <= CERT_WARN_S and not record.get("expiring_sent"):
                 record["expiring_sent"] = True
                 self.event("cert-expiring", rig=rig, expires_at=record["expires_at"], cert=str(path))
+
+    def renew_cert(self, rig: str, path: Path, expires: datetime, record: dict) -> bool:
+        """Run this rig's `cert_renew_command`, at most once per expiry window across every wave, the
+        outcome in the ledger; returns whether a later certificate is now in place. The attempt is
+        recorded first, so a crash during it is not retried, and only the exit code is kept: such a
+        command's output can carry credentials."""
+        argv = dict(self.settings.cert_renew).get(rig)
+        if argv is None:
+            return False
+        state_path = index_dir(self.board_config) / "service" / "cert-renewals.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        with state_path.with_suffix(".lock").open("a+") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            state = board.read_json(state_path) or {}
+            window = iso(expires)
+            if (state.get(rig) or {}).get("expires_at") == window:
+                return False
+            state[rig] = {"expires_at": window, "at": iso(self.at), "outcome": "running"}
+            board.write_json(state_path, state)
+            if expires > self.at:
+                record["expiring_sent"] = True
+                self.event("cert-expiring", rig=rig, expires_at=window, cert=str(path), auto_renew=True)
+            problem = run_silently(argv, CERT_RENEW_TIMEOUT_S)
+            renewed = None if problem else cert_expiry(path)
+            if not problem and (renewed is None or renewed <= expires):
+                problem = "exit 0, but the certificate did not get a later expiry"
+            state[rig]["outcome"] = problem or "renewed"
+            board.write_json(state_path, state)
+        if problem:
+            self.event("cert-renew-failed", rig=rig, expires_at=window, problem=problem)
+            return False
+        self.event("cert-renewed", rig=rig, previous=window, expires_at=iso(renewed))
+        record.clear()
+        record["expires_at"] = iso(renewed)
+        return True
+
+    # -- the project checkout ---------------------------------------------
+
+    def watch_checkout(self, runtime: dict) -> dict | None:
+        """The hub checkout has left its configured branch: said once per episode, and in the printout
+        while it lasts. A person may be working there, so nothing here moves or merges it."""
+        off = checkout_off_branch(self.wave.project_root, self.config.git)
+        if off is None:
+            runtime.pop("checkout_off", None)
+            return None
+        if runtime.get("checkout_off") != off:
+            self.event("checkout-off-branch", branch=off, expected=self.config.git.branch)
+        runtime["checkout_off"] = off
+        return {"branch": off, "expected": self.config.git.branch}
 
     # -- episodes that need judgment --------------------------------------
 
@@ -1448,6 +1555,8 @@ class Cycle:
                     collect_failed=missed,
                 )
             snapshot = build_snapshot(queue, runtime, wave, vram, self.at)
+            snapshot["checkout"] = self.watch_checkout(runtime)
+            snapshot["agent_health"] = last_agent_health(self.board_config, self.settings)
             self.mark_episodes(queue, snapshot, runtime, vram)
             last_refresh = parse_iso(runtime.get("board_refreshed_at"))
             if last_refresh is None or (self.at - last_refresh).total_seconds() >= BOARD_REFRESH_EVERY_S:
@@ -1539,6 +1648,8 @@ def build_snapshot(queue: dict, runtime: dict, wave: Wave, vram: dict, at: datet
         "agent": queue["agent"],
         "agent_ticked_at": runtime.get("agent_ticked_at"),
         "agent_last_result": runtime.get("agent_last_result"),
+        "agent_failures": runtime.get("agent_failures", 0),
+        "agent_last_log": runtime.get("agent_last_log"),
         "cycled_at": iso(at),
         "offload": {rig: (queue.get("offload_last") or {}).get(rig) for rig in queue["offload"]},
         "collect": dict(sorted((queue.get("collect_last") or {}).items())),
@@ -1644,6 +1755,7 @@ def short(text: str | None, width: int = 44) -> str:
 
 
 TROUBLE_STATES = ("stale", "blocked", "rig down", "waiting for board")
+CERT_RENEW_HINT = "renew it (on Leonardo, the cineca-login skill)"
 
 
 def cert_status(snapshot: dict, at: datetime) -> list[dict]:
@@ -1655,13 +1767,33 @@ def cert_status(snapshot: dict, at: datetime) -> list[dict]:
             continue
         left = (expires - at).total_seconds()
         if left <= 0:
-            line = f"{rig}: SSH certificate expired {clock(record['expires_at'], at)} — renew it with your 2FA login; the supervisor resumes by itself"
+            line = f"{rig}: SSH certificate expired {clock(record['expires_at'], at)} — {CERT_RENEW_HINT}; the supervisor resumes by itself"
         elif left <= CERT_WARN_S:
-            line = f"{rig}: SSH certificate expires {clock(record['expires_at'], at)} (in {humanize(left)}) — renew it with your 2FA login"
+            line = f"{rig}: SSH certificate expires {clock(record['expires_at'], at)} (in {humanize(left)}) — {CERT_RENEW_HINT}"
         else:
             continue
         items.append({"kind": "cert", "rig": rig, "expires_at": record["expires_at"], "expired": left <= 0, "seconds_left": left, "line": line})
     return items
+
+
+def service_warnings(snapshot: dict) -> list[dict]:
+    """What keeps a wave from being looked after even though its lanes run: an agent that keeps failing,
+    a failing health check, a project checkout off its branch."""
+    items = []
+    failures = snapshot.get("agent_failures") or 0
+    if failures >= AGENT_FAILING_AFTER:
+        log = f"; log {snapshot['agent_last_log']}" if snapshot.get("agent_last_log") else ""
+        items.append({"kind": "agent", "line": f"agent ticks are failing: {failures} in a row, the last {snapshot.get('agent_last_result')}{log}"})
+    if snapshot.get("agent_health"):
+        items.append({"kind": "agent-health", "line": f"the agent's health_command fails ({snapshot['agent_health']}): ticks will likely fail too"})
+    checkout = snapshot.get("checkout")
+    if checkout:
+        items.append({"kind": "checkout", "line": off_branch_line(checkout["branch"], checkout["expected"])})
+    return items
+
+
+def off_branch_line(branch: str, expected: str) -> str:
+    return f"project checkout is on branch {branch}, not {expected}: lane relaunches and the next dispatch refuse it until a person brings it back"
 
 
 def question_line(question: dict) -> str:
@@ -1717,6 +1849,7 @@ def brief_view(snapshot: dict, at: datetime | None = None) -> dict:
         more = f" and {len(snapshot['failed']) - 3} more" if len(snapshot["failed"]) > 3 else ""
         warnings.append({"kind": "failed", "runs": snapshot["failed"], "line": f"failed: {names}{more}"})
     warnings += cert_status(snapshot, at)
+    warnings += service_warnings(snapshot)
     for q in snapshot["questions"]:
         warnings.append({
             "kind": "question", "id": q["id"], "text": q["text"], "meanwhile": q.get("meanwhile"), "asked_at": q.get("asked_at"),
@@ -1803,6 +1936,7 @@ def render_table(snapshot: dict, fmt: str) -> str:
         lines.extend("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)) for row in rows)
     problems = [f"{row['rig']} gpu{row['gpu']}: {row['problem']}" for row in snapshot["lanes"] if row.get("problem")]
     problems += cert_warnings(snapshot, at)
+    problems += [item["line"] for item in service_warnings(snapshot)]
     if problems:
         lines += ["", "**Problems**"] + [f"- {text}" for text in problems]
     if snapshot["failed"]:
@@ -1837,14 +1971,22 @@ def wave_followups(wave: Wave, board_config) -> list[dict]:
 
 
 def followup_warnings(wave: Wave, board_config) -> list[dict]:
-    return [
+    records = wave_followups(wave, board_config)
+    items = [
         {
             "key": f"followup:{record['id']}",
             "line": f"follow-up {record['kind']} {record.get('outcome') or record['status']} without a report" + (f"; log {record['log']}" if record.get("log") else ""),
         }
-        for record in wave_followups(wave, board_config)
+        for record in records
         if record.get("status") == "failed" or (record.get("status") == "done" and not record.get("report"))
     ]
+    # a finished wave has no more cycles to see this: told from the record, while it still holds
+    for record in records:
+        off = record.get("off_branch")
+        if off and current_branch(wave.project_root) == off["branch"]:
+            waiting = f"; follow-up {record['kind']} waits for it" if record.get("status") == "pending" else ""
+            items.append({"key": f"checkout:followup:{record['id']}", "line": off_branch_line(off["branch"], off["expected"]) + waiting})
+    return items
 
 
 def wave_warnings(wave: Wave, snapshot: dict | None, at: datetime, board_config=None) -> list[dict]:
@@ -1867,6 +2009,10 @@ def wave_warnings(wave: Wave, snapshot: dict | None, at: datetime, board_config=
                 items.append({"key": f"cert:{item['rig']}:{'expired' if item['expired'] else 'expiring'}:{item['expires_at']}", "line": item["line"]})
             elif kind == "question":
                 items.append({"key": f"question:{item['id']}", "line": item["line"]})
+            elif kind in ("agent", "agent-health", "checkout"):
+                # the line carries a count and a log path, which must not make an old warning look new
+                key = {"agent": "agent:ticks", "agent-health": "agent:health", "checkout": "checkout:branch"}[kind]
+                items.append({"key": key, "line": item["line"]})
             else:
                 items.append({"key": f"{kind}:{item['line']}", "line": item["line"]})
         written = parse_iso(snapshot.get("written_at"))
@@ -1933,8 +2079,12 @@ def event_covered(record: dict, warning_keys: set[str]) -> bool:
         return any(key.startswith(f"lane:{rig}:") and ":rig down:" in key for key in warning_keys)
     if event == "recovery-blocked":
         return any(key.startswith(f"lane:{rig}:{record.get('gpu')}:") for key in warning_keys)
-    if event in ("cert-expiring", "cert-expired"):
+    if event in ("cert-expiring", "cert-expired", "cert-renew-failed"):
         return any(key.startswith(f"cert:{rig}:") for key in warning_keys)
+    if event == "agent-failing":
+        return "agent:ticks" in warning_keys
+    if event == "checkout-off-branch":
+        return "checkout:branch" in warning_keys
     return False
 
 
@@ -2252,13 +2402,57 @@ def watch_all(root: Path, board_config, poll: float = WATCH_POLL_S, timeout: flo
 # ───────────────────────────── agent wake-up ─────────────────────────────
 
 
-def agent_prompt(wave: Wave, reason: str) -> str:
+def supervisor_command() -> str:
+    """How an agent this service starts calls this same copy of the script."""
+    return f"python3 {shlex.quote(str(SUPERVISOR_SCRIPT))} --root ."
+
+
+def project_git(wave: Wave, settings: Settings):
+    """The project's `[git]` settings, or None when it declares none or its sync.toml cannot be read."""
+    try:
+        return project_config(wave, settings).git
+    except (rigsync.RigSyncError, OSError):
+        return None
+
+
+def current_branch(root: Path) -> str | None:
+    """The branch checked out at `root`, `(detached)` when none, None when git cannot say."""
+    try:
+        result = subprocess.run(["git", "-C", str(root), "branch", "--show-current"], capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return (result.stdout.strip() or "(detached)") if result.returncode == 0 else None
+
+
+def checkout_off_branch(root: Path, git) -> str | None:
+    """The branch the project's checkout is on when that is not its configured one, else None."""
+    if git is None:
+        return None
+    branch = current_branch(root)
+    return None if branch in (None, git.branch) else branch
+
+
+def branch_rule(git, *, push: bool) -> str:
+    """Unattended agents commit on the configured branch and say so plainly: a prompt silent on this
+    leaves the host's default, and one that says to branch before committing left a follow-up's work
+    on a local branch and the checkout with it, which then blocked lane relaunches and the next dispatch."""
+    branch = f"`{git.branch}`" if git else "the branch the checkout is on"
+    publish = (f" and push it to {git.remote} without force; report a refused push rather than forcing it" if git else "") if push else ""
+    return (
+        f"Any commit goes directly on {branch}{publish}: this project's flow has no other branches, and this overrides any default "
+        "of your host about branching first or committing only when asked. Never create or switch to another branch or worktree "
+        "in this checkout; if it is not on that branch, a person may be working there, so leave it alone and report it. "
+    )
+
+
+def agent_prompt(wave: Wave, reason: str, git=None) -> str:
     return (
         f"Use the sweep-supervisor skill and run one supervisor tick for wave {wave.wave_id} of the research project "
-        f"in the current directory. State directory: {wave.dir}. Wake reason: {reason}. "
+        f"in the current directory, following {TICK_DOC}, where SUP is `{supervisor_command()} <command> --wave {wave.wave_id}`. "
+        f"State directory: {wave.dir}. Wake reason: {reason}. "
         "You act only within the pool and standing authorization written in the wave README. "
         "You are unattended: never ask a blocking question, use the supervisor's ask command instead, "
-        "record every decision with its decide command, and finish the tick."
+        "record every decision with its decide command, and finish the tick. " + branch_rule(git, push=False)
     )
 
 
@@ -2273,7 +2467,7 @@ def agent_argv(profile: AgentProfile, prompt: str) -> tuple[list[str], str | Non
 def run_agent(wave: Wave, profile: AgentProfile, prompt: str, log_path: Path, timeout: int, header: str) -> tuple[str, str | None]:
     """One headless agent run in the project root, logged; returns (outcome, session id or None)."""
     command, session = agent_argv(profile, prompt)
-    environment = {**os.environ, "SWEEP_SUPERVISOR_MODEL": profile.model, "SWEEP_SUPERVISOR_EFFORT": profile.effort}
+    environment = {**os.environ, "SWEEP_SUPERVISOR_MODEL": profile.model, "SWEEP_SUPERVISOR_EFFORT": profile.effort, "SWEEP_SUPERVISOR_SCRIPT": str(SUPERVISOR_SCRIPT)}
     if session:
         environment["SWEEP_SUPERVISOR_SESSION"] = session
     with log_path.open("w") as log:
@@ -2308,14 +2502,28 @@ def wake(wave: Wave, settings: Settings, reason: str) -> int:
             wave.save_runtime(runtime)
         stamp = started.strftime("%Y%m%d-%H%M%S")
         log_path = wave.agent_logs / f"{stamp}.log"
-        outcome, session = run_agent(wave, profile, agent_prompt(wave, reason), log_path, settings.agent_timeout, f"{iso(started)} reason: {reason}")
+        # a terminal wave's closing tick does the most work of any (tick.md, Finish)
+        closing = bool((board.read_json(wave.queue_path) or {}).get("finished_at"))
+        timeout = max(settings.agent_timeout, settings.closing_timeout) if closing else settings.agent_timeout
+        prompt = agent_prompt(wave, reason, project_git(wave, settings))
+        outcome, session = run_agent(wave, profile, prompt, log_path, timeout, f"{iso(started)} reason: {reason}")
+        failing = None
         with WaveLock(wave):
             runtime = wave.runtime()
             runtime.update(agent_ticked_at=iso(now()), agent_last_result=outcome, agent_last_log=str(log_path))
+            if outcome == "exit 0":
+                runtime.update(agent_failures=0, agent_ok_started_at=iso(started))
+            else:
+                runtime["agent_failures"] = runtime.get("agent_failures", 0) + 1
             if session:
                 runtime["agent_session"] = session
             wave.save_runtime(runtime)
             wave.log("agent-tick", reason=reason, outcome=outcome, model=profile.model, effort=profile.effort, session=session)
+            if runtime["agent_failures"] == AGENT_FAILING_AFTER:
+                failing = wave.log("agent-failing", failures=runtime["agent_failures"], outcome=outcome, log=str(log_path))
+        if failing:
+            body = event_notice(wave, failing)
+            notify(settings, f"{wave.project_root.name} wave {wave.wave_id}: {body}", notice_context(wave, "agent-failing", session=session, body=body), wave)
         print(f"[wake] wave {wave.wave_id}: {outcome} ({log_path})")
         return 0 if outcome == "exit 0" else 1
     finally:
@@ -2328,19 +2536,47 @@ def wake_due(wave: Wave, settings: Settings) -> str | None:
     meanwhile and a failure seen while a tick was still running both count."""
     runtime = wave.runtime()
     cursor = parse_iso(runtime.get("agent_tick_started_at"))
+    ledger = wave.ledger()
     urgent = sorted(
         {
             record["event"]
-            for record in wave.ledger()
+            for record in ledger
             if record.get("event") in URGENT_EVENTS and (cursor is None or (parse_iso(record.get("at")) or now()) >= cursor)
         }
     )
     if urgent:
         return "event: " + ", ".join(urgent)
     last = parse_iso(runtime.get("agent_ticked_at"))
-    if last is None or (now() - last).total_seconds() >= settings.tick_every:
+    if last is None:
         return "scheduled tick"
-    return None
+    elapsed = (now() - last).total_seconds()
+    if elapsed < settings.tick_every:
+        return None
+    if runtime.get("agent_last_result") != "exit 0":
+        return "scheduled tick (the last one failed)"
+    if (board.read_json(wave.queue_path) or {}).get("finished_at") or has_news(wave, runtime, ledger, last):
+        return "scheduled tick"
+    # nothing a script can see changed; what it cannot see (a free card, a stalled run) waits for this one
+    return "idle tick" if elapsed >= settings.idle_tick_every else None
+
+
+def last_good_tick(runtime: dict) -> datetime | None:
+    """When the last tick that exited cleanly began; anything since may not have been handled."""
+    started = parse_iso(runtime.get("agent_ok_started_at"))
+    if started is None and runtime.get("agent_last_result") == "exit 0":
+        return parse_iso(runtime.get("agent_ticked_at"))  # state from before this was recorded
+    return started
+
+
+def has_news(wave: Wave, runtime: dict, ledger: list[dict], ticked: datetime) -> bool:
+    """Whether a scheduled tick has anything to read: a ledger record since the last good tick began,
+    or a person's edit of EXPERIMENTS.md since a tick last ended (ticks write it themselves)."""
+    since = last_good_tick(runtime)
+    if since is None or any(record.get("event") != "agent-tick" and (parse_iso(record.get("at")) or now()) >= since for record in ledger):
+        return True
+    with contextlib.suppress(OSError):
+        return (wave.project_root / "EXPERIMENTS.md").stat().st_mtime > ticked.timestamp()
+    return False
 
 
 # Notices that need nothing from the user arrive without a sound; the supervisor is already on them.
@@ -2411,9 +2647,19 @@ def event_notice(wave: Wave, record: dict) -> str | None:
     if event == "submit-failed":
         return f"submission to {record.get('rig')} failed: {short(record.get('problem'), 160)}"
     if event == "cert-expiring":
-        return f"{record.get('rig')}: SSH certificate expires {clock(record.get('expires_at'), at)} — renew it with your 2FA login"
+        if record.get("auto_renew"):
+            return None  # the outcome of the renewal follows
+        return f"{record.get('rig')}: SSH certificate expires {clock(record.get('expires_at'), at)} — {CERT_RENEW_HINT}"
     if event == "cert-expired":
-        return f"{record.get('rig')}: SSH certificate expired {clock(record.get('expired_at'), at)} — renew it with your 2FA login; supervision resumes by itself"
+        return f"{record.get('rig')}: SSH certificate expired {clock(record.get('expired_at'), at)} — {CERT_RENEW_HINT}; supervision resumes by itself"
+    if event == "cert-renewed":
+        return f"{record.get('rig')}: SSH certificate renewed automatically, valid until {clock(record.get('expires_at'), at)}"
+    if event == "cert-renew-failed":
+        return f"{record.get('rig')}: automatic certificate renewal failed ({record.get('problem')}); it expires {clock(record.get('expires_at'), at)} — {CERT_RENEW_HINT}"
+    if event == "agent-failing":
+        return f"agent ticks are failing: {record.get('failures')} in a row, the last {record.get('outcome')}; lanes keep running, judgment does not; log {record.get('log')}"
+    if event == "checkout-off-branch":
+        return off_branch_line(str(record.get("branch")), str(record.get("expected")))
     return None
 
 
@@ -2425,7 +2671,7 @@ def notify_events(wave: Wave, settings: Settings, events: list[dict], sent: dict
         event = record.get("event")
         if event not in NOTIFY_EVENTS or not (body := event_notice(wave, record)):
             continue
-        if event in ("cert-expiring", "cert-expired"):
+        if event in CERT_EVENTS:
             notices.append((body, notice_context(None, event)))
         else:
             notices.append((f"{where}: {body}", notice_context(wave, event, body=body, silent=event in SILENT_EVENTS)))
@@ -2495,13 +2741,14 @@ def enqueue_followup(board_config, wave: Wave, queue: dict, kind: str, text: str
     return record
 
 
-def followup_prompt(record: dict) -> str:
+def followup_prompt(record: dict, git=None) -> str:
     wave_id, experiment, ident = record["wave_id"], record["experiment"], record["id"]
     report = (
-        f"Finish with `python3 <the sweep-supervisor skill's scripts/supervisor.py> --root . followup-report --id {ident} "
+        f"Finish with `{supervisor_command()} followup-report --id {ident} "
         "--text \"<one line on the outcome, then every plot or wave it produced, each plot as its public URL>\"`. "
     )
     unattended = (
+        f"The supervisor is `{supervisor_command()}`. " + branch_rule(git, push=True) +
         f"You act only within the pool and standing authorization written in the README of wave {wave_id}. You are unattended and "
         "nobody can answer: never ask a blocking question; for anything the sweep-supervisor skill reserves for the user "
         f"(its Authority section) use the supervisor's `ask --wave {wave_id}` and carry on with everything else. Record "
@@ -2545,16 +2792,52 @@ def run_followup(path: Path, settings: Settings) -> None:
     log_path = wave.agent_logs / f"followup-{record['kind']}-{started.strftime('%Y%m%d-%H%M%S')}.log"
     record.update(status="running", started_at=iso(started), log=str(log_path))
     board.write_json(path, record)
-    outcome, session = run_agent(wave, profile, followup_prompt(record), log_path, settings.followup_timeout,
+    git = project_git(wave, settings)
+    outcome, session = run_agent(wave, profile, followup_prompt(record, git), log_path, settings.followup_timeout,
                                  f"{iso(started)} follow-up {record['id']}")
     record = board.read_json(path) or record  # the agent's report landed here meanwhile
     record.update(status="done" if outcome == "exit 0" else "failed", outcome=outcome, ended_at=iso(now()), session=session)
+    off = checkout_off_branch(wave.project_root, git)
+    if off:
+        record["off_branch"] = {"branch": off, "expected": git.branch}
     board.write_json(path, record)
     with contextlib.suppress(OSError):
         wave.log("followup-ended", id=record["id"], kind=record["kind"], outcome=outcome, session=session)
+    if off:
+        tell_off_branch(wave, settings, record, off, git.branch)
     if record["status"] != "done" or not record.get("report"):
         body = f"follow-up {record['kind']} {outcome} without a report; log {log_path}"
         notify(settings, f"{record['project']} wave {record['wave_id']}: {body}", notice_context(wave, "followup", session=session, body=body, project=record["project"]), wave)
+
+
+def tell_off_branch(wave: Wave, settings: Settings, record: dict, branch: str, expected: str) -> None:
+    """A finished wave has no more cycles to raise this; the ledger and the notice go out from here."""
+    with contextlib.suppress(OSError):
+        wave.log("checkout-off-branch", branch=branch, expected=expected, followup=record["id"])
+    body = off_branch_line(branch, expected)
+    notify(settings, f"{record['project']} wave {record['wave_id']}: {body}", notice_context(wave, "checkout-off-branch", body=body, project=record["project"]), wave)
+
+
+def held_by_checkout(path: Path, record: dict, settings: Settings) -> bool:
+    """A follow-up commits, and a checkout off its branch may be a person's work: it waits, said once,
+    and starts the pass after the checkout is back. Nothing here moves or merges anything."""
+    try:
+        wave = Wave(Path(record["project_root"]), record["wave_id"])
+    except (SupervisorError, KeyError):
+        return False  # run_followup reports what is wrong with the record
+    git = project_git(wave, settings)
+    off = checkout_off_branch(wave.project_root, git)
+    known = (record.get("off_branch") or {}).get("branch")
+    if off is None:
+        if known:
+            record.pop("off_branch")
+            board.write_json(path, record)
+        return False
+    if off != known:
+        record["off_branch"] = {"branch": off, "expected": git.branch}
+        board.write_json(path, record)
+        tell_off_branch(wave, settings, record, off, git.branch)
+    return True
 
 
 def start_followups(board_config, settings: Settings, threads: dict[str, threading.Thread]) -> None:
@@ -2565,6 +2848,8 @@ def start_followups(board_config, settings: Settings, threads: dict[str, threadi
             continue
         key = str(record.get("project_root"))
         if key in threads and threads[key].is_alive():
+            continue
+        if held_by_checkout(path, record, settings):
             continue
         thread = threading.Thread(target=run_followup, args=(path, settings), daemon=True)
         threads[key] = thread
@@ -2678,12 +2963,53 @@ def service_status(board_config, settings: Settings) -> str:
     )
 
 
+def run_silently(argv: tuple[str, ...], timeout: int) -> str | None:
+    """Run a command for its exit code alone; None when it exits 0, else why not. Its output is thrown
+    away unread: these commands report on credentials."""
+    try:
+        code = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout, check=False).returncode
+    except subprocess.TimeoutExpired:
+        return f"timed out after {timeout}s"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"could not run: {exc.__class__.__name__}"
+    return None if code == 0 else f"exit {code}"
+
+
+def agent_health(settings: Settings) -> str | None:
+    """What is wrong with the agent per its `health_command`; None when it passes or none is declared."""
+    if settings.agent is None or not settings.agent.health_command:
+        return None
+    problem = run_silently(settings.agent.health_command, AGENT_HEALTH_TIMEOUT_S)
+    return f"{settings.agent.health_command[0]}: {problem}" if problem else None
+
+
+def agent_health_path(board_config) -> Path:
+    return index_dir(board_config) / "service" / "agent-health.json"
+
+
+def last_agent_health(board_config, settings: Settings) -> str | None:
+    """The service's latest failing health check, for every wave's printout."""
+    if settings.agent is None or not settings.agent.health_command:
+        return None
+    return (board.read_json(agent_health_path(board_config)) or {}).get("problem")
+
+
+def record_agent_health(board_config, settings: Settings) -> None:
+    """The service's hourly health check; a notice when it starts failing, not every hour after."""
+    problem = agent_health(settings)
+    if problem and problem != last_agent_health(board_config, settings):
+        notify(settings, f"the supervisor agent's health_command fails ({problem}): ticks will likely fail too; lanes keep running", notice_context(None, "agent-health"))
+    with contextlib.suppress(OSError):
+        board.write_json(agent_health_path(board_config), {"at": iso(now()), "problem": problem})
+
+
 def serve(board_config, settings: Settings) -> int:
     require_agent(settings)
-    print(f"[serve] {Path(__file__).resolve()}: cycle every {settings.cycle_every}s, agent tick every {settings.tick_every}s", flush=True)
+    print(f"[serve] {Path(__file__).resolve()}: cycle every {settings.cycle_every}s, agent tick every {settings.tick_every}s (idle every {settings.idle_tick_every}s)", flush=True)
     wakers: dict[str, threading.Thread] = {}
     followups: dict[str, threading.Thread] = {}
     sent: dict[str, float] = {}
+    health_due = 0.0
     requeue_interrupted_followups(board_config)
 
     def alive(threads: dict[str, threading.Thread], key: str) -> bool:
@@ -2699,6 +3025,9 @@ def serve(board_config, settings: Settings) -> int:
             write_heartbeat(board_config)
             busy = any(thread.is_alive() for thread in (*wakers.values(), *followups.values()))
             maybe_self_update(settings, busy)
+            if settings.agent.health_command and time.monotonic() >= health_due:
+                health_due = time.monotonic() + AGENT_HEALTH_EVERY_S
+                record_agent_health(board_config, settings)
             for wave in active_waves(board_config):
                 write_heartbeat(board_config)  # a long cycle over several waves stays proven alive
                 try:
@@ -3043,6 +3372,10 @@ def finish(wave: Wave, board_config, settings: Settings, args: argparse.Namespac
                 board.release(board_config, argparse.Namespace(rig=rig, gpu=gpu, reason=f"wave {wave.wave_id} finished"))
     record_finished(board_config, wave, queue)
     index_path(board_config, queue["project"], wave.wave_id).unlink(missing_ok=True)
+    # the last snapshot outlives supervision, for the viewer: these were about supervising it
+    if snapshot := board.read_json(wave.snapshot_path):
+        snapshot.update(agent_failures=0, agent_health=None, checkout=None)
+        board.write_json(wave.snapshot_path, snapshot)
     if not live:
         # a finished wave needs nobody: its disk is freed and its results plotted and journaled unattended
         prune_wave(wave, settings, queue, config)
@@ -3093,7 +3426,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch_p.add_argument("--timeout", type=float, default=WATCH_TIMEOUT_S, help=f"seconds before giving up with nothing new (default {WATCH_TIMEOUT_S})")
     wave_parser("snapshot")
     ledger_p = wave_parser("ledger")
-    ledger_p.add_argument("--since", help="ISO time; default is the last agent tick")
+    ledger_p.add_argument("--since", help="ISO time; default is when the last agent tick that exited cleanly began")
     queue_p = wave_parser("queue")
     queue_p.add_argument("action", choices=("front", "back", "pin", "exclude-rig", "allow-rig", "drop", "requeue", "constrain"))
     queue_p.add_argument("--run", required=True)
@@ -3162,13 +3495,27 @@ def main(argv: list[str] | None = None) -> int:
             profile = require_agent(settings)
             print(f"OK agent profile: {profile.model}/{profile.effort}")
             print(f"OK board root: {board_config.root}")
-            print(f"OK cycle every {settings.cycle_every}s, agent tick every {settings.tick_every}s")
+            print(f"OK cycle every {settings.cycle_every}s, agent tick every {settings.tick_every}s, every {settings.idle_tick_every}s when idle")
             if settings.notify_command:
                 print(f"OK notices: notify_command declared ({settings.notify_command[0]})")
             else:
                 print("OK notices: none declared; nothing is pushed, so notices reach a chat running watch, the printout and the viewer")
+            for rig, argv in settings.cert_renew:
+                if rig in dict(settings.ssh_certs):
+                    print(f"OK certificate renewal: {rig} through {argv[0]}")
+                else:
+                    print(f"WARN certificate renewal: {rig} declares cert_renew_command but no ssh_cert to watch, so it never runs")
+            # only a warning here: the launcher and self-update run this, and a failing login must not
+            # keep the service, which feeds and recovers lanes with no agent at all, from starting
+            health = agent_health(settings)
+            if health:
+                print(f"WARN agent health: {health}")
+            elif profile.health_command:
+                print(f"OK agent health: {profile.health_command[0]} passes")
             if args.service:
                 print(f"OK service: {service_status(board_config, settings)}")
+                if health:
+                    raise SupervisorError(f"the agent's health_command fails ({health}): a wave would run with no judgment")
             return 0
         if args.command == "serve":
             return serve(board_config, settings)
@@ -3219,7 +3566,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(board.read_json(wave.snapshot_path) or {}, indent=2, sort_keys=True))
             return 0
         if args.command == "ledger":
-            since = parse_iso(args.since) or parse_iso(wave.runtime().get("agent_ticked_at"))
+            since = parse_iso(args.since) or last_good_tick(wave.runtime())
             for record in wave.ledger():
                 if since is None or (parse_iso(record.get("at")) or now()) >= since:
                     print(json.dumps(record, sort_keys=True))
