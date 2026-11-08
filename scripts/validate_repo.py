@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate this repository's Codex and Claude marketplaces, plugins, and skills."""
+"""Validate this repository's marketplace and plugins for Codex, Claude Code, and omp."""
 
 from __future__ import annotations
 
@@ -14,8 +14,9 @@ NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 LINK_RE = re.compile(r"\[[^]]*]\(([^)]+)\)")
 SKILL_SIGIL_RE = re.compile(r"\$([a-z0-9]+(?:-[a-z0-9]+)+)\b")
-# Host product names as written in prose. Lower-case commands and paths are not matched.
-HOST_NAME_RE = re.compile(r"\b(Claude|Codex|Anthropic|OpenAI|ChatGPT)\b")
+# Host product names as written in prose. Lower-case commands and paths are not matched, except
+# omp's, whose product name is its lower-case command.
+HOST_NAME_RE = re.compile(r"\b(Claude|Codex|Anthropic|OpenAI|ChatGPT|oh-my-pi|omp)\b")
 # Files where a host name identifies a real install target or per-host configuration.
 HOST_NAME_ALLOWLIST = {
     "plugins/core/skills/project-init/SKILL.md",  # generates each host's settings
@@ -192,6 +193,32 @@ def validate_hooks(plugin_root: Path, manifest_paths: list[Path], errors: list[s
                             errors.append(f"{source}: {event} hook runs missing file {relative}")
 
 
+def validate_package(plugin_root: Path, errors: list[str]) -> None:
+    """omp loads the extension modules a plugin's package.json lists under `omp.extensions` (the
+    omp counterpart of a Claude hook). Each must exist inside the plugin, or it fails at session
+    start in every project. No `version`: the two plugin manifests are the only version source, and
+    omp already reads the Claude one first."""
+    path = plugin_root / "package.json"
+    if not path.exists():
+        return
+    package = load_json(path, errors)
+    if "version" in package:
+        errors.append(f"{path}: must not set version; the plugin manifests hold it")
+    omp = package.get("omp", {})
+    extensions = omp.get("extensions", []) if isinstance(omp, dict) else None
+    if not isinstance(extensions, list):
+        errors.append(f"{path}: omp.extensions must be a list of './' paths")
+        return
+    for entry in extensions:
+        target = (plugin_root / entry).resolve() if isinstance(entry, str) else None
+        if target is None or not entry.startswith("./"):
+            errors.append(f"{path}: omp.extensions entry {entry!r} must be a './' path")
+        elif not target.is_relative_to(plugin_root.resolve()):
+            errors.append(f"{path}: omp.extensions entry {entry!r} leaves its plugin")
+        elif not target.exists():
+            errors.append(f"{path}: omp.extensions entry {entry!r} does not exist")
+
+
 def validate_agents(plugin_root: Path, errors: list[str]) -> None:
     """A plugin's agents/*.md need a name, a useful description, and skills that exist here."""
     for agent in sorted((plugin_root / "agents").glob("*.md")):
@@ -262,8 +289,8 @@ def main() -> int:
         errors.append(f"{marketplace_path}: plugins must be a non-empty array")
         entries = []
 
-    # Claude Code reads its own catalog. Both hosts share one skill tree, so the two catalogs
-    # must agree on which plugins exist and where they live.
+    # Claude Code and omp read the Claude catalog. All hosts share one skill tree, so the two
+    # catalogs must agree on which plugins exist and where they live.
     claude_marketplace_path = root / ".claude-plugin" / "marketplace.json"
     claude_marketplace = load_json(claude_marketplace_path, errors)
     if claude_marketplace.get("name") != marketplace.get("name"):
@@ -347,6 +374,7 @@ def main() -> int:
             )
 
         validate_hooks(plugin_root, [manifest_path, claude_manifest_path], errors)
+        validate_package(plugin_root, errors)
         validate_agents(plugin_root, errors)
         validate_evals(plugin_root, errors)
         validate_host_names(root, plugin_root, errors)
@@ -416,7 +444,7 @@ def main() -> int:
         1 for path in (root / "plugins").glob("*/skills/*/SKILL.md") if path.is_file()
     )
     print(
-        f"Validation passed: {len(seen_plugins)} plugin(s) on Codex and Claude, "
+        f"Validation passed: {len(seen_plugins)} plugin(s) on Codex, Claude Code, and omp, "
         f"{distributed_count} distributed skill(s), {len(meta_dirs)} repo-local skill(s)."
     )
     return 0

@@ -1,0 +1,4 @@
+# omp reads both .agents/skills (canonical maintenance skills) and their thin .claude/skills
+# pointers, which collide by name. Load only the canonical .agents copies.
+skills:
+  enableClaudeProject: false

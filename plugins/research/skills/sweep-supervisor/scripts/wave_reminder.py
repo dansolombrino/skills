@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """State, at session start, the facts of every live wave in this project. No instructions.
 
-Runs as a SessionStart hook on both hosts. Reads the hook payload on stdin, looks for
+Runs as a SessionStart hook on every host: from the plugin's hooks/hooks.json, or on omp from its
+extension hooks/omp_session_start.ts, with the same payload. Reads the hook payload on stdin, looks for
 `<project>/.waves/_state/<wave_id>/queue.json` with no `finished_at`, and prints one
 `additionalContext` line per live wave:
 

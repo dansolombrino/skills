@@ -1,6 +1,6 @@
 ---
 name: marketplace-skill-creator
-description: Create or update skills and plugins in this dual-host marketplace while preserving its Codex and Claude manifests, metadata, validation, and release conventions. Use when the user asks to add, scaffold, create, or substantially update a marketplace skill or domain plugin in this repository.
+description: Create or update skills and plugins in this Codex, Claude Code, and omp marketplace while preserving its Codex and Claude manifests, omp package.json, metadata, validation, and release conventions. Use when the user asks to add, scaffold, create, or substantially update a marketplace skill or domain plugin in this repository.
 ---
 
 # Marketplace skill creator

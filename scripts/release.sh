@@ -1,24 +1,28 @@
 #!/usr/bin/env bash
-# Release a plugin and install it on both hosts, in one step.
+# Release a plugin and install it on all three hosts (Codex, Claude Code, omp), in one step.
 #
 # Publishing and installing used to be separate: the tag went out, and refreshing the hosts was a
 # prose reminder at the end of the README. That reminder got skipped, so the hosts silently ran
 # stale versions. This script folds the install into the release and refuses to report success
-# until both hosts report the released version.
+# until every host reports the released version.
 #
 # Usage:
 #   scripts/release.sh [--dry-run] [--plugin NAME] [-m MESSAGE]
 #
-# One plugin per run (default: research). Release core and research separately.
+# One plugin per run (default: research). Release core and research separately. On omp, core is a
+# user-scope install; a domain plugin is upgraded in every project that installed it at project
+# scope, and never installed at user scope.
 #
 # --dry-run validates and reports each host's installed version against the target without
-# tagging, pushing, or touching either host. It doubles as a standalone drift check. It is not
+# tagging, pushing, or touching any host. It doubles as a standalone drift check. It is not
 # strictly read-only: it runs `git fetch origin main` and the test suite.
 
 set -euo pipefail
 
 PLUGIN="research"
 MARKETPLACE="dansolombrino-skills"
+# Where omp gets the marketplace when it has none configured: the same GitHub repo Claude uses.
+OMP_SOURCE="dansolombrino/skills"
 DRY_RUN=0
 TAG_MESSAGE=""
 
@@ -27,7 +31,7 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY_RUN=1; shift ;;
     --plugin) PLUGIN="${2:?--plugin needs a value}"; shift 2 ;;
     -m|--message) TAG_MESSAGE="${2:?--message needs a value}"; shift 2 ;;
-    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -49,6 +53,7 @@ step "Preflight"
 [ -f "$CODEX_MANIFEST" ] || fail "no such plugin: $PLUGIN_DIR"
 command -v claude >/dev/null || fail "claude is not on PATH"
 command -v codex  >/dev/null || fail "codex is not on PATH"
+command -v omp    >/dev/null || fail "omp is not on PATH"
 
 # Git state is fatal for a real release and advisory for --dry-run, so the drift check stays
 # usable while there is work in progress.
@@ -85,6 +90,12 @@ if ! global_on="$(python3 scripts/codex_plugin_state.py check-global 2>&1)"; the
   git_check "domain plugin on, or config unreadable, in the global Codex config: $global_on"$'\n'"  fix with: python3 scripts/codex_plugin_state.py set <plugin-id> false"
 fi
 
+# A domain plugin installed at omp user scope loads in every project, which per-project opt-in exists
+# to prevent, and Verify fails on it. Stop before the tag is public; --dry-run counts it as drift.
+if ! user_scoped="$(python3 scripts/omp_plugin_state.py check-user 2>&1)"; then
+  git_check "domain plugin installed at omp user scope, or omp's plugin list unreadable: $user_scoped"$'\n'"  fix with: omp plugin uninstall --scope user <plugin-id>"
+fi
+
 echo "✔ preflight ok (branch=$branch, dry_run=$DRY_RUN)"
 
 # ─────────────────────────────── 2. validate ────────────────────────────────
@@ -103,7 +114,7 @@ run_quietly() {
 
 run_quietly "validate_repo.py" python3 scripts/validate_repo.py
 
-# The custom validator covers both hosts' catalogs and metadata; this covers Claude's own schema as
+# The custom validator covers every host's catalogs and metadata; this covers Claude's own schema as
 # the CLI moves. Plain --strict: --profile directory would add submission rules that do not apply.
 run_quietly "claude plugin validate --strict ." claude plugin validate --strict .
 for plugin_dir in plugins/*/; do
@@ -146,23 +157,53 @@ print("not-installed")
 ' "$PLUGIN_ID"
 }
 
+# core: its user-scope version. A domain plugin: the version of its project-scope installs, one per
+# opted-in project, comma-joined when they differ, or `none` when no project has it. See
+# scripts/omp_plugin_state.py for how the projects are found.
+omp_version() {
+  python3 scripts/omp_plugin_state.py version "$PLUGIN_ID" 2>/dev/null || echo "unknown"
+}
+
+# A domain plugin with no project install has nothing to be stale: that is not drift.
+omp_on_target() {
+  [ "$1" = "$TARGET" ] || { [ "$PLUGIN" != "core" ] && [ "$1" = "none" ]; }
+}
+
+# The configured source of the marketplace in omp, empty when omp has none by that name.
+# Reads the whole list (no early exit) so pipefail cannot trip on a SIGPIPE.
+omp_source() {
+  { omp plugin marketplace list 2>/dev/null || true; } | awk -v name="$MARKETPLACE" \
+    '$1 == name && !found { sub(/^[ \t]*[^ \t]+[ \t]+/, ""); print; found = 1 }'
+}
+
 CLAUDE_BEFORE="$(claude_version)"
 CODEX_BEFORE="$(codex_version)"
+OMP_BEFORE="$(omp_version)"
+OMP_SOURCE_BEFORE="$(omp_source)"
+if [ -z "$OMP_SOURCE_BEFORE" ]; then
+  warn "omp has no marketplace '$MARKETPLACE'; a release adds it from $OMP_SOURCE"
+elif [ "$OMP_SOURCE_BEFORE" != "$OMP_SOURCE" ]; then
+  warn "omp's marketplace '$MARKETPLACE' comes from '$OMP_SOURCE_BEFORE', not $OMP_SOURCE; a release installs from it as configured"
+fi
 
 # ───────────────────────────────── dry run ──────────────────────────────────
 if [ "$DRY_RUN" -eq 1 ]; then
   step "Drift check (no changes made)"
-  printf '  target      %s\n  claude      %s\n  codex       %s\n' \
-    "$TARGET" "$CLAUDE_BEFORE" "$CODEX_BEFORE"
+  printf '  target      %s\n  claude      %s\n  codex       %s\n  omp         %s\n' \
+    "$TARGET" "$CLAUDE_BEFORE" "$CODEX_BEFORE" "$OMP_BEFORE"
   dry_drift=0
-  if [ "$CLAUDE_BEFORE" = "$TARGET" ] && [ "$CODEX_BEFORE" = "$TARGET" ]; then
-    echo "✔ both hosts are on $TARGET"
+  if [ "$CLAUDE_BEFORE" = "$TARGET" ] && [ "$CODEX_BEFORE" = "$TARGET" ] && omp_on_target "$OMP_BEFORE"; then
+    echo "✔ every host is on $TARGET"
   else
     echo "✘ host(s) not on $TARGET — run scripts/release.sh (or the sync commands in README.md)" >&2
     dry_drift=1
   fi
   if ! python3 scripts/codex_plugin_state.py check-global >/dev/null 2>&1; then
     echo "✘ the global Codex config has a domain plugin on, or cannot be read (see the warning above)" >&2
+    dry_drift=1
+  fi
+  if ! python3 scripts/omp_plugin_state.py check-user >/dev/null 2>&1; then
+    echo "✘ omp has a domain plugin installed at user scope, or its plugin list cannot be read (see the warning above)" >&2
     dry_drift=1
   fi
   exit "$dry_drift"
@@ -207,25 +248,71 @@ codex plugin remove "$PLUGIN_ID" || warn "codex plugin remove failed; continuing
 codex plugin add "$PLUGIN_ID" || fail "codex plugin add failed; rerun it, then: python3 scripts/codex_plugin_state.py set $PLUGIN_ID $CODEX_ENABLED_WANT"
 python3 scripts/codex_plugin_state.py set "$PLUGIN_ID" "$CODEX_ENABLED_WANT" || fail "could not restore enabled=$CODEX_ENABLED_WANT for $PLUGIN_ID in the global Codex config"
 
-# ──────────────────────── 6. verify — the actual gate ───────────────────────
+# ─────────────────────────────── 6. sync omp ────────────────────────────────
+step "Sync omp"
+
+# omp reads the Claude catalog (.claude-plugin/marketplace.json), so the marketplace is the same repo.
+if [ -z "$OMP_SOURCE_BEFORE" ]; then
+  omp plugin marketplace add "$OMP_SOURCE" || fail "omp plugin marketplace add $OMP_SOURCE failed"
+fi
+omp plugin marketplace update "$MARKETPLACE"
+# `upgrade` naming a plugin reinstalls the catalog's current version and keeps a disabled install
+# disabled; it needs an existing install, so core's first release installs it instead.
+if [ "$PLUGIN" = "core" ]; then
+  if [ "$OMP_BEFORE" = "not-installed" ]; then
+    omp plugin install --scope user "$PLUGIN_ID"
+  else
+    omp plugin upgrade --scope user "$PLUGIN_ID"
+  fi
+else
+  # A domain plugin lives only in the projects that opted in (project-init installs it there);
+  # `upgrade` acts on the project of its working directory, so visit each one.
+  omp_projects="$(python3 scripts/omp_plugin_state.py projects "$PLUGIN_ID")"
+  [ -n "$omp_projects" ] || echo "no project has $PLUGIN_ID installed in omp; nothing to upgrade"
+  while IFS= read -r project; do
+    [ -n "$project" ] || continue
+    (cd "$project" && omp plugin upgrade --scope project "$PLUGIN_ID" </dev/null) \
+      || warn "omp plugin upgrade failed in $project"
+  done <<< "$omp_projects"
+fi
+
+# ──────────────────────── 7. verify — the actual gate ───────────────────────
 step "Verify"
 
 CLAUDE_AFTER="$(claude_version)"
 CODEX_AFTER="$(codex_version)"
+OMP_AFTER="$(omp_version)"
 
 printf '  %-8s %-12s %s\n' "host" "before" "after"
 printf '  %-8s %-12s %s\n' "claude" "$CLAUDE_BEFORE" "$CLAUDE_AFTER"
 printf '  %-8s %-12s %s\n' "codex"  "$CODEX_BEFORE"  "$CODEX_AFTER"
+printf '  %-8s %-12s %s\n' "omp"    "$OMP_BEFORE"    "$OMP_AFTER"
 
 drift=0
 [ "$CLAUDE_AFTER" = "$TARGET" ] || { warn "Claude is on $CLAUDE_AFTER, expected $TARGET"; drift=1; }
 [ "$CODEX_AFTER"  = "$TARGET" ] || { warn "Codex is on $CODEX_AFTER, expected $TARGET";  drift=1; }
+if ! omp_on_target "$OMP_AFTER"; then
+  warn "omp is on $OMP_AFTER, expected $TARGET"
+  if [ "$PLUGIN" != "core" ]; then
+    while IFS= read -r project; do
+      [ -n "$project" ] || continue
+      warn "  $project: $(python3 scripts/omp_plugin_state.py version "$PLUGIN_ID" --project "$project")"
+    done <<< "$(python3 scripts/omp_plugin_state.py projects "$PLUGIN_ID")"
+  fi
+  drift=1
+fi
 if ! global_on="$(python3 scripts/codex_plugin_state.py check-global 2>&1)"; then
   warn "domain plugin on, or config unreadable, in the global Codex config: $global_on"
+  drift=1
+fi
+if ! user_scoped="$(python3 scripts/omp_plugin_state.py check-user 2>&1)"; then
+  warn "domain plugin installed at omp user scope, or omp's plugin list unreadable: $user_scoped"
   drift=1
 fi
 [ "$drift" -eq 0 ] || fail "released $PLUGIN $TARGET but a host is not right — fix before relying on it"
 
 echo
-echo "✔ $PLUGIN $TARGET released and installed on both hosts."
-echo "  Restart Codex and Claude Code, or run /reload-plugins in a Claude Code session; other running sessions keep the version they launched with."
+echo "✔ $PLUGIN $TARGET released and installed on Codex, Claude Code, and omp."
+echo "  Restart Codex, Claude Code, and omp sessions, or run /reload-plugins in a Claude Code or omp"
+echo "  session (omp loads a changed extension only on restart); other running sessions keep the"
+echo "  version they launched with."

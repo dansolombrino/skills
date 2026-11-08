@@ -210,7 +210,7 @@ class ProjectInitTests(unittest.TestCase):
         script = Path(self.tmp.name) / "claude"
         script.write_text(f"#!/bin/sh\ncat <<'EOF'\n{listing}\nEOF\nexit {code}\n")
         script.chmod(0o755)
-        self.which.return_value = str(script)
+        self.which.side_effect = lambda name: str(script) if name == "claude" else None
 
     def test_check_reports_a_plugin_the_merged_settings_turn_off(self) -> None:
         self.run_cli("apply", "--categories", "research")
@@ -291,6 +291,55 @@ class ProjectInitTests(unittest.TestCase):
         self.assertEqual(code, 3)
         self.assertIn("permissions.deny must be a list", output)
         self.assertFalse((self.root / ".project.toml").exists())
+
+    def write_omp_registry(self, plugins: dict) -> None:
+        registry = self.root / ".omp/plugins/installed_plugins.json"
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text(json.dumps({"version": 2, "plugins": plugins}))
+
+    def test_omp_state_counts_only_enabled_project_scope_installs(self) -> None:
+        module = self.module
+        self.assertEqual(module.omp_state(self.root), {self.plugin: "absent"})
+        self.write_omp_registry({self.plugin: [{"scope": "user"}]})
+        self.assertEqual(module.omp_state(self.root), {self.plugin: "absent"})
+        self.write_omp_registry({self.plugin: [{"scope": "project", "enabled": False}]})
+        self.assertEqual(module.omp_state(self.root), {self.plugin: "off"})
+        self.assertEqual(module.omp_plan(module.omp_state(self.root), ["research"]), [("enable", self.plugin)])
+        self.assertEqual(module.omp_plan(module.omp_state(self.root), []), [("uninstall", self.plugin)])
+        self.write_omp_registry({self.plugin: [{"scope": "project"}]})
+        self.assertEqual(module.omp_state(self.root), {self.plugin: "on"})
+        self.assertEqual(module.omp_plan(module.omp_state(self.root), ["research"]), [])
+
+    def test_apply_without_omp_skips_it_and_writes_no_omp_state(self) -> None:
+        code, output = self.run_cli("apply", "--categories", "research")
+        self.assertEqual(code, 0)
+        self.assertIn("omp: skipped, omp is not on PATH", output)
+        self.assertIn(self.module.OMP_MARKETPLACE_FIX, output)
+        self.assertFalse((self.root / ".omp").exists())
+        self.assertIn("omp: not on PATH; skipped", self.run_cli("check")[1])
+
+    def test_apply_never_installs_without_the_marketplace(self) -> None:
+        """Without the marketplace omp reads `<plugin>@<marketplace>` as an npm package spec."""
+        log = Path(self.tmp.name) / "omp.log"
+        script = Path(self.tmp.name) / "omp"
+        script.write_text(
+            f'#!/bin/sh\necho "$@" >> {log}\ncase "$2" in\n'
+            "  discover) exit 1 ;;\n"
+            '  list) echo \'{"npm": [], "marketplace": []}\' ;;\n'
+            "esac\n"
+        )
+        script.chmod(0o755)
+        self.which.side_effect = lambda name: str(script) if name == "omp" else None
+        code, output = self.run_cli("apply", "--categories", "research")
+        self.assertEqual(code, 0, output)
+        self.assertIn(f"run `{self.module.OMP_MARKETPLACE_FIX}`, then rerun apply", output)
+        self.assertEqual(log.read_text().split("\n")[0], "plugin discover dansolombrino-skills")
+        self.assertNotIn("install", log.read_text())
+        self.assertEqual((self.root / ".omp/plugins/.gitignore").read_text(), self.module.OMP_GITIGNORE_TEXT)
+        code, output = self.run_cli("check")
+        self.assertEqual(code, 1)
+        self.assertIn(f"drift omp: {self.plugin} is not installed at project scope, marker says True", output)
+        self.assertIn("omp: marketplace dansolombrino-skills is not configured in omp", output)
 
 
 if __name__ == "__main__":

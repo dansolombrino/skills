@@ -1,4 +1,4 @@
-"""Behavior of the plugin hooks: the live-wave reminder (research); core ships no hooks."""
+"""Behavior of the plugin hooks: the live-wave reminder (research) and its omp extension; core ships no hooks."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -18,6 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WAVE = ROOT / "plugins/research/skills/sweep-supervisor/scripts/wave_reminder.py"
 NOTE = ROOT / "plugins/research/hooks/orchestration_note.py"
+OMP_EXTENSION = ROOT / "plugins/research/hooks/omp_session_start.ts"
 HOOK_SCRIPT_RE = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/([^\"'\s]+)")
 
 
@@ -470,12 +472,151 @@ class HooksJsonTests(unittest.TestCase):
         self.assertEqual(set(matcher.split("|")), {"startup", "resume", "clear", "compact", "fork"})
         self.assertEqual(spec["hooks"]["SessionStart"][0]["hooks"][0]["timeout"], 5)
 
+    def test_the_omp_extension_runs_the_same_scripts(self) -> None:
+        research = ROOT / "plugins/research"
+        spec = json.loads((research / "hooks/hooks.json").read_text())
+        commands = [h["command"] for g in spec["hooks"]["SessionStart"] for h in g["hooks"]]
+        scripts = re.search(r"const SCRIPTS = \[([^\]]*)\]", OMP_EXTENSION.read_text()).group(1)
+        self.assertEqual(re.findall(r'"([^"]+)"', scripts), [rel for c in commands for rel in HOOK_SCRIPT_RE.findall(c)])
+        manifest = json.loads((research / "package.json").read_text())
+        self.assertEqual([(research / e).resolve() for e in manifest["omp"]["extensions"]], [OMP_EXTENSION])
+
     def test_core_ships_no_hooks(self) -> None:
         core = ROOT / "plugins/core"
         self.assertFalse((core / "hooks").exists())
         self.assertFalse((core / "skills/progress-updates/scripts/long_task_reminder.py").exists())
         for manifest in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json"):
             self.assertNotIn("hooks", json.loads((core / manifest).read_text()), manifest)
+
+
+# Drives the extension's default factory with a stand-in for omp's ExtensionAPI: each step fires one
+# event's handlers with a stand-in context and records what they return and what they sent.
+OMP_HARNESS = """
+const [extension, steps] = process.argv.slice(2);
+const handlers = new Map();
+const sent = [];
+const pi = {
+    on(name, handler) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
+    sendMessage(message, options) { sent.push({ message, options }); },
+};
+(await import(extension)).default(pi);
+const out = [];
+for (const [name, event, c] of JSON.parse(steps)) {
+    const ctx = {
+        cwd: c.cwd,
+        agent: { kind: c.kind ?? "main" },
+        sessionManager: {
+            getSessionId: () => "s1",
+            getSessionFile: () => "/sessions/s1.jsonl",
+            getBranch: () => (c.messages ? [{ type: "message" }] : []),
+        },
+    };
+    let result = null;
+    for (const handler of handlers.get(name) ?? []) result = (await handler(event, ctx)) ?? result;
+    out.push({ result, sent: sent.splice(0) });
+}
+console.log(JSON.stringify(out));
+"""
+
+
+@unittest.skipUnless(shutil.which("bun"), "needs bun to load the omp extension")
+class OmpSessionStartTests(unittest.TestCase):
+    """plugins/research/hooks/omp_session_start.ts: the SessionStart hooks, run as an omp extension."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name).resolve()
+        self.research = self.tmp / "research"
+        self.plain = self.tmp / "plain"
+        for project, tag in ((self.research, '["research"]'), (self.plain, '["teaching"]')):
+            project.mkdir()
+            (project / ".project.toml").write_text(f"categories = {tag}\n")
+        self.harness = self.tmp / "harness.mjs"
+        self.harness.write_text(OMP_HARNESS)
+
+    def drive(self, steps: list, extension: Path = OMP_EXTENSION) -> list[dict]:
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE_", "SWEEP_SUPERVISOR_"))}
+        env.update(RIGSYNC_REGISTRY=str(self.tmp / "machines.toml"), PYTHONDONTWRITEBYTECODE="1")
+        proc = subprocess.run(["bun", str(self.harness), str(extension), json.dumps(steps)],
+                              capture_output=True, text=True, env=env, timeout=60, check=True)
+        return json.loads(proc.stdout)
+
+    @staticmethod
+    def prompt(cwd: Path) -> list:
+        return ["before_agent_start", {"reason": "prompt", "prompt": "hi"}, {"cwd": str(cwd)}]
+
+    @staticmethod
+    def turn(cwd: Path) -> list:
+        return ["turn_start", {}, {"cwd": str(cwd)}]
+
+    def test_a_research_session_gets_the_note_with_its_first_prompt_only(self) -> None:
+        r = str(self.research)
+        out = self.drive([["session_start", {}, {"cwd": r}], self.prompt(self.research), self.turn(self.research), self.prompt(self.research)])
+        message = out[1]["result"]["message"]
+        self.assertIn("orchestrator mode", message["content"])
+        self.assertEqual((message["customType"], message["display"]), ("research-session-start", False))
+        self.assertIsNone(out[3]["result"])
+        self.assertEqual([step["sent"] for step in out], [[], [], [], []])
+
+    def test_a_prompt_prepared_twice_carries_the_note_both_times(self) -> None:
+        out = self.drive([["session_start", {}, {"cwd": str(self.research)}], self.prompt(self.research), self.prompt(self.research)])
+        self.assertIn("orchestrator mode", out[2]["result"]["message"]["content"])
+
+    def test_events_before_a_prompt_give_one_note(self) -> None:
+        r = str(self.research)
+        out = self.drive([["session_start", {}, {"cwd": r}], ["session_switch", {"reason": "new"}, {"cwd": r}],
+                          self.prompt(self.research), self.turn(self.research), self.prompt(self.research)])
+        self.assertIn("orchestrator mode", out[2]["result"]["message"]["content"])
+        self.assertIsNone(out[4]["result"])
+
+    def test_a_compaction_sends_the_note_into_the_next_turn(self) -> None:
+        out = self.drive([["session_compact", {}, {"cwd": str(self.research)}]])
+        [sent] = out[0]["sent"]
+        self.assertIn("orchestrator mode", sent["message"]["content"])
+        self.assertEqual(sent["options"], {"deliverAs": "nextTurn"})
+
+    def test_silent_outside_research_for_subagents_and_for_a_revived_subagent(self) -> None:
+        p, r = str(self.plain), str(self.research)
+        out = self.drive([["session_start", {}, {"cwd": p}], self.prompt(self.plain), ["session_compact", {}, {"cwd": p}],
+                          ["session_start", {}, {"cwd": r, "kind": "sub"}], self.prompt(self.research),
+                          ["session_compact", {}, {"cwd": r, "kind": "sub"}],
+                          ["session_start", {}, {"cwd": r}], ["before_agent_start", {"reason": "revive", "prompt": ""}, {"cwd": r}]])
+        self.assertEqual(out, [{"result": None, "sent": []}] * len(out))
+
+    def test_each_event_runs_both_scripts_with_the_hook_contract(self) -> None:
+        """Stand-in scripts echo the payload and environment the extension gives them."""
+        root = self.tmp / "plugin"
+        (root / "hooks").mkdir(parents=True)
+        (root / "skills/sweep-supervisor/scripts").mkdir(parents=True)
+        extension = root / "hooks/omp_session_start.ts"
+        shutil.copy(OMP_EXTENSION, extension)
+        (root / "hooks/orchestration_note.py").write_text(
+            "import json, os, sys\np = json.load(sys.stdin)\n"
+            "said = f\"{p['hook_event_name']} {p['source']} {p['session_id']} {p['cwd'] == os.getcwd()} "
+            "{os.environ['CLAUDE_PLUGIN_ROOT']} {os.environ['CLAUDE_PROJECT_DIR'] == os.getcwd()}\"\n"
+            "print(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': said}}))\n")
+        (root / "skills/sweep-supervisor/scripts/wave_reminder.py").write_text(  # plain stdout; a failure says nothing
+            "import json, sys\np = json.load(sys.stdin)\nprint('plain', p['source'])\nsys.exit(1 if p['source'] == 'compact' else 0)\n")
+        r = str(self.research)
+        events = [
+            (["session_start", {}, {"cwd": r}], "startup"),
+            (["session_start", {}, {"cwd": r, "messages": True}], "resume"),
+            (["session_switch", {"reason": "new"}, {"cwd": r}], "clear"),
+            (["session_switch", {"reason": "resume"}, {"cwd": r}], "resume"),
+            (["session_switch", {"reason": "fork"}, {"cwd": r}], "fork"),
+            (["session_branch", {"reason": "fork"}, {"cwd": r}], "fork"),
+        ]
+        steps = [s for event, _ in events for s in (event, self.prompt(self.research), self.turn(self.research))]
+        out = self.drive(steps + [["session_compact", {}, {"cwd": r}]], extension)
+        for i, (_, source) in enumerate(events):
+            with self.subTest(source=source):
+                self.assertEqual(out[3 * i + 1]["result"]["message"]["content"],
+                                 f"<system-reminder>\nSessionStart hook additional context: SessionStart {source} s1 True {root} True"
+                                 f"\n\nplain {source}\n</system-reminder>")
+        self.assertEqual(out[-1]["sent"][0]["message"]["content"],
+                         f"<system-reminder>\nSessionStart hook additional context: SessionStart compact s1 True {root} True\n</system-reminder>")
+
 
 if __name__ == "__main__":
     unittest.main()

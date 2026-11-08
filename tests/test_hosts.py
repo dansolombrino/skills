@@ -1,4 +1,4 @@
-"""Guard the invariants that let one skill tree serve both Codex and Claude Code."""
+"""Guard the invariants that let one skill tree serve Codex, Claude Code, and omp."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ SKILLS = ROOT / "plugins/research/skills"
 SKILL_SIGIL_RE = re.compile(r"\$([a-z0-9]+(?:-[a-z0-9]+)+)\b")
 
 # Claude truncates the skill listing well above this; the lower house limit keeps descriptions
-# scannable in both hosts' pickers.
+# scannable in every host's picker.
 MAX_DESCRIPTION = 1024
 
 
@@ -22,7 +22,7 @@ def read_json(relative: str) -> dict:
     return json.loads((ROOT / relative).read_text())
 
 
-class DualHostManifestTests(unittest.TestCase):
+class HostManifestTests(unittest.TestCase):
     def test_both_catalogs_list_the_same_plugins(self) -> None:
         codex = read_json(".agents/plugins/marketplace.json")
         claude = read_json(".claude-plugin/marketplace.json")
@@ -64,6 +64,32 @@ class DualHostManifestTests(unittest.TestCase):
             self.assertNotIn("interface", claude, plugin.name)
             # Claude auto-discovers ./skills/; declaring it again is redundant.
             self.assertNotIn("skills", claude, plugin.name)
+
+    def test_omp_reads_the_claude_catalog(self) -> None:
+        # omp prefers .omp-plugin/marketplace.json and falls back to the Claude catalog. A third
+        # catalog would shadow the shared one for omp and could drift from it.
+        self.assertFalse((ROOT / ".omp-plugin").exists())
+        self.assertEqual(read_json(".claude-plugin/marketplace.json")["name"], "dansolombrino-skills")
+
+    def test_omp_packages_carry_no_version_and_load_existing_extensions(self) -> None:
+        for plugin in PLUGINS:
+            path = plugin / "package.json"
+            if not path.is_file():
+                continue
+            package = json.loads(path.read_text())
+            # omp resolves the install version from the Claude manifest; one source, no drift.
+            self.assertNotIn("version", package, plugin.name)
+            for entry in package.get("omp", {}).get("extensions", []):
+                self.assertTrue(entry.startswith("./"), f"{plugin.name}: {entry}")
+                self.assertTrue((plugin / entry).is_file(), f"{plugin.name}: {entry}")
+
+    def test_a_plugin_with_claude_hooks_ships_an_omp_extension(self) -> None:
+        # omp runs no Claude command hooks; a plugin's session hooks reach omp only as an extension.
+        for plugin in PLUGINS:
+            if not (plugin / "hooks/hooks.json").is_file():
+                continue
+            package = json.loads((plugin / "package.json").read_text())
+            self.assertTrue(package.get("omp", {}).get("extensions"), plugin.name)
 
 
 class SharedSkillTreeTests(unittest.TestCase):

@@ -134,6 +134,104 @@ class CodexPluginStateTests(unittest.TestCase):
         self.assertEqual(self.cli("check-global", *root)[0], 2)
 
 
+# The environment omp resolves its state from; a test must not inherit the caller's profile.
+OMP_ENV_KEYS = ("OMP_PROFILE", "PI_PROFILE", "PI_CODING_AGENT_DIR", "PI_CONFIG_DIR", "XDG_DATA_HOME")
+
+
+def register_omp_project(plugins_root: Path, project: Path, plugin: str, version: str) -> None:
+    """A project-scope install as omp 18.18.1 records it: the project's registry, indexed in the user
+    plugins root's project_registries.json."""
+    registry = project / ".omp/plugins/installed_plugins.json"
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(json.dumps(
+        {"version": 2, "plugins": {plugin: [{"scope": "project", "version": version}]}}
+    ))
+    index = plugins_root / "project_registries.json"
+    index.parent.mkdir(parents=True, exist_ok=True)
+    data = json.loads(index.read_text()) if index.exists() else {"version": 1, "registries": []}
+    if str(registry) not in data["registries"]:
+        data["registries"].append(str(registry))
+    index.write_text(json.dumps(data))
+
+
+class OmpPluginStateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.module = load("omp_plugin_state")
+        self.tmp = tempfile.TemporaryDirectory(dir=SCRATCH)
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name).resolve()
+        self.bin = self.base / "bin"
+        self.bin.mkdir()
+        (self.bin / "omp").write_text(FAKE_OMP)
+        (self.bin / "omp").chmod(0o755)
+        self.state = self.base / "state"
+        self.state.mkdir()
+        (self.state / "target").write_text("9.9.9")
+        env = mock.patch.dict(os.environ, {
+            "HOME": str(self.base / "home"),
+            "PATH": f"{self.bin}:{os.environ['PATH']}",
+            "FAKE_LOG": str(self.base / "log"),
+            "FAKE_STATE": str(self.state),
+        })
+        env.start()
+        self.addCleanup(env.stop)
+        for key in OMP_ENV_KEYS:
+            os.environ.pop(key, None)
+        self.root = self.base / "home/.omp/plugins"
+
+    def cli(self, *args: str) -> tuple[int, str]:
+        out = StringIO()
+        with redirect_stdout(out), redirect_stderr(out):
+            code = self.module.main(list(args))
+        return code, out.getvalue().strip()
+
+    def test_plugins_root_follows_profile_and_xdg(self) -> None:
+        home = self.base / "home"
+        self.assertEqual(self.module.plugins_root(), home / ".omp/plugins")
+        os.environ["OMP_PROFILE"] = "work"
+        self.assertEqual(self.module.plugins_root(), home / ".omp/profiles/work/plugins")
+        os.environ["XDG_DATA_HOME"] = str(self.base / "xdg")
+        self.assertEqual(
+            self.module.plugins_root(), home / ".omp/profiles/work/plugins", "no XDG profile dir yet"
+        )
+        (self.base / "xdg/omp/profiles/work").mkdir(parents=True)
+        self.assertEqual(self.module.plugins_root(), self.base / "xdg/omp/profiles/work/plugins")
+        os.environ["OMP_PROFILE"] = "default"
+        os.environ["PI_PROFILE"] = "ignored-when-omp-profile-is-set"
+        self.assertEqual(self.module.plugins_root(), self.base / "xdg/omp/plugins")
+
+    def test_projects_lists_only_live_installs_of_the_plugin(self) -> None:
+        register_omp_project(self.root, self.base / "a", RESEARCH, "1.0.0")
+        register_omp_project(self.root, self.base / "other", CORE, "1.0.0")
+        register_omp_project(self.root, self.base / "gone", RESEARCH, "1.0.0")
+        shutil.rmtree(self.base / "gone")
+        self.assertEqual(self.cli("projects", RESEARCH), (0, str(self.base / "a")))
+
+    def test_version_reads_each_scope_from_omp(self) -> None:
+        self.assertEqual(self.cli("version", CORE), (0, "not-installed"))
+        self.assertEqual(self.cli("version", RESEARCH), (0, "none"), "no project opted in")
+        (self.state / "omp-user.json").write_text(json.dumps({CORE: "5.0.0"}))
+        self.assertEqual(self.cli("version", CORE), (0, "5.0.0"))
+        register_omp_project(self.root, self.base / "a", RESEARCH, "2.0.0")
+        self.assertEqual(self.cli("version", RESEARCH), (0, "2.0.0"))
+        register_omp_project(self.root, self.base / "b", RESEARCH, "1.0.0")
+        self.assertEqual(self.cli("version", RESEARCH), (0, "1.0.0,2.0.0"))
+        self.assertEqual(self.cli("version", RESEARCH, "--project", str(self.base / "b")), (0, "1.0.0"))
+        (self.bin / "omp").write_text("#!/bin/sh\necho not json\n")
+        self.assertEqual(self.cli("version", CORE), (0, "unknown"))
+
+    def test_check_user_names_only_non_core_plugins(self) -> None:
+        root = ("--root", str(ROOT))
+        self.assertEqual(self.cli("check-user", *root), (0, ""))
+        (self.state / "omp-user.json").write_text(json.dumps({CORE: "5.0.0"}))
+        register_omp_project(self.root, self.base / "a", RESEARCH, "2.0.0")
+        self.assertEqual(self.cli("check-user", *root), (0, ""), "project scope is the intended home")
+        (self.state / "omp-user.json").write_text(json.dumps({CORE: "5.0.0", RESEARCH: "2.0.0"}))
+        self.assertEqual(self.cli("check-user", *root), (1, RESEARCH))
+        (self.bin / "omp").write_text("#!/bin/sh\nexit 1\n")
+        self.assertEqual(self.cli("check-user", *root)[0], 2)
+
+
 class VersionBumpTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory(dir=SCRATCH)
@@ -264,9 +362,27 @@ class ValidatorRuleTests(unittest.TestCase):
         self.edit_json(manifest, lambda d: d.update(hooks=["./hooks/absent.json"]))
         self.assertIn("hooks file './hooks/absent.json' does not exist", self.validate())
 
+    def test_omp_package_json(self) -> None:
+        package = self.repo / "plugins/core/package.json"
+        package.write_text("{not json")
+        self.assertIn("invalid or unreadable JSON", self.validate())
+        package.write_text(json.dumps({"version": "1.0.0"}))
+        self.assertIn("must not set version", self.validate())
+        package.write_text(json.dumps({"omp": {"extensions": ["./hooks/missing.ts"]}}))
+        self.assertIn("'./hooks/missing.ts' does not exist", self.validate())
+        package.write_text(json.dumps({"omp": {"extensions": ["./../../scripts/release.sh"]}}))
+        self.assertIn("leaves its plugin", self.validate())
+        package.write_text(json.dumps({"omp": {"extensions": "./skills"}}))
+        self.assertIn("omp.extensions must be a list", self.validate())
+        package.write_text(json.dumps({"private": True, "omp": {"extensions": ["./skills/service-hub/SKILL.md"]}}))
+        self.assertEqual(self.validate(), "")
+
     def test_host_name_in_a_distributed_skill_fails_outside_the_allowlist(self) -> None:
         self.append("plugins/core/skills/progress-updates/SKILL.md", "\nUse Claude Code here.\n")
         self.assertIn("host name 'Claude'", self.validate())
+        skill = self.repo / "plugins/core/skills/progress-updates/SKILL.md"
+        skill.write_text(skill.read_text().replace("\nUse Claude Code here.\n", "\nRun omp here.\n"))
+        self.assertIn("host name 'omp'", self.validate())
 
     def test_host_name_in_an_allowlisted_file_or_evals_passes(self) -> None:
         self.append("plugins/core/skills/project-init/SKILL.md", "\nCodex again.\n")
@@ -364,6 +480,52 @@ EOF
 esac
 """
 
+# Behaves as omp 18.18.1 does for what release.sh calls: `plugin list --json` shows the user installs
+# plus those of the project in the working directory, and `upgrade` acts on that project only.
+FAKE_OMP = """#!/usr/bin/env bash
+echo "omp $* @ $PWD" >> "$FAKE_LOG"
+case "$1 $2 $3" in
+  "plugin marketplace list")
+    if [ -f "$FAKE_STATE/omp-source" ]; then
+      printf 'Configured Marketplaces:\\n\\n  dansolombrino-skills  %s\\n' "$(cat "$FAKE_STATE/omp-source")"
+    else
+      echo "No marketplaces configured"
+    fi ;;
+  "plugin marketplace add") echo "$4" > "$FAKE_STATE/omp-source" ;;
+  "plugin marketplace update") ;;
+  *)
+    python3 - "$@" <<'EOF'
+import json, os, sys
+args = sys.argv[1:]
+state = os.environ["FAKE_STATE"]
+user_path = os.path.join(state, "omp-user.json")
+user = json.load(open(user_path)) if os.path.exists(user_path) else {}
+project_path = os.path.join(os.getcwd(), ".omp/plugins/installed_plugins.json")
+project = json.load(open(project_path)) if os.path.exists(project_path) else {"version": 2, "plugins": {}}
+if args[1] == "list":
+    items = [{"id": p, "scope": "project", "entries": e} for p, e in project["plugins"].items()]
+    items += [{"id": p, "scope": "user", "entries": [{"scope": "user", "version": v}]} for p, v in user.items()]
+    print(json.dumps({"npm": [], "marketplace": items}))
+    sys.exit()
+if os.environ.get("FAKE_OMP_STUCK"):
+    sys.exit()
+plugin, scope = args[-1], args[args.index("--scope") + 1] if "--scope" in args else "user"
+target = open(os.path.join(state, "target")).read().strip()
+if scope == "user":
+    if args[1] == "upgrade" and plugin not in user:
+        sys.exit(f"Plugin {plugin} is not installed")
+    user[plugin] = target
+    json.dump(user, open(user_path, "w"))
+else:
+    if plugin not in project["plugins"]:
+        sys.exit(f"Plugin {plugin} is not installed")
+    project["plugins"][plugin][0]["version"] = target
+    json.dump(project, open(project_path, "w"))
+EOF
+    ;;
+esac
+"""
+
 
 class ReleaseScriptTests(unittest.TestCase):
     """release.sh end to end, against fake hosts and a local bare remote. Nothing leaves the temp dir."""
@@ -389,12 +551,18 @@ class ReleaseScriptTests(unittest.TestCase):
 
         self.bin = base / "bin"
         self.bin.mkdir()
-        for name, body in (("claude", FAKE_CLAUDE), ("codex", FAKE_CODEX)):
+        for name, body in (("claude", FAKE_CLAUDE), ("codex", FAKE_CODEX), ("omp", FAKE_OMP)):
             path = self.bin / name
             path.write_text(body)
             path.chmod(0o755)
         self.state = base / "state"
         self.state.mkdir()
+        # omp's user plugins root lands in the temp dir through XDG_DATA_HOME, as omp resolves it.
+        self.xdg = base / "xdg"
+        self.omp_root = self.xdg / "omp/plugins"
+        self.omp_root.mkdir(parents=True)
+        (self.state / "omp-source").write_text("dansolombrino/skills")
+        self.project = base / "project-a"
         self.codex_home = base / "codex"
         self.codex_home.mkdir()
         self.log = base / "log"
@@ -409,20 +577,27 @@ class ReleaseScriptTests(unittest.TestCase):
         (self.state / "codex.json").write_text(
             json.dumps({"installed": [{"pluginId": RESEARCH, "version": version}]})
         )
+        register_omp_project(self.omp_root, self.project, RESEARCH, version)
 
-    def release(self, *args: str, **env: str) -> subprocess.CompletedProcess:
+    def omp_project_version(self, project: Path) -> str:
+        registry = json.loads((project / ".omp/plugins/installed_plugins.json").read_text())
+        return registry["plugins"][RESEARCH][0]["version"]
+
+    def release(self, *args: str, plugin: str = "research", **env: str) -> subprocess.CompletedProcess:
+        clean = {key: value for key, value in os.environ.items() if key not in OMP_ENV_KEYS}
         return subprocess.run(
-            ["bash", str(self.repo / "scripts/release.sh"), "--plugin", "research", *args],
+            ["bash", str(self.repo / "scripts/release.sh"), "--plugin", plugin, *args],
             cwd=self.repo,
             capture_output=True,
             text=True,
             env={
-                **os.environ,
+                **clean,
+                "XDG_DATA_HOME": str(self.xdg),
                 "PATH": f"{self.bin}:{os.environ['PATH']}",
                 "CODEX_HOME": str(self.codex_home),
                 "FAKE_LOG": str(self.log),
                 "FAKE_STATE": str(self.state),
-                "FAKE_ID": RESEARCH,
+                "FAKE_ID": f"{plugin}@dansolombrino-skills",
                 "RELEASE_TMPDIR": "/tmp",
                 **env,
             },
@@ -483,7 +658,9 @@ class ReleaseScriptTests(unittest.TestCase):
             ["git", "--git-dir", str(self.remote), "rev-parse", "main"], capture_output=True, text=True
         ).stdout.strip()
         self.assertNotEqual(remote, run_git(self.repo, "rev-parse", "HEAD").stdout.strip(), "main was pushed")
-        self.assertFalse(any("plugin update" in c or "codex plugin add" in c for c in self.calls()))
+        self.assertFalse(any(
+            "plugin update" in c or "codex plugin add" in c or "omp plugin upgrade" in c for c in self.calls()
+        ))
 
     def test_native_validation_runs_before_any_push(self) -> None:
         self.assertEqual(self.release().returncode, 0)
@@ -503,6 +680,10 @@ class ReleaseScriptTests(unittest.TestCase):
         self.assertEqual(self.config.read_text(), before)
         self.assertFalse(self.pushed_or_tagged())
         self.assertFalse(any(("plugin remove" in c or "plugin update" in c) for c in self.calls()))
+        omp_writes = ("plugin install", "plugin upgrade", "marketplace add", "marketplace update")
+        self.assertFalse(any(c.startswith("omp ") and w in c for c in self.calls() for w in omp_writes))
+        self.assertEqual(self.omp_project_version(self.project), "0.0.1")
+        self.assertIn("  omp         0.0.1", result.stdout)
 
     def test_dry_run_on_target_passes_and_warns_when_changed_since_the_tag(self) -> None:
         self.installed(self.version)
@@ -524,6 +705,81 @@ class ReleaseScriptTests(unittest.TestCase):
         result = self.release("--dry-run")
         self.assertEqual(result.returncode, 1)
         self.assertIn("the global Codex config has a domain plugin on", result.stderr)
+
+    def omp_calls(self, needle: str) -> list[str]:
+        return [c for c in self.calls() if c.startswith("omp ") and needle in c]
+
+    def test_release_upgrades_every_omp_project_and_never_installs_at_user_scope(self) -> None:
+        second = self.project.parent / "project-b"
+        register_omp_project(self.omp_root, second, RESEARCH, "0.0.2")
+        register_omp_project(self.omp_root, self.project.parent / "deleted", RESEARCH, "0.0.1")
+        shutil.rmtree(self.project.parent / "deleted")
+        result = self.release()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for project in (self.project, second):
+            self.assertEqual(self.omp_project_version(project), self.version)
+            self.assertIn(f"omp plugin upgrade --scope project {RESEARCH} @ {project}", self.calls())
+        self.assertEqual(len(self.omp_calls("plugin upgrade")), 2)
+        self.assertEqual(self.omp_calls("--scope user"), [])
+        self.assertFalse((self.state / "omp-user.json").exists())
+        self.assertRegex(result.stdout, rf"omp\s+0\.0\.1,0\.0\.2\s+{self.version}")
+
+    def test_verify_fails_if_an_omp_project_stays_behind(self) -> None:
+        result = self.release(FAKE_OMP_STUCK="1")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("omp is on 0.0.1", result.stderr)
+        self.assertIn(f"{self.project}: 0.0.1", result.stderr)
+        self.assertIn("a host is not right", result.stderr)
+
+    def test_a_domain_plugin_in_no_omp_project_is_not_drift(self) -> None:
+        self.installed(self.version)
+        shutil.rmtree(self.project)
+        result = self.release("--dry-run")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("  omp         none", result.stdout)
+
+    def test_a_domain_plugin_at_omp_user_scope_stops_a_real_release_before_the_push(self) -> None:
+        (self.state / "omp-user.json").write_text(json.dumps({RESEARCH: "0.0.1"}))
+        result = self.release()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("omp user scope", result.stderr)
+        self.assertFalse(self.pushed_or_tagged())
+        dry = self.release("--dry-run")
+        self.assertEqual(dry.returncode, 1)
+        self.assertIn("omp has a domain plugin installed at user scope", dry.stderr)
+
+    def test_an_omp_marketplace_from_another_source_is_kept_with_a_warning(self) -> None:
+        (self.state / "omp-source").write_text("/srv/clone")
+        result = self.release()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("comes from '/srv/clone'", result.stderr)
+        self.assertEqual(self.omp_calls("marketplace add"), [])
+        self.assertEqual(len(self.omp_calls("marketplace update dansolombrino-skills")), 1)
+
+    def core_release_setup(self) -> str:
+        version = json.loads((ROOT / "plugins/core/.codex-plugin/plugin.json").read_text())["version"]
+        (self.state / "target").write_text(version)
+        (self.state / "claude.json").write_text(json.dumps([{"id": CORE, "version": "0.0.1"}]))
+        (self.state / "codex.json").write_text(json.dumps({"installed": [{"pluginId": CORE, "version": "0.0.1"}]}))
+        return version
+
+    def test_core_release_upgrades_the_omp_user_install(self) -> None:
+        version = self.core_release_setup()
+        (self.state / "omp-user.json").write_text(json.dumps({CORE: "0.0.1"}))
+        result = self.release(plugin="core")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads((self.state / "omp-user.json").read_text()), {CORE: version})
+        self.assertEqual(len(self.omp_calls(f"plugin upgrade --scope user {CORE}")), 1)
+        self.assertEqual(self.omp_project_version(self.project), "0.0.1", "projects are research's")
+
+    def test_first_core_release_adds_the_omp_marketplace_and_installs_at_user_scope(self) -> None:
+        version = self.core_release_setup()
+        (self.state / "omp-source").unlink()
+        result = self.release(plugin="core")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(self.omp_calls("plugin marketplace add dansolombrino/skills")), 1)
+        self.assertEqual(len(self.omp_calls(f"plugin install --scope user {CORE}")), 1)
+        self.assertEqual(json.loads((self.state / "omp-user.json").read_text()), {CORE: version})
 
 
 if __name__ == "__main__":

@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "omp": {
+    "extensions": ["./hooks/omp_session_start.ts"]
+  }
+}

@@ -13,13 +13,21 @@ The marker `.project.toml` at the project root is the single source of truth:
     .codex/config.toml      a managed block holding one [plugins."<id>"] table per known
                             category; everything outside the block is preserved
 
-`apply` writes all three; `check` recomputes them and reports drift plus what each host
-would actually do. Codex ignores a project's .codex/config.toml unless the project is
-trusted, and says nothing about it, so `check` and `apply` both report the trust state and
-the user's global Codex state. A settings file does not prove a plugin is on: a local file
-can override it, or the plugin may not be installed, so with `claude` on PATH `check` also
-compares the marker with `claude plugin list --json`. This script never edits the user's
-global configuration.
+    .omp/plugins/           a project-scope omp install of every known category the marker
+                            lists, and none of the others, made through the omp CLI; plus a
+                            .gitignore keeping that machine-local state out of Git
+
+`apply` writes the files and reconciles the omp installs; `check` recomputes them and reports
+drift plus what each host would actually do. Codex ignores a project's .codex/config.toml
+unless the project is trusted, and says nothing about it, so `check` and `apply` both report
+the trust state and the user's global Codex state. A settings file does not prove a plugin is
+on: a local file can override it, or the plugin may not be installed, so with `claude` on PATH
+`check` also compares the marker with `claude plugin list --json`. omp keeps no per-project
+setting a file could hold: a plugin is on in a project when it has an enabled project-scope
+install there, recorded in .omp/plugins/installed_plugins.json. That registry holds absolute
+cache paths, so it is machine state the marker regenerates, never committed. Without `omp` on
+PATH, or without this marketplace configured in omp, `apply` skips the omp step and says how
+to fix it. This script never edits the user's global configuration.
 """
 
 from __future__ import annotations
@@ -46,6 +54,17 @@ CLAUDE_SETTINGS = Path(".claude/settings.json")
 CODEX_CONFIG = Path(".codex/config.toml")
 MANAGED_BEGIN = "# --- BEGIN project-init managed plugins ---"
 MANAGED_END = "# --- END project-init managed plugins ---"
+OMP_PLUGINS = Path(".omp/plugins")
+OMP_REGISTRY = OMP_PLUGINS / "installed_plugins.json"
+OMP_GITIGNORE = OMP_PLUGINS / ".gitignore"
+# Ignores itself too, so it never shows up as an untracked file.
+OMP_GITIGNORE_TEXT = (
+    "# Written by project-init: omp's project-scope plugin state is machine-local (absolute cache\n"
+    "# paths, a symlink into the user cache, timestamps). .project.toml is what Git carries; run\n"
+    "# project-init's apply on each machine.\n"
+    "*\n"
+)
+OMP_MARKETPLACE_FIX = "omp plugin marketplace add dansolombrino/skills"
 
 
 class InitError(Exception):
@@ -298,6 +317,141 @@ def codex_global_state() -> dict[str, bool | None] | None:
     return state
 
 
+# ───────────────────────────── omp ─────────────────────────────
+
+OMP_STATE_TEXT = {
+    "on": "installed at project scope",
+    "off": "installed at project scope but disabled",
+    "absent": "not installed at project scope",
+}
+
+
+def omp_state(root: Path) -> dict[str, str]:
+    """Each category plugin's project-scope install here: "on", "off" (disabled) or "absent"."""
+    path = root / OMP_REGISTRY
+    try:
+        data = json.loads(path.read_text()) if path.exists() else {}
+    except json.JSONDecodeError as exc:
+        raise InitError(f"{OMP_REGISTRY} is not valid JSON: {exc}") from exc
+    plugins = data.get("plugins") if isinstance(data, dict) else None
+    if not isinstance(plugins, dict):
+        plugins = {}
+    state = {}
+    for plugin in CATEGORIES.values():
+        entries = plugins.get(plugin)
+        project = [
+            entry
+            for entry in (entries if isinstance(entries, list) else [])
+            if isinstance(entry, dict) and entry.get("scope") == "project"
+        ]
+        if not project:
+            state[plugin] = "absent"
+        else:
+            state[plugin] = "on" if any(entry.get("enabled") is not False for entry in project) else "off"
+    return state
+
+
+def omp_plan(state: dict[str, str], categories: list[str]) -> list[tuple[str, str]]:
+    """The (action, plugin) omp CLI calls that make the project-scope installs match the marker."""
+    actions = []
+    for name, plugin in sorted(CATEGORIES.items()):
+        have = state[plugin]
+        if name in categories and have == "absent":
+            actions.append(("install", plugin))
+        elif name in categories and have == "off":
+            actions.append(("enable", plugin))
+        elif name not in categories and have != "absent":
+            actions.append(("uninstall", plugin))
+    return actions
+
+
+def run_omp(omp: str, root: Path, *args: str) -> subprocess.CompletedProcess:
+    # cwd is the project root: omp resolves the project scope from it, and the .omp/plugins
+    # directory apply creates first anchors it there rather than at an ancestor's .omp.
+    return subprocess.run(
+        [omp, "plugin", *args],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=300,
+        stdin=subprocess.DEVNULL,
+    )
+
+
+def omp_marketplace_configured(omp: str, root: Path) -> bool:
+    """Without it omp would read `<plugin>@<marketplace>` as an npm package spec."""
+    try:
+        return run_omp(omp, root, "discover", MARKETPLACE).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def omp_marketplace_line(plugin: str) -> str:
+    return (
+        f"omp: skipped installing {plugin}: marketplace {MARKETPLACE} is not configured in omp; "
+        f"run `{OMP_MARKETPLACE_FIX}`, then rerun apply"
+    )
+
+
+def omp_apply(omp: str | None, root: Path, actions: list[tuple[str, str]]) -> tuple[list[str], bool]:
+    """Report lines and whether an omp call failed. A missing omp or marketplace is a skip."""
+    if omp is None:
+        return [
+            f"omp: skipped, omp is not on PATH; once it is, run `{OMP_MARKETPLACE_FIX}` if the "
+            "marketplace is not configured there, then rerun apply"
+        ], False
+    if not actions:
+        return ["omp: project-scope installs already match"], False
+    lines, failed = [], False
+    if any(action == "install" for action, _ in actions) and not omp_marketplace_configured(omp, root):
+        lines += [omp_marketplace_line(plugin) for action, plugin in actions if action == "install"]
+        actions = [(action, plugin) for action, plugin in actions if action != "install"]
+    done = {"install": "installed", "enable": "enabled", "uninstall": "uninstalled"}
+    for action, plugin in actions:
+        args = (action, "--scope", "project", plugin)
+        try:
+            out = run_omp(omp, root, *args)
+            error = None if out.returncode == 0 else (out.stderr.strip() or out.stdout.strip() or "no output")
+        except (OSError, subprocess.SubprocessError) as exc:
+            error = str(exc)
+        if error is None:
+            lines.append(f"omp: {done[action]} {plugin} at project scope")
+        else:
+            lines.append(f"omp: `omp plugin {' '.join(args)}` failed: {error}")
+            failed = True
+    return lines, failed
+
+
+def omp_effective(omp: str, root: Path, expected: dict[str, bool]) -> tuple[list[str], list[str]]:
+    """Notes and mismatches from a user-scope install, which loads in every project."""
+    try:
+        out = run_omp(omp, root, "list", "--json")
+        entries = json.loads(out.stdout)["marketplace"]
+        user = {
+            entry["id"]
+            for entry in entries
+            if entry.get("scope") == "user"
+            and any(item.get("enabled") is not False for item in entry.get("entries", []))
+        }
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, AttributeError):
+        return ["omp user scope: unknown (`omp plugin list --json` failed)"], []
+    notes, mismatches = [], []
+    for plugin, want in sorted(expected.items()):
+        if plugin not in user:
+            notes.append(f"omp user scope: {plugin} is not installed")
+            continue
+        fix = f"omp plugin uninstall --scope user {plugin}"
+        notes.append(
+            f"omp user scope: {plugin} is installed -- it loads in every project without an enabled "
+            f"project-scope install; a domain plugin belongs at project scope only: run `{fix}`"
+        )
+        if not want:
+            mismatches.append(
+                f"mismatch omp: {plugin} is installed at user scope, so it loads here; marker says False"
+            )
+    return notes, mismatches
+
+
 # ───────────────────────────── commands ─────────────────────────────
 
 
@@ -355,18 +509,27 @@ def cmd_apply(root: Path, categories: list[str]) -> int:
         root / CLAUDE_SETTINGS: render_claude(root, categories),
         root / CODEX_CONFIG: render_codex(root, categories),
     }
+    omp = shutil.which("omp")
+    omp_actions = []
+    if omp is not None:
+        omp_actions = omp_plan(omp_state(root), categories)
+        # Written before any omp call, so the project scope resolves to this root.
+        outputs[root / OMP_GITIGNORE] = OMP_GITIGNORE_TEXT
     for path, text in outputs.items():
         if not path.exists() or path.read_text() != text:
             write_atomic(path, text)
             print(f"wrote {path.relative_to(root)}")
         else:
             print(f"unchanged {path.relative_to(root)}")
+    omp_lines, omp_failed = omp_apply(omp, root, omp_actions)
     print(f"categories: {', '.join(categories) or '(none; core only)'}")
+    for line in omp_lines:
+        print(line)
     print(trust_note(root))
     for line in codex_global_notes():
         print(line)
     print("start a new session, or use the host's plugin reload command if it has one")
-    return 0
+    return 1 if omp_failed else 0
 
 
 def cmd_check(root: Path) -> int:
@@ -387,13 +550,28 @@ def cmd_check(root: Path) -> int:
         drift.append(f"claude: permissions.deny lacks {ENV_DENY_RULE}, marker lists a project with secrets")
     claude_notes, mismatches = claude_effective(root, expected)
     mismatches += codex_mismatches(root, expected)
+    omp = shutil.which("omp")
+    omp_notes = ["omp: not on PATH; skipped"]
+    if omp is not None:
+        state = omp_state(root)
+        actions = omp_plan(state, categories)
+        drift += [
+            f"omp: {plugin} is {OMP_STATE_TEXT[state[plugin]]}, marker says {expected[plugin]}"
+            for _, plugin in actions
+        ]
+        omp_notes, omp_mismatches = omp_effective(omp, root, expected)
+        mismatches += omp_mismatches
+        if any(action == "install" for action, _ in actions) and not omp_marketplace_configured(omp, root):
+            omp_notes.append(
+                f"omp: marketplace {MARKETPLACE} is not configured in omp; run `{OMP_MARKETPLACE_FIX}` before apply"
+            )
     print(f"categories: {', '.join(categories) or '(none; core only)'}")
     for line in drift:
         print(f"drift {line}")
     for line in mismatches:
         print(line)
     print(trust_note(root))
-    for line in (*codex_global_notes(), *claude_notes):
+    for line in (*codex_global_notes(), *claude_notes, *omp_notes):
         print(line)
     if drift:
         print("run `project_init.py apply` with the marker's categories to fix")
@@ -407,14 +585,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--path", type=Path, default=Path.cwd(), help="any path inside the project")
     sub = parser.add_subparsers(dest="command", required=True)
-    apply = sub.add_parser("apply", help="write the marker and both hosts' plugin enablement")
+    apply = sub.add_parser("apply", help="write the marker and every host's plugin enablement")
     apply.add_argument(
         "--categories",
         nargs="*",
         required=True,
         help="space- or comma-separated categories; pass none for a core-only project",
     )
-    sub.add_parser("check", help="report drift between the marker, host configs and Codex trust")
+    sub.add_parser("check", help="report drift between the marker, host configs, omp installs and Codex trust")
     args = parser.parse_args(argv)
     root = project_root(args.path)
     try:
