@@ -79,6 +79,14 @@ set from a project `.env` — uv resolves its cache before Python starts — so 
 the rig's machine environment, which `rigsync provision-env` installs. Left on its default path,
 a uv cache is routinely one of the largest directories on a research rig.
 
+`provision` prints the disk under the cache each rig really uses. uv's dry run says how many packages
+it would download but not which, so the estimate is the wheel sizes in `uv.lock` of that many of the
+largest packages to install: an upper bound on the download, unless a package has no size in the lock,
+which the line says, times about 3 for unpacking. It warns when that would leave the disk under its
+floor, and never stops a build. When a cache disk is short, freeing it is the user's call. A version
+already in that cache may be pinned instead, but only as an override recorded in the experiment's
+notes, since it changes the lock and so the environment; this skill never chooses one.
+
 `.env` is the other half of that split, and it holds no absolute path at all: project-scoped
 storage is declared relative to the project root and resolved by `code/common/paths.py`. Since
 `doctor` already requires each rig's `repo_path` to sit under one of that rig's storage roots, relative

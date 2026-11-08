@@ -198,7 +198,8 @@ the bare shebang; inside a job the script leaves `CUDA_VISIBLE_DEVICES` to Slurm
 # label: <run_id_label under hashed-v2; the flat run_id under a legacy pin>
 # wave: <wave_id>   rig: leonardo   gpu: 1 (Slurm-assigned)
 set -uo pipefail
-export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
+# a rig lane runs this same file with no allocation, and `set -u` would stop it on the bare variable
+[ -z "${SLURM_CPUS_PER_TASK:-}" ] || export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
 # ...then the standard body from `export WAVE_ID=...` on
 ```
 

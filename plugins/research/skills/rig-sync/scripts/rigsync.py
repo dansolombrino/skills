@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import contextlib
 import hashlib
 import json
@@ -14,6 +15,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import tomllib
 from dataclasses import dataclass
 from datetime import datetime
@@ -352,8 +354,22 @@ def selected_machines(config: Config, raw: str | None) -> list[Machine]:
     return [config.machines[name] for name in names]
 
 
+# ConnectTimeout bounds connecting; the alive probes end a connection that died afterwards, about
+# three minutes after its last answer, with ssh exit 255. sshd answers a probe whatever the remote
+# command is doing, so a silent `uv sync`, GPU smoke, or rsync delta pass is never cut short, and
+# nothing bounds how long a live remote command may take. Under ssh multiplexing the probes of
+# whichever ssh opened the master apply, so keep-alives also belong in that alias's ~/.ssh/config.
+SSH_OPTIONS = (
+    "-o", "BatchMode=yes",
+    "-o", "ConnectTimeout=10",
+    "-o", "ServerAliveInterval=30",
+    "-o", "ServerAliveCountMax=6",
+)
+SSH_COMMAND = shlex.join(("ssh", *SSH_OPTIONS))
+
+
 def ssh_base(machine: Machine) -> list[str]:
-    return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", machine.ssh]
+    return ["ssh", *SSH_OPTIONS, machine.ssh]
 
 
 def _ssh_hostname(alias: str) -> str | None:
@@ -409,14 +425,64 @@ def _ssh_failure_hint(machine: Machine) -> str:
     )
 
 
+# Enough of a failed transfer's stderr for its error message.
+STREAM_STDERR_LINES = 200
+
+
+def _forward_lines(source, destination, keep: collections.deque | None = None) -> None:
+    """Copy a child's pipe to our stream line by line. A closed reader never stalls the child."""
+    for line in iter(source.readline, b""):
+        if keep is not None:
+            keep.append(line)
+        try:
+            destination.write(line.decode(errors="replace"))
+            destination.flush()
+        except (OSError, ValueError):
+            pass
+
+
+def run_streaming(command: list[str]) -> subprocess.CompletedProcess:
+    """Run a command, showing each line of its output as it arrives instead of after it exits.
+
+    A transfer can take hours, and whatever watches this process only sees what reaches stdout.
+    Only the end of stderr is kept, for the error message; stdout may be one line per file.
+    """
+    try:
+        sys.stdout.flush()
+    except (OSError, ValueError):
+        pass
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stderr_tail: collections.deque[bytes] = collections.deque(maxlen=STREAM_STDERR_LINES)
+    pumps = [
+        threading.Thread(target=_forward_lines, args=(process.stdout, sys.stdout), daemon=True),
+        threading.Thread(target=_forward_lines, args=(process.stderr, sys.stderr, stderr_tail), daemon=True),
+    ]
+    try:
+        for pump in pumps:
+            pump.start()
+        returncode = process.wait()
+        for pump in pumps:
+            pump.join()
+    except BaseException:
+        process.kill()
+        process.wait()
+        raise
+    return subprocess.CompletedProcess(command, returncode, b"", b"".join(stderr_tail))
+
+
 def run(
     command: list[str],
     *,
     input_bytes: bytes | None = None,
     check: bool = True,
     show: bool = False,
+    stream: bool = False,
 ) -> subprocess.CompletedProcess:
-    result = subprocess.run(command, input=input_bytes, capture_output=True)
+    if stream:
+        result = run_streaming(command)
+        show = False
+    else:
+        result = subprocess.run(command, input=input_bytes, capture_output=True)
     if show:
         if result.stdout:
             print(result.stdout.decode(errors="replace"), end="")
@@ -500,13 +566,42 @@ def env_key_for_tree(machine: Machine, tree: Path) -> str:
     return env_key(*files)
 
 
+def _configured_url(result: subprocess.CompletedProcess) -> str:
+    """The first `remote.<name>.url` value in `git config --get-all` output: what `get-url` reads."""
+    values = result.stdout.decode(errors="replace").splitlines()
+    return values[0].strip() if values else ""
+
+
 def canonical_remote_url(config: Config) -> str:
+    """The URL rigs clone and are compared against: the configured one, never a rewritten one.
+
+    `git remote get-url` applies `url.<base>.insteadOf`, which is the hub's own credential routing:
+    a rig handed the rewritten URL (commonly https) has no credentials for it. So the raw
+    configuration value is the project's identity on every machine.
+    """
     git = require_git(config)
-    result = run(["git", "-C", str(config.root), "remote", "get-url", git.remote])
-    url = result.stdout.decode(errors="replace").strip()
+    result = run(
+        ["git", "-C", str(config.root), "config", "--get-all", f"remote.{git.remote}.url"], check=False
+    )
+    url = _configured_url(result)
     if not url:
         raise RigSyncError(f"hub remote {git.remote!r} has no URL")
     return url
+
+
+def remote_rewrite_note(config: Config) -> str | None:
+    """One line naming a hub `insteadOf` rewrite of the remote, or None when there is none."""
+    git = require_git(config)
+    configured = canonical_remote_url(config)
+    effective = run(
+        ["git", "-C", str(config.root), "remote", "get-url", git.remote], check=False
+    ).stdout.decode(errors="replace").strip()
+    if not effective or effective == configured:
+        return None
+    return (
+        f"hub git config rewrites {git.remote} to {effective} (url.*.insteadOf) for the hub only; "
+        f"rigs get the configured {configured} and need their own access to it"
+    )
 
 
 def validate_wave_revision(wave: str, revision: str) -> str:
@@ -534,7 +629,7 @@ def verify_remote_revision(config: Config, tag: str, revision: str) -> None:
         [
             "env",
             "GIT_TERMINAL_PROMPT=0",
-            "GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=10",
+            f"GIT_SSH_COMMAND={SSH_COMMAND}",
             "git",
             "-C",
             str(config.root),
@@ -743,7 +838,8 @@ def git_repo_facts(config: Config, machine: Machine) -> tuple[str, str, str]:
         raise RigSyncError(f"{machine.name}: {machine.repo_path} is not a Git working tree")
     head = git_command(machine, "rev-parse", "HEAD").stdout.decode().strip()
     branch = git_command(machine, "branch", "--show-current").stdout.decode().strip()
-    remote_url = git_command(machine, "remote", "get-url", git.remote).stdout.decode().strip()
+    # The configured URL, as in `canonical_remote_url`: a rewrite is that machine's own routing.
+    remote_url = _configured_url(git_command(machine, "config", "--get-all", f"remote.{git.remote}.url"))
     return head, branch, remote_url
 
 
@@ -1073,7 +1169,7 @@ def rsync_remote(machine: Machine, path: Path, *, alias: str | None = None) -> s
 def rsync_flags(machine: Machine) -> list[str]:
     flags = ["rsync", "-a", "--itemize-changes"]
     if not machine.local:
-        flags += ["-e", "ssh -o BatchMode=yes -o ConnectTimeout=10"]
+        flags += ["-e", SSH_COMMAND]
     return flags
 
 
@@ -1095,10 +1191,11 @@ def run_rsync_with_retry(command: list[str], *, attempts: int = RSYNC_ATTEMPTS) 
     """Run an artifact rsync, retrying a bounded number of times when the connection drops.
 
     rsync is idempotent, so a retry resumes from what already landed; `--partial` keeps a
-    half-copied large file for the delta pass instead of discarding it.
+    half-copied large file for the delta pass instead of discarding it. rsync flushes each
+    `--itemize-changes` line as a file starts, so output is streamed rather than held to the end.
     """
     for attempt in range(1, attempts + 1):
-        result = run(command, check=False, show=True)
+        result = run(command, check=False, show=True, stream=True)
         if result.returncode == 0:
             return
         reason = RSYNC_RETRY_CODES.get(result.returncode)
@@ -1144,6 +1241,9 @@ def prepare(config: Config, machine: Machine, dry_run: bool, confirmed: bool) ->
             f"{machine.name}: refusing to convert non-empty non-Git path {machine.repo_path}"
         )
     remote_url = canonical_remote_url(config)
+    note = remote_rewrite_note(config)
+    if note:
+        print(f"NOTE {note}")
     print(
         f"[{'dry-run' if dry_run else 'prepare'}] {machine.name}: "
         f"git clone --branch {config.git.branch} {remote_url} {machine.repo_path}"
@@ -1155,7 +1255,7 @@ def prepare(config: Config, machine: Machine, dry_run: bool, confirmed: bool) ->
             [
                 "env",
                 "GIT_TERMINAL_PROMPT=0",
-                "GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=10",
+                f"GIT_SSH_COMMAND={SSH_COMMAND}",
                 "git",
                 "clone",
                 "--branch",
@@ -1655,7 +1755,8 @@ def check_storage(machine: Machine) -> tuple[int, list[str]]:
     if root is None:
         lines.append(
             f"FAIL {machine.name} storage root: repo_path resolves to {real_repo}, "
-            f"outside every declared storage root ({_declared_roots(machine)})"
+            f"outside every declared storage root ({_declared_roots(machine)}); move the checkout "
+            "under one, or have the user declare its volume (rig-sync references/configuration.md)"
         )
         return failures + 1, lines
     # Naming the root makes a checkout that moved to another declared volume visible.
@@ -1715,6 +1816,96 @@ def check_storage(machine: Machine) -> tuple[int, list[str]]:
     )
     failures += not headroom_ok
     return failures, lines
+
+
+@dataclass(frozen=True)
+class DiskReading:
+    """How much room a path has: the filesystem under it and the measure that applies there."""
+
+    filesystem: str
+    mount: str
+    free_kib: int
+    total_kib: int
+    via: str
+    floor_gb: float
+
+    @property
+    def free_gb(self) -> float:
+        return self.free_kib / KIB_PER_GB
+
+    @property
+    def below_floor(self) -> bool:
+        return self.free_gb < self.floor_gb
+
+    def describe(self) -> str:
+        return (
+            f"{self.filesystem} at {self.mount}: {self.free_gb:.1f}G free of "
+            f"{self.total_kib / KIB_PER_GB:.1f}G via {self.via} (floor {self.floor_gb:.1f}G)"
+        )
+
+
+def read_disks(machine: Machine, paths: list[str]) -> list[DiskReading] | None:
+    """Measure the disk under each path in one call; None when the machine cannot say.
+
+    A cache directory may not exist yet, so each path is measured at its nearest existing
+    ancestor. A path under a declared root takes that root's floor and quota, as the project's
+    own root does; anything else takes the default floor and `df`.
+    """
+    script = (
+        'echo Filesystem; for p in "$@"; do '
+        'while [ ! -e "$p" ]; do p=$(dirname "$p"); done; '
+        'df -P "$p" | tail -n +2; done'
+    )
+    rows = _df_rows(_remote_stdout(machine, ["sh", "-c", script, "sh", *paths]) or "")
+    if len(rows) != len(paths):
+        return None
+    quota_text: str | None = None
+    readings = []
+    for path, (filesystem, total, free, mount) in zip(paths, rows):
+        root = root_for(machine.storage_roots, PurePosixPath(path))
+        measure, via = (free, total), "df"
+        if root is not None and root.quota_fs == filesystem:
+            if quota_text is None:
+                quota_text = _remote_stdout(machine, ["quota", "-w"]) or ""
+            quota = _parse_quota(quota_text, filesystem)
+            if quota is not None:
+                measure, via = quota, "quota"
+        floor = root.floor_gb if root is not None else DEFAULT_MIN_FREE_GB
+        readings.append(DiskReading(filesystem, mount, measure[0], measure[1], via, floor))
+    return readings
+
+
+def check_cache_disks(machine: Machine) -> tuple[int, list[str]]:
+    """Report the disks the declared caches live on; a short one warns and never fails.
+
+    `check_storage` measures only the project's root, so a cache on another disk could fill while
+    every gate is green. It stays a warning because nothing here knows how much a wave will add
+    to a cache: `environment-sync provision` estimates that for the uv cache.
+    """
+    if not machine.caches:
+        return 0, []
+    names = [name for name, _value in machine.caches]
+    paths = [value for _name, value in machine.caches]
+    readings = read_disks(machine, [str(machine.repo_path), *paths])
+    if readings is None:
+        return 0, [f"WARN {machine.name} cache disks: cannot measure the disks under {', '.join(names)}"]
+    project, *cache_readings = readings
+    by_disk: dict[tuple[str, str], tuple[DiskReading, list[str]]] = {}
+    for name, reading in zip(names, cache_readings):
+        by_disk.setdefault((reading.filesystem, reading.mount), (reading, []))[1].append(name)
+    lines = []
+    for (filesystem, mount), (reading, variables) in by_disk.items():
+        label = ", ".join(variables)
+        if (filesystem, mount) == (project.filesystem, project.mount):
+            lines.append(f"OK {machine.name} cache disk: {label} on the project's disk ({filesystem} at {mount})")
+        elif reading.below_floor:
+            lines.append(
+                f"WARN {machine.name} cache disk: {label} on {reading.describe()}; "
+                "provisioning or a download can fill it while the project's disk looks fine"
+            )
+        else:
+            lines.append(f"OK {machine.name} cache disk: {label} on {reading.describe()}")
+    return 0, lines
 
 
 def check_paths(config: Config, config_path: Path, registry_path: Path) -> None:
@@ -2532,6 +2723,9 @@ def doctor(config: Config, machines: list[Machine]) -> None:
     if config.git is not None:
         try:
             expected_url = canonical_remote_url(config)
+            note = remote_rewrite_note(config)
+            if note:
+                print(f"NOTE {note}")
         except RigSyncError as exc:
             print(f"FAIL hub Git remote: {exc}")
             failures += 1
@@ -2567,7 +2761,7 @@ def doctor(config: Config, machines: list[Machine]) -> None:
         print(f"{'OK' if ok else 'FAIL'} {machine.name}: {'local' if machine.local else machine.ssh} -> {machine.repo_path}")
         failures += not ok
         if ok:
-            for check in (check_storage, check_machine_env, check_project_env):
+            for check in (check_storage, check_cache_disks, check_machine_env, check_project_env):
                 check_failures, check_lines = check(machine)
                 for line in check_lines:
                     print(line)
@@ -2580,6 +2774,7 @@ def doctor(config: Config, machines: list[Machine]) -> None:
                 print(
                     f"{'OK' if identity_ok else 'FAIL'} {machine.name} Git: "
                     f"branch={branch or '(detached)'} remote={remote_url}"
+                    + ("" if remote_url == expected_url else f" (expected {expected_url})")
                 )
                 failures += not identity_ok
                 version = remote(machine, ["git", "--version"], check=False)
@@ -2595,7 +2790,7 @@ def doctor(config: Config, machines: list[Machine]) -> None:
                     [
                         "env",
                         "GIT_TERMINAL_PROMPT=0",
-                        "GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=10",
+                        f"GIT_SSH_COMMAND={SSH_COMMAND}",
                         "git",
                         "-C",
                         str(machine.repo_path),

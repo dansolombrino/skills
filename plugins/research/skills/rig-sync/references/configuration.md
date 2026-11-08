@@ -48,8 +48,26 @@ repo_path = "/absolute/path/on/behemoth"
 supplied by hand — nothing derives it — so declare every rig the project will ever dispatch to
 at once and run `check-paths` before any remote step. Machine keys must match the canonical names
 used by dispatch.
-`git.remote` names the GitHub remote already configured on the hub; every rig must expose the
-same URL under that name. `git.branch` is the branch that dispatch commits are pushed to and that
+`git.remote` names the remote already configured on the hub. Its URL, the value
+`git config --get remote.<name>.url` prints, is the one `prepare` clones on every rig and the one
+each rig must then expose under that name. Any host works, not only GitHub, if:
+
+- **every machine reaches the same URL.** A local path, or an alias only the hub's `~/.ssh/config`
+  knows, is not reachable from a rig;
+- **the hub reaches it too.** `deploy-revision` and `verify-revision` run `git ls-remote` on the hub,
+  so a remote hosted on the hub itself still needs a URL the hub can open over the network;
+- **access is non-interactive.** Git runs with `GIT_TERMINAL_PROMPT=0` and `BatchMode=yes`, so each
+  machine needs its own key or credential helper, and `doctor` checks each one;
+- **it serves plain Git.** Submodules and LFS are refused, whatever the host.
+
+A `url.<base>.insteadOf` rule in the hub's Git config changes what the hub uses and what
+`git remote get-url` prints, not what is configured. It is that machine's own routing: rigs still get
+the configured URL, and `doctor` and `prepare` print a `NOTE` naming the rewrite. When a global rule
+matches a form you want left alone, write the remote as `ssh://git@github.com/<owner>/<repo>.git`:
+a rule on `git@github.com:` does not match it. A rig already cloned from a rewritten URL fails
+`doctor`'s identity check, which prints both URLs; the user decides whether to re-point it.
+
+`git.branch` is the branch that dispatch commits are pushed to and that
 must contain every deployed wave commit. Revision deployment never moves a main checkout: it adds
 the wave worktree `<repo_path>/.waves/<wave_id>`, and stops rather than switching branches or
 rewriting a working tree. Keyed wave environments live beside it in `<repo_path>/.envs/`. The
@@ -137,6 +155,19 @@ convenience symlink in `$HOME` can point at the large volume, so an unresolved s
 passes while the declaration is still wrong — and stays wrong the day the symlink is replaced by a
 real directory.
 
+When `doctor` or `check-paths` says a `repo_path`, the hub's included, is outside every declared
+root, a symlink cannot fix it, because both sides are resolved. There are two ways out, and the choice
+is the user's, since adding a root affects every project on that machine:
+
+1. **Move the checkout** under a root the registry already declares, and update `repo_path`. This is
+   the usual answer: wave artifacts land beside the checkout.
+2. **Declare the volume it is on**: add that volume's mount point to the machine's `storage_roots`.
+   If that is the system disk, also set `system_disk = true` and a `min_free_gb` you mean, because
+   checkpoints will now land there. Roots must not nest, so name the volume rather than the project.
+
+Then run `check-paths` and `doctor` again. A project that will never dispatch from this machine needs
+neither: leave the machine out of `sync.toml`.
+
 `doctor` also fails a root whose filesystem is the one mounted at `/`. An unmounted disk leaves
 its mount point behind as an empty directory on the system disk, where every path check still
 passes and the work silently fills the wrong drive. Set `system_disk = true` on a root only when it
@@ -155,10 +186,16 @@ user's allowance for that filesystem and reports headroom against it; otherwise 
 `df -P <root>`, which is correct on volumes with no quotas, and on a cluster work area whose `df`
 already reports the project quota.
 
-`min_free_gb` is the hard floor below which `doctor` fails instead of warning. It defaults to a
-conservative value; raise it on rigs that run checkpoint-heavy waves. Sizing it is a judgement
-about the *wave*, not the rig — a run writing a 350 MB checkpoint every 30 s consumes headroom
-far faster than the number suggests.
+`min_free_gb` is the hard floor below which `doctor` fails on the **project's root**. It defaults to
+a conservative value (25 GB); raise it on rigs that run checkpoint-heavy waves. Sizing it is a
+judgement about the *wave*, not the rig — a run writing a 350 MB checkpoint every 30 s consumes
+headroom far faster than the number suggests.
+
+Declared caches can sit on another disk, where filling up breaks provisioning while the project's
+root looks fine. `doctor` measures each disk under `[machines.<rig>.caches]` too, against the floor
+of the root containing that cache (the default for a cache under no root), and **warns** below it
+instead of failing: how much a cache will grow depends on the wave, not on the rig. `environment-sync
+provision` estimates that growth for the uv cache.
 
 Omit all three on rigs with a single volume and no quotas; `doctor` then skips the storage check
 rather than inventing a default.
@@ -339,3 +376,13 @@ removes one.
 - `RIGSYNC_CONFIG` changes the project config path; default: `./sync.toml`.
 - `RIGSYNC_REGISTRY` changes the user registry path; default:
   `~/.config/rigsync/machines.toml`.
+
+## SSH bounds
+
+Every ssh and rsync call runs with `BatchMode=yes`, `ConnectTimeout=10`, `ServerAliveInterval=30`,
+and `ServerAliveCountMax=6`: it never prompts, gives up connecting after 10 s, and drops a connection
+that has not answered for about 3 minutes with exit 255, which `pull`, `push`, `restore`, and
+`sync-cache` retry. sshd answers those probes whatever the remote command is doing, so a silent
+`uv sync`, GPU smoke, or rsync delta pass is unaffected, and nothing limits how long a live command
+takes. With ssh multiplexing the master connection's settings apply, so set the same keep-alives on
+that alias in `~/.ssh/config`.

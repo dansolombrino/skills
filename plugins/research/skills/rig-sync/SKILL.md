@@ -40,19 +40,20 @@ python3 "$RIGSYNC_SCRIPT" collect --check --wave 20260802-120000
 python3 "$RIGSYNC_SCRIPT" sync-cache --var HF_DATASETS_CACHE --subpath <relative subtree> --to rig-3090-ti --dry-run
 python3 "$RIGSYNC_SCRIPT" status --group evaluations
 python3 "$RIGSYNC_SCRIPT" pull evaluations/000_exp --from rig-3090-ti --dry-run|--confirm
+python3 "$RIGSYNC_SCRIPT" push evaluations/000_exp --to rig-3090-ti --dry-run|--confirm
+python3 "$RIGSYNC_SCRIPT" push-source --to rig-3090-ti --dry-run|--confirm
 ```
 
 Every write has a `--dry-run`. `rig-4090` is local when its name or hostname matches the current
-host; peers get bounded, non-interactive SSH. A rig with `opt_in = true` is used only when named:
+host; peers get non-interactive SSH: 10 s to connect, about 3 min to drop a dead connection. A rig with `opt_in = true` is used only when named:
 any command's default machine set skips it. On a `network = "tailscale"` rig an ssh failure names
-the tailnet cause (tailscale down here, peer offline, Tailscale SSH wanting a re-check).
+the tailnet cause.
 
 - `check-paths` — each `repo_path` sits under one of its rig's declared storage roots. Run it
-  before the first remote step: it catches a misplaced path before anything is cloned there.
-- `repo-path` / `storage-env` — read a rig's project path and storage floor back; never retype
-  them.
+  before any remote step.
+- `repo-path` / `storage-env` — read a rig's project path and storage floor back; never retype.
 - `doctor` — before dispatch: tailnet reachability on a tailscale rig, hostname identity, Git (2.17+ for worktrees), storage roots
-  resolved and mounted, quota headroom (`quota`, not `df` alone), shared cache values visible to a
+  resolved and mounted, quota headroom (`quota`, not `df` alone), a warning for a cache on a short disk, shared cache values visible to a
   non-interactive shell, and no project `.env` redeclaring them.
 - `provision-env` — writes the rig's declared shared-cache variables into a marked block of
   `.zshenv`/`.bashrc`, backs both up, verifies a non-interactive shell, and restores the backup
@@ -89,12 +90,13 @@ the tailnet cause (tailscale down here, peer offline, Tailscale SSH wanting a re
 - `sync-cache` — copies one relative subtree of a declared shared cache hub → rig, under a lock,
   never deleting.
 - `pull`/`push` — artifact selectors `<group>` or `<group>/<path>` from `[artifacts]`; `pull` is
-  peer → here. A cluster with `transfer_ssh` declared moves data through that host.
+  peer → here. `transfer_ssh` carries the data if declared. These,
+  `restore`, and `sync-cache` stream rsync's output.
 
 ## Limits
 
 - A rig without a registry entry, or a destination not in both files, is not a target; storage
   roots and caches are declared by the user, never inferred or added to make a check pass.
-- `push-source` is not a wave deployment; waves use `deploy-revision`.
+- `push-source` is no wave deployment: use `deploy-revision`.
 - `prune` and `offload` are the only deletions. A failed check is reported, not repaired: no
   force-push, reset, stash, clean, merge, `scp`, tarball, or hand-written rsync.

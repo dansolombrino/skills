@@ -41,6 +41,10 @@ EXACT_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
 FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
 GPU_SET_RE = re.compile(r"^\d+(?:,\d+)*$")
+DOWNLOAD_PLAN_RE = re.compile(r"^Would download (\d+) packages?", re.M)
+INSTALL_LINE_RE = re.compile(r"^ \+ ([^=\s]+)==(\S+)", re.M)
+# uv's cache holds wheels unpacked; machine-learning wheels unpack to about three times their size.
+UNPACK_FACTOR = 3
 URL_CREDENTIAL_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^\s/@:]+):([^\s/@]+)@", re.I)
 SECRET_PARAMETER_RE = re.compile(
     r"(?i)(token|password|passwd|secret|api[_-]?key)(=|%3[dD])([^&\s]+)"
@@ -173,10 +177,10 @@ def load_environment_settings(root: Path, config_path: Path) -> EnvironmentSetti
             f"{config_path}: environment.gpu_smoke must be an argv array of the form "
             '["python", "<repo-relative script>", ...]'
         )
-    # The script path is resolved against each rig's repo_path, because the remote
-    # shell has no cwd. That only works if slot 1 really is a repo-relative script:
-    # a flag form leaves nothing to resolve, and an absolute or escaping path names
-    # a location this project does not own on that machine.
+    # The script path is resolved against the target's source tree on each rig (the wave
+    # worktree, or the hub checkout for --staged), because the remote shell has no cwd. That
+    # only works if slot 1 really is a repo-relative script: a flag form leaves nothing to
+    # resolve, and an absolute or escaping path names a location this project does not own.
     smoke_script = raw_smoke[1]
     if smoke_script.startswith("-"):
         raise EnvironmentSyncError(
@@ -186,7 +190,7 @@ def load_environment_settings(root: Path, config_path: Path) -> EnvironmentSetti
     if PurePosixPath(smoke_script).is_absolute() or ".." in PurePosixPath(smoke_script).parts:
         raise EnvironmentSyncError(
             f"{config_path}: environment.gpu_smoke[1] must be a relative path inside the "
-            f"project, not {smoke_script!r}; it is resolved against each rig's repo_path"
+            f"project, not {smoke_script!r}; it is resolved against each rig's wave worktree"
         )
 
     pyproject_path = root / "pyproject.toml"
@@ -546,6 +550,89 @@ def key_in_use(config, machine, target: Target) -> list[str]:
     return users
 
 
+def canonical_package(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _wheel_size(package: dict, architecture: str) -> int | None:
+    """Largest wheel of a locked package this architecture could install, else its sdist.
+
+    None when the lock records no size, as some private and vendor indexes leave out.
+    """
+    fits = [
+        wheel
+        for wheel in package.get("wheels", [])
+        if wheel.get("url", "").endswith("-any.whl")
+        or ("linux" in wheel.get("url", "") and architecture in wheel.get("url", ""))
+    ]
+    if not fits:
+        return (package.get("sdist") or {}).get("size")
+    return max((wheel["size"] for wheel in fits if "size" in wheel), default=None)
+
+
+def parse_sync_plan(text: str) -> tuple[int, list[tuple[str, str]]]:
+    """From `uv sync --dry-run` output: how many packages it downloads, and what it installs.
+
+    uv does not say which of the installs are the uncached ones.
+    """
+    downloads = DOWNLOAD_PLAN_RE.search(text)
+    return int(downloads.group(1)) if downloads else 0, INSTALL_LINE_RE.findall(text)
+
+
+def plan_download_bytes(
+    lock_text: str, plan: tuple[int, list[tuple[str, str]]], architecture: str
+) -> tuple[int, int]:
+    """Bound what the plan downloads: (bytes of its largest `downloads` installs, installs of unknown size)."""
+    downloads, installs = plan
+    wanted = {(canonical_package(name), version) for name, version in installs}
+    sizes = [
+        _wheel_size(package, architecture)
+        for package in tomllib.loads(lock_text).get("package", [])
+        if (canonical_package(package.get("name", "")), package.get("version")) in wanted
+    ]
+    known = sorted((size for size in sizes if size is not None), reverse=True)
+    return sum(known[:downloads]), len(sizes) - len(known)
+
+
+def report_uv_cache(machine, target: Target, sync_output: str | None = None) -> None:
+    """Name the disk `uv sync` fills and, given its dry-run output, what this environment adds.
+
+    Advisory: a wrong estimate must never block a build, so a failure here only says less. It
+    reads through `rigsync.remote` and writes nothing.
+    """
+    label = f"{machine.name} uv cache"
+    path = rigsync.remote(
+        machine, ["sh", "-c", 'printf %s "${UV_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/uv}"'], check=False
+    ).stdout.decode(errors="replace").strip()
+    readings = rigsync.read_disks(machine, [path]) if path else None
+    if not readings:
+        print(f"WARN {label}: cannot measure the disk under {path or 'its directory'}")
+        return
+    reading = readings[0]
+    summary = f"{label}: {path} on {reading.describe()}"
+    needed_gb = None
+    if sync_output is not None:
+        plan = parse_sync_plan(sync_output)
+        lock = rigsync.remote(machine, ["cat", str(target.source(machine) / "uv.lock")], check=False)
+        architecture = rigsync.remote(machine, ["uname", "-m"], check=False).stdout.decode(errors="replace").strip()
+        try:
+            needed, unknown = plan_download_bytes(lock.stdout.decode(errors="replace"), plan, architecture)
+        except tomllib.TOMLDecodeError:
+            needed, unknown = None, 0
+        if needed is not None:
+            wheels_gb = needed / 1024**3
+            needed_gb = wheels_gb * UNPACK_FACTOR
+            summary += (
+                f"; {plan[0]} of {len(plan[1])} packages to download: "
+                f"{'at least' if unknown else 'at most'} {wheels_gb:.1f}G of wheels, "
+                f"roughly {needed_gb:.1f}G once unpacked"
+            )
+            if unknown:
+                summary += f" ({unknown} with no size in the lock)"
+    short = reading.below_floor or (needed_gb is not None and reading.free_gb - needed_gb < reading.floor_gb)
+    print(f"{'WARN' if short else 'OK'} {summary}")
+
+
 def provision(
     settings: EnvironmentSettings,
     config,
@@ -573,8 +660,10 @@ def provision(
                     f"[dry-run] {machine.name}: install uv {settings.uv_version} from "
                     f"https://astral.sh/uv/{settings.uv_version}/install.sh"
                 )
+                report_uv_cache(machine, target)
                 continue
             result = remote(machine, sync_command(settings, machine, target, dry_run=True), check=False)
+            report_uv_cache(machine, target, (result.stdout + result.stderr).decode(errors="replace"))
             if result.stdout:
                 print(redact(result.stdout.decode(errors="replace")), end="")
             if result.stderr:
@@ -606,6 +695,8 @@ def provision(
                 settings.python_version,
             ],
         )
+        plan = remote(machine, sync_command(settings, machine, target, dry_run=True), check=False)
+        report_uv_cache(machine, target, (plan.stdout + plan.stderr).decode(errors="replace"))
         sync_result = remote(
             machine, sync_command(settings, machine, target, dry_run=False), check=False
         )

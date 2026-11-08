@@ -4,6 +4,7 @@ import importlib.util
 import json
 import io
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -2104,6 +2105,262 @@ class MainCheckoutTests(unittest.TestCase):
         self.assertIsNone(rigsync.linked_worktree_main(Path(self.tmp.name).resolve()))
         self.assertEqual(rigsync.linked_worktree_main(self.session), self.project)
         self.assertEqual(rigsync.linked_worktree_main(self.other_tree), self.project)
+
+
+class _LineSink(io.StringIO):
+    """A stream that lets the child under test finish once it has received its first line."""
+
+    def __init__(self, marker: Path) -> None:
+        super().__init__()
+        self.marker = marker
+
+    def write(self, text: str) -> int:
+        self.marker.touch()
+        return super().write(text)
+
+
+class _ClosedReader:
+    def write(self, _text: str) -> int:
+        raise BrokenPipeError
+
+    def flush(self) -> None:
+        raise BrokenPipeError
+
+
+class TransferStreamingTests(unittest.TestCase):
+    def test_a_line_arrives_while_the_transfer_is_still_running(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as raw:
+            marker = Path(raw) / "seen"
+            # Exits nonzero unless the parent saw its first line before it exited: buffering to the
+            # end of the process, as `capture_output` does, can never satisfy this.
+            child = (
+                "echo first; i=0; "
+                f'while [ ! -e "{marker}" ]; do i=$((i+1)); [ "$i" -gt 100 ] && exit 7; sleep 0.1; done; '
+                "echo second"
+            )
+            sink = _LineSink(marker)
+            with redirect_stdout(sink):
+                result = rigsync.run(["sh", "-c", child], check=False, show=True, stream=True)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(sink.getvalue(), "first\nsecond\n")
+
+    def test_stderr_is_shown_and_kept_for_the_retry_decision(self) -> None:
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            with self.assertRaisesRegex(rigsync.RigSyncError, r"failed \(12\) after 3 attempts[^\n]*\nboom"):
+                rigsync.run_rsync_with_retry(["sh", "-c", "echo file; echo boom >&2; exit 12"])
+        self.assertEqual(out.getvalue(), "file\n" * 3)
+        self.assertEqual(err.getvalue().count("boom"), 3)
+        self.assertEqual(err.getvalue().count("[retry]"), 2)
+
+    def test_a_marker_on_stderr_still_stops_the_retries(self) -> None:
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(rigsync.RigSyncError, r"failed \(255\): sh"):
+                rigsync.run_rsync_with_retry(["sh", "-c", "echo 'Permission denied (publickey).' >&2; exit 255"])
+
+    def test_a_reader_that_went_away_does_not_stall_the_child(self) -> None:
+        with redirect_stdout(_ClosedReader()), redirect_stderr(io.StringIO()):
+            result = rigsync.run_streaming(["sh", "-c", "yes line | head -n 200000"])
+        self.assertEqual(result.returncode, 0)
+
+    def test_pull_streams_real_rsync_output(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as raw:
+            base = Path(raw)
+            write(base / "peer/evaluations/000_exp/result.json", "{}\n")
+            (base / "hub").mkdir()
+            machine = rigsync.Machine("peer", "peer", None, base / "peer", True)
+            config = rigsync.Config(base / "hub", {"evaluations": {"path": "evaluations"}}, {"peer": machine})
+            stream = io.StringIO()
+            with redirect_stdout(stream):
+                rigsync.transfer(config, machine, "evaluations/000_exp", "pull", dry_run=False, confirmed=True)
+            self.assertTrue((base / "hub/evaluations/000_exp/result.json").exists())
+        self.assertIn("result.json", stream.getvalue())
+
+    def test_all_four_transfers_go_through_the_streaming_path(self) -> None:
+        source = SCRIPT.read_text()
+        for name in ("def transfer(", "def restore(", "def sync_cache("):
+            body = source[source.index(name):]
+            body = body[: body.index("\ndef ", 1)]
+            self.assertIn("run_rsync_with_retry(command)", body, name)
+        retry = source[source.index("def run_rsync_with_retry("):]
+        self.assertIn("stream=True", retry[: retry.index("\ndef ", 1)])
+
+
+class SshBoundsTests(unittest.TestCase):
+    def test_every_ssh_path_detects_a_dead_connection(self) -> None:
+        machine = rigsync.Machine("peer", "peer-alias", None, Path("/tmp/peer"), False)
+        base = rigsync.ssh_base(machine)
+        rsync = rigsync.rsync_flags(machine)
+        for option in ("BatchMode=yes", "ConnectTimeout=10", "ServerAliveInterval=30", "ServerAliveCountMax=6"):
+            self.assertIn(option, base)
+            self.assertIn(option, rsync[rsync.index("-e") + 1])
+        self.assertEqual(base[-1], "peer-alias")
+        source = SCRIPT.read_text()
+        self.assertEqual(source.count('f"GIT_SSH_COMMAND={SSH_COMMAND}"'), 3)
+        self.assertEqual(source.count("ConnectTimeout=10"), 1, "one definition of the ssh options")
+
+    def test_ssh_itself_accepts_the_options(self) -> None:
+        if shutil.which("ssh") is None:
+            self.skipTest("no ssh here")
+        result = subprocess.run(["ssh", "-G", *rigsync.SSH_OPTIONS, "somewhere"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("serveraliveinterval 30", result.stdout)
+        self.assertIn("serveralivecountmax 6", result.stdout)
+
+    def test_the_probes_tolerate_about_three_minutes(self) -> None:
+        options = dict(option.split("=") for option in rigsync.SSH_OPTIONS if "=" in option)
+        self.assertEqual(int(options["ServerAliveInterval"]) * int(options["ServerAliveCountMax"]), 180)
+
+
+class CacheDiskTests(unittest.TestCase):
+    HEADER = "Filesystem\n"
+    PROJECT = "/dev/large 3000000000 1000000000 2000000000 33% /large\n"
+    SMALL = "/dev/small 500000000 486000000 13631488 98% /cache\n"  # 13 GiB free
+    ROOMY = "/dev/roomy 500000000 100000000 400000000 20% /roomy\n"
+
+    def machine(self, caches, **kwargs) -> rigsync.Machine:
+        return rigsync.Machine(
+            "peer", "peer", None, Path("/large/project"), False,
+            storage_roots=kwargs.pop("roots", (rigsync.StorageRoot(PurePosixPath("/large")),)),
+            caches=tuple(caches),
+        )
+
+    def check(self, machine, stdout: str, quota: str | None = None):
+        def fake_remote(_machine, argv, check=True, **_kw):
+            if argv[0] == "quota":
+                return subprocess.CompletedProcess(argv, 0, (quota or "").encode(), b"")
+            return subprocess.CompletedProcess(argv, 0, stdout.encode(), b"")
+
+        with mock.patch.object(rigsync, "remote", side_effect=fake_remote):
+            return rigsync.check_cache_disks(machine)
+
+    def test_no_declared_cache_means_no_probe(self) -> None:
+        with mock.patch.object(rigsync, "remote", side_effect=AssertionError("no probe")):
+            self.assertEqual(rigsync.check_cache_disks(self.machine([])), (0, []))
+
+    def test_a_short_cache_disk_warns_and_never_fails(self) -> None:
+        machine = self.machine([("UV_CACHE_DIR", "/cache/uv"), ("TMPDIR", "/cache/tmp"), ("HF_HOME", "/large/hf")])
+        failures, lines = self.check(machine, self.HEADER + self.PROJECT + self.SMALL + self.SMALL + self.PROJECT)
+        self.assertEqual(failures, 0)
+        warned = [line for line in lines if line.startswith("WARN")]
+        self.assertEqual(len(warned), 1, lines)
+        self.assertIn("UV_CACHE_DIR, TMPDIR on /dev/small at /cache: 13.0G free", warned[0])
+        self.assertIn("floor 25.0G", warned[0])
+        self.assertIn("OK peer cache disk: HF_HOME on the project's disk", "\n".join(lines))
+
+    def test_a_roomy_cache_disk_is_named(self) -> None:
+        failures, lines = self.check(self.machine([("HF_HOME", "/roomy/hf")]), self.HEADER + self.PROJECT + self.ROOMY)
+        self.assertEqual(failures, 0)
+        self.assertTrue(lines[0].startswith("OK peer cache disk: HF_HOME on /dev/roomy at /roomy"), lines)
+
+    def test_a_cache_under_a_root_takes_that_roots_floor_and_quota(self) -> None:
+        roots = (
+            rigsync.StorageRoot(PurePosixPath("/large")),
+            rigsync.StorageRoot(PurePosixPath("/roomy"), "/dev/roomy", 100.0),
+        )
+        machine = self.machine([("HF_HOME", "/roomy/hf")], roots=roots)
+        quota = " /dev/roomy 900 1000 1048576 0 0 0 0\n"  # about 1 GiB of allowance, though df shows 381 GiB
+        failures, lines = self.check(machine, self.HEADER + self.PROJECT + self.ROOMY, quota=quota)
+        self.assertEqual(failures, 0)
+        self.assertTrue(lines[0].startswith("WARN"), lines)
+        self.assertIn("via quota", lines[0])
+        self.assertIn("floor 100.0G", lines[0])
+
+    def test_an_unreadable_disk_says_so_without_failing(self) -> None:
+        failures, lines = self.check(self.machine([("HF_HOME", "/roomy/hf")]), "garbage")
+        self.assertEqual(failures, 0)
+        self.assertIn("WARN peer cache disks: cannot measure", lines[0])
+
+    def test_a_cache_directory_that_does_not_exist_yet_is_measured_at_its_parent(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as raw:
+            machine = rigsync.Machine("hub", "hub", None, Path(raw), True)
+            readings = rigsync.read_disks(machine, [f"{raw}/not/yet/created"])
+        self.assertIsNotNone(readings)
+        self.assertGreater(readings[0].total_kib, 0)
+
+    def test_doctor_reports_the_disks_and_passes(self) -> None:
+        machine = self.machine([("UV_CACHE_DIR", "/cache/uv")])
+        config = rigsync.Config(Path("/tmp/none"), {}, {"peer": machine})
+        ok = subprocess.CompletedProcess([], 0, b"", b"")
+        stream = io.StringIO()
+        with mock.patch.object(rigsync, "remote", return_value=ok), mock.patch.object(
+            rigsync, "check_storage", return_value=(0, [])
+        ), mock.patch.object(rigsync, "check_machine_env", return_value=(0, [])), mock.patch.object(
+            rigsync, "check_project_env", return_value=(0, [])
+        ), mock.patch.object(
+            rigsync, "read_disks", return_value=[
+                rigsync.DiskReading("/dev/large", "/large", 2000000000, 3000000000, "df", 25.0),
+                rigsync.DiskReading("/dev/small", "/cache", 13631488, 500000000, "df", 25.0),
+            ],
+        ), redirect_stdout(stream):
+            rigsync.doctor(config, [machine])
+        self.assertIn("WARN peer cache disk: UV_CACHE_DIR on /dev/small", stream.getvalue())
+
+
+class RemoteUrlTests(unittest.TestCase):
+    """A hub `insteadOf` rule must not decide what a rig is told to clone."""
+
+    make_git_fixture = RigSyncTests.make_git_fixture
+    CONFIGURED = "git@git.example.org:someone/project.git"
+
+    def rewritten_fixture(self, base: Path) -> tuple[rigsync.Config, rigsync.Machine, str]:
+        config, machine, _old, _revision = self.make_git_fixture(base)
+        bare = base / "remote.git"
+        hub = config.root
+        subprocess.run(["git", "-C", str(hub), "remote", "set-url", "origin", self.CONFIGURED], check=True)
+        subprocess.run(["git", "-C", str(hub), "config", f"url.{bare}.insteadOf", self.CONFIGURED], check=True)
+        effective = subprocess.run(
+            ["git", "-C", str(hub), "remote", "get-url", "origin"], check=True, capture_output=True, text=True
+        ).stdout.strip()
+        self.assertEqual(effective, str(bare), "the fixture must really rewrite")
+        return config, machine, effective
+
+    def test_rigs_get_the_configured_url_and_the_rewrite_is_named(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as raw:
+            config, _machine, effective = self.rewritten_fixture(Path(raw))
+            self.assertEqual(rigsync.canonical_remote_url(config), self.CONFIGURED)
+            note = rigsync.remote_rewrite_note(config)
+        self.assertIn(effective, note)
+        self.assertIn(self.CONFIGURED, note)
+
+    def test_no_rewrite_means_no_note_and_the_same_url(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as raw:
+            config, _machine, _old, _revision = self.make_git_fixture(Path(raw))
+            self.assertEqual(rigsync.canonical_remote_url(config), str(Path(raw) / "remote.git"))
+            self.assertIsNone(rigsync.remote_rewrite_note(config))
+
+    def test_prepare_hands_out_the_configured_url(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as raw:
+            config, _machine, _effective = self.rewritten_fixture(Path(raw))
+            fresh = rigsync.Machine("fresh", "fresh", None, Path(raw) / "fresh", True)
+            stream = io.StringIO()
+            with redirect_stdout(stream):
+                rigsync.prepare(config, fresh, dry_run=True, confirmed=False)
+        self.assertIn(f"git clone --branch main {self.CONFIGURED} ", stream.getvalue())
+        self.assertIn("NOTE hub git config rewrites origin", stream.getvalue())
+
+    def test_identity_compares_configured_urls_on_both_sides(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as raw:
+            config, machine, _effective = self.rewritten_fixture(Path(raw))
+            peer = machine.repo_path
+            subprocess.run(["git", "-C", str(peer), "remote", "set-url", "origin", self.CONFIGURED], check=True)
+            self.assertEqual(rigsync.git_repo_facts(config, machine)[2], rigsync.canonical_remote_url(config))
+            # a rig cloned earlier from the rewritten URL no longer passes as the same remote
+            subprocess.run(["git", "-C", str(peer), "remote", "set-url", "origin", str(Path(raw) / "remote.git")], check=True)
+            self.assertNotEqual(rigsync.git_repo_facts(config, machine)[2], rigsync.canonical_remote_url(config))
+
+    def test_a_missing_remote_is_a_clear_error(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as raw:
+            config, _machine, _old, _revision = self.make_git_fixture(Path(raw))
+            subprocess.run(["git", "-C", str(config.root), "remote", "remove", "origin"], check=True)
+            with self.assertRaisesRegex(rigsync.RigSyncError, "hub remote 'origin' has no URL"):
+                rigsync.canonical_remote_url(config)
+
+    def test_the_rewrite_free_form_is_documented_and_no_host_is_assumed(self) -> None:
+        text = " ".join((SCRIPT.parents[1] / "references/configuration.md").read_text().split())
+        self.assertIn("ssh://git@github.com/<owner>/<repo>.git", text)
+        self.assertIn("Any host works, not only GitHub", text)
+        self.assertIn("**the hub reaches it too.**", text)
 
 
 if __name__ == "__main__":
