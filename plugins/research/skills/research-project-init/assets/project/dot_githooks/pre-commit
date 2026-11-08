@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Journal guard and storage-path lint for one commit. Rules: the research-journal skill.
+set -euo pipefail
+
+staged=$(git diff --cached --name-only)
+diff_cached() { git diff --cached --no-color --no-ext-diff --no-renames -U0 --src-prefix=a/ --dst-prefix=b/ "$@"; }
+
+# 1. Changes to experiment-relevant files come with a journal entry.
+if grep -qE '^(code|config|scripts|evaluations|visualizations)/' <<<"$staged"; then
+  if ! grep -qx 'JOURNAL.md' <<<"$staged"; then
+    echo "COMMIT BLOCKED: changes touch code/config/scripts/evaluations/visualizations" >&2
+    echo "but JOURNAL.md is not part of the commit. Journal what happened first." >&2
+    exit 1
+  fi
+fi
+
+# 2. JOURNAL.md is append-only. A run_id migration swaps rid-<32 hex> hashes, so a removed line
+# passes when it reappears among the added lines with only its hashes changed.
+journal_lines() {
+  diff_cached -- JOURNAL.md \
+    | awk -v side="$1" '/^@@/ { body = 1; next } body && index($0, side) == 1 { print substr($0, 2) }' \
+    | { grep -v '^[[:space:]]*$' || true; } \
+    | sed -E 's/rid-[0-9a-f]{32}/rid-HASH/g' \
+    | LC_ALL=C sort
+}
+rewritten=$(LC_ALL=C comm -23 <(journal_lines -) <(journal_lines +))
+if [ -n "$rewritten" ]; then
+  echo "COMMIT BLOCKED: JOURNAL.md is append-only, but this commit removes or rewrites:" >&2
+  head -n 5 <<<"$rewritten" >&2
+  echo "Restore those lines and append a new entry; a correction is a new entry." >&2
+  exit 1
+fi
+
+# 3. Storage paths go through code/common/paths.py. Only added lines are checked. A sys.path line
+# and a line marked "paths-lint: ok" (it builds no storage path) are allowed.
+misuse=$(
+  diff_cached --diff-filter=ACMR -- 'code/*.py' 'visualizations/*.py' ':(exclude)code/common/paths.py' \
+    | awk '/^\+\+\+ b\// { file = substr($0, 7); next }
+           /^\+/ && /Path\(__file__\)|Path\.cwd\(\)|os\.getcwd\(\)/ \
+             && !/sys\.path|paths-lint: ok|^\+[[:space:]]*#/ { print file ": " substr($0, 2) }'
+)
+if [ -n "$misuse" ]; then
+  echo "COMMIT BLOCKED: a storage path must not come from Path(__file__) or the working directory:" >&2
+  echo "$misuse" >&2
+  echo "Use project_path() for storage and source_path() for tracked inputs (code/common/paths.py)." >&2
+  exit 1
+fi

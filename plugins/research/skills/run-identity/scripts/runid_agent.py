@@ -6,8 +6,8 @@ each machine (the hub included) followed by one `serve("<base64 request>")` call
 nothing installed. The worker prints exactly one result line, `__RUNID__ <json>`.
 
 It also holds the hashed-v2 identity functions (`hash_from_values`, `label`, `build_index`),
-which must stay byte-identical to `code/common/run_id.py` in the project template; the test suite
-asserts that parity.
+which must stay byte-identical to `research-project-init`'s `assets/project/code/common/run_id.py`;
+the test suite asserts that parity.
 """
 
 from __future__ import annotations

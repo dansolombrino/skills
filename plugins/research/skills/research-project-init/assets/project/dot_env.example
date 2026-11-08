@@ -1,0 +1,10 @@
+# Hugging Face credentials (secrets; keep values only in .env)
+HF_TOKEN=
+HUGGING_FACE_HUB_TOKEN=
+
+# Project-scoped storage (relative to the project root; resolved by code/common/paths.py)
+OPENCLIP_CACHE_DIR=
+CACHE_DIR=
+
+# Machine-local runtime setting
+TORCH_NUM_WORKERS=

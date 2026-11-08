@@ -9,7 +9,7 @@ unsupported; moving one over is a separate change the user asks for.
 [project root]
 ├── checkpoints/     # training checkpoints (gitignored)
 ├── code/            # experiment code, hydra-configured python
-│   └── common/      # environment.py, environment_smoke.py, paths.py, run_id.py, status.py
+│   └── common/      # environment.py, environment_smoke.py, metrics.py, paths.py, run_id.py, status.py
 ├── config/          # hydra yaml; plus each experiment's run_id and glossary JSON
 ├── evaluations/     # experiment outputs and .status.json markers (gitignored)
 ├── logs/            # run logs, mirroring scripts/ (gitignored, rig-local)
@@ -39,7 +39,8 @@ evaluations/ logs/ plots/ scripts/ visualizations/`.
   (`plots/000_grokking/plot_loss/loss_curve.html`). Run selection lives inside the file, so plot
   paths carry no run_id. A plot combining several producer experiments is placed by the user.
 - **Tests** (optional) for `<root>/<path>/<stem>.py`, `<root>` being `code` or `visualizations`,
-  live at `tests/<root>/<path>/<stem>/test_*.py`. They are not the pre-dispatch smoke.
+  live at `tests/<root>/<path>/<stem>/test_*.py`. They are not the pre-dispatch smoke, whose outputs
+  go to `storage/smoke/` (`paths.py` `output_root`), out of every real-run scan.
 - **Logs.** A wave script tees its stdout and stderr into the mirror of its own folder:
   `scripts/NNN_exp/<run folder>/wave_<wave_id>/wave.sh` logs to
   `logs/NNN_exp/<run folder>/wave_<wave_id>/wave_<rig>_gpu<ids>-<YYYYmmdd-HHMMSS>.log`. Hydra
@@ -143,14 +144,14 @@ The canonical name is the ssh alias.
   them, and a wave runs there only on cards the user grants for that wave (`gpu_grants.<rig>`,
   verbatim). They are other people's machines, reached over a tailnet (`network = "tailscale"`).
 - **leonardo** is a batch cluster: one run per job, one GPU, 8 cores, 128 GB unless the user says
-  a run needs more; it is outside lane balancing. Access is a short-lived SSH certificate only the
-  user can renew. The project
-  account is the one in its declared `repo_path`; there is no core-hour cap unless the user sets
+  a run needs more; it is outside lane balancing. Access is a 12-hour SSH certificate that `cineca-login`
+  renews, unattended once set up. The project account is the one in its declared `repo_path`; there is no core-hour cap unless the user sets
   one.
 - **Machine registry.** Each rig's ssh alias, hostname, storage roots, quota filesystem, and shared
   caches live in the user registry `~/.config/rigsync/machines.toml` (`rig-sync` →
   `references/configuration.md`), declared, never guessed, and never defaulted to `$HOME` or
-  `~/.cache`. It is a prerequisite for scaffolding: a rig without an entry cannot go in `sync.toml`.
+  `~/.cache`. It is a prerequisite for scaffolding: a rig without an entry cannot go in `sync.toml`,
+  and a project under none of the hub's roots moves under one, or the volume joins the registry.
   Shared caches are installed by `rig-sync provision-env` where non-interactive shells see them;
   a project `.env` never redeclares them, and its own storage paths are repo-relative.
 - **Low disk** is a reason to offload, not to idle a rig: `rig-sync offload` moves a wave's

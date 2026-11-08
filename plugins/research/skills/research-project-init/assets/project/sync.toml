@@ -1,0 +1,26 @@
+version = 1
+
+[git]
+remote = "{{REMOTE}}"
+branch = "{{BRANCH}}"
+
+[environment]
+manager = "uv"
+name = "{{ENVIRONMENT_NAME}}"
+gpu_smoke = ["python", "code/common/environment_smoke.py"]
+
+[artifacts.checkpoints]
+path = "checkpoints"
+depth = 2
+
+[artifacts.evaluations]
+path = "evaluations"
+depth = 2
+
+[artifacts.plots]
+path = "plots"
+depth = 2
+
+[artifacts.references]
+path = "references"
+depth = 1

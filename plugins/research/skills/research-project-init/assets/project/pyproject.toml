@@ -1,0 +1,18 @@
+[project]
+name = "{{PROJECT_NAME}}"
+version = "0.0.0"
+requires-python = "=={{PYTHON_VERSION}}"
+# The standard set: torch for experiments, hydra-core for their configs, plotly for plots.
+# Declared up front because each later `uv add` changes the environment on every rig.
+dependencies = ["torch", "numpy", "hydra-core", "plotly"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.uv]
+required-version = "=={{UV_VERSION}}"
+python-preference = "managed"
+
+[tool.pytest.ini_options]
+# Lets tests import the helpers the way experiment code does: `from common.paths import ...`.
+pythonpath = ["code"]

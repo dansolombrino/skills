@@ -18,7 +18,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "plugins/research/skills/run-identity/scripts/runid.py"
-TEMPLATES = ROOT / "plugins/research/skills/research-project-init/references/templates.md"
+RUN_ID_ASSET = ROOT / "plugins/research/skills/research-project-init/assets/project/code/common/run_id.py"
 SPEC = importlib.util.spec_from_file_location("runid", SCRIPT)
 assert SPEC and SPEC.loader
 runid = importlib.util.module_from_spec(SPEC)
@@ -33,10 +33,8 @@ HASH_RE = re.compile(r"rid-[0-9a-f]{32}")
 
 def run_id_template() -> dict:
     """Exec the project template's code/common/run_id.py and return its namespace."""
-    match = re.search(r"## code/common/run_id\.py\n\n```python\n(.*?)\n```", TEMPLATES.read_text(), re.DOTALL)
-    assert match is not None
     namespace: dict = {"__name__": "run_id_template"}
-    exec(compile(match.group(1), "run_id.py", "exec"), namespace)
+    exec(compile(RUN_ID_ASSET.read_text(), "run_id.py", "exec"), namespace)
     return namespace
 
 
