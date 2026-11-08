@@ -1,5 +1,5 @@
 {
-  "description": "At session start in a project tagged research, state its working mode (the main chat orchestrates, subagents do bounded work) and the facts (progress, ETA, warnings, dashboard, whether a chat follows it) of each live wave. Silent elsewhere.",
+  "description": "At session start in a project tagged research, state its working mode (the main chat orchestrates, subagents do bounded work) and the facts (progress, ETA, warnings, dashboard, whether a chat follows it) of each live wave, plus what has drifted from EXPERIMENTS.md, the wave worktrees, the journal guard and the project's branch. Silent elsewhere.",
   "hooks": {
     "SessionStart": [
       {

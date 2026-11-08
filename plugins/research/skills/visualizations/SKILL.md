@@ -7,7 +7,8 @@ description: Create or update Research 2.0 plots as self-contained interactive H
 
 Plots read `evaluations/` and write self-contained HTML under `plots/`. Project facts:
 `../research-project-init/references/conventions.md`. The read-only plot server:
-[references/plot-server.md](references/plot-server.md).
+[references/plot-server.md](references/plot-server.md). Research plots follow this contract over
+any general chart guidance the host provides.
 
 ## Placement
 
@@ -52,7 +53,7 @@ Decide these for every plot, each time the plotting code changes:
 
 - **Title.** It states every selected identity param as `Full name = {value}` with the glossary's
   full name, never the raw key, and re-renders with the selection. Arrange params across title
-  lines for this plot's reader rather than reusing another plot's arrangement. With no fixed
+  lines for this plot's reader. With no fixed
   param, use a plain semantic title.
 - **Axes and metrics.** Name every axis and say, inside the figure (axis label, subtitle, legend,
   annotation, or caption), what each plotted metric measures and whether higher, lower, a target,
@@ -82,8 +83,8 @@ identity, so editing it never changes a run_id:
 The name is the plain-language full name; the explanation says what the param controls and what
 changing it does, in a sentence or two grounded in the producer's config and code. Read entries
 with `load_param_glossary(source_path("config/<experiment_path>"), params)`, which fails on a
-missing entry: write the entry rather than fall back to the raw key. Entries are reused by later
-plots, and the user may reword any of them. Commit the glossary with the plotting code.
+missing entry: write the entry rather than fall back to the raw key. The user may reword any
+entry. Commit the glossary with the plotting code.
 
 ## The HTML file
 
@@ -92,33 +93,31 @@ plots, and the user may reword any of them. Commit the glossary with the plottin
   plots travel as files; size is not a constraint and data is never downsampled.
 - White page and plot area always (`body` `#ffffff`, `paper_bgcolor` and `plot_bgcolor`
   `#ffffff`), no dark-mode variant.
-- Inline this skill's `assets/plot-download.js` verbatim as the first `<script>` in `<head>` (it
-  adds "All runs" and "Selection" download buttons) and `assets/plot-shell.js` verbatim as the
-  second, before Plotly (the reader toolbar: hide the selection, zoom, export, fullscreen).
+- Inline this skill's `assets/plot-download.js` verbatim as the first `<script>` in `<head>` (the
+  download buttons) and `assets/plot-shell.js` verbatim as the second, before Plotly (the toolbar).
   Carry their text as constants in the plotting script, never as paths into the skill install.
   The page contract they need: `data-plot-leaf` on `<html>`; per-run data under `runs` in the
   `plot-data` JSON block keyed by run_id, with `<` escaped; `window.plotSelectedRuns()` returning
   the run_ids in view; rendering from `DOMContentLoaded` or later; the selection container marked
   `data-plot-controls` and the provenance block `data-plot-provenance`; drawing only through
-  `Plotly.newPlot` or `Plotly.react`. Both scripts are fixed furniture on every plot; don't build
-  a second zoom, hide, or export control.
+  `Plotly.newPlot` or `Plotly.react`. Don't build a second zoom, hide, or export control.
 
 ## Render and hand over
 
-- Plotting is a direct command, not a launch: run the argparse command in the foreground on
-  `rig-4090`, where evaluations converge, from its project checkout. No wave, tmux, `sweep-dispatch`,
-  `rig-sync`, or EXPERIMENTS.md rows.
-- Look at every render: `uv run scripts/plot_check.py <file>...` (this skill's directory)
-  reports overlapping, clipped or on-data text, legends over data, crowded ticks and JS errors at
-  three widths, and saves screenshots. Fix every error's cause
-  ([references/layout-fixes.md](references/layout-fixes.md)) and rerun until clean; then read the
-  screenshots for what geometry misses; confirm hovers and offline downloads.
-- Give the user each rendered file as a link from `scripts/plot_server.py url <file>` (this
-  skill's installed directory) run on the rendering machine: the `public:` URL first, the
-  `local:` one only as a secondary line. If no `public:` line prints or the server does not serve
-  the file yet, say so and point to `references/plot-server.md`.
-- The server's **Runs** view maps hashes to params for an experiment; point the user there for
-  "which run is this hash".
-- A plot that reveals something gets a `research-journal` entry.
+- Plotting is a direct foreground command on `rig-4090`, where evaluations converge, from its
+  project checkout: no wave, tmux, `sweep-dispatch`, `rig-sync`, or EXPERIMENTS.md rows.
+- Look at every render: `uv run <skill>/scripts/plot_check.py --link <plot>...`, absolute paths
+  (`<skill>`: this skill's install directory, not the project's `scripts/`).
+  Offline, at three widths, it reports text collisions, JS errors, outside requests and contract
+  gaps, saves screenshots, and prints links only if clean. Fix each error's cause
+  ([references/layout-fixes.md](references/layout-fixes.md)) and rerun; then read the screenshots;
+  confirm hovers and offline downloads. Where the host has a subagent capability, delegate this
+  loop (`plot-checker` if present); it returns findings, links and screenshot paths.
+- Give the `public:` URL first, `local:` only as a secondary line. No `public:` line, or the file
+  not served yet: say so, per `references/plot-server.md`. `not servable`: give the absolute file
+  path, and say how a root is added (that file's "Adding a root"); never edit the registry.
+- The **Runs** view answers "which run is this hash".
+- A plot that reveals something gets a `research-journal` entry, even with no commit; every commit
+  under `visualizations/` needs one anyway.
 - After a wave finishes, `sweep-supervisor`'s `analyze` follow-up applies this skill unattended,
   with the same rules.

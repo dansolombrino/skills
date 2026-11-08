@@ -90,7 +90,7 @@ a systemd user service, on the machine where plots are rendered (`rig-4090`).
   every other path.
 - `/plot-shell.js` serves `assets/plot-shell.js` for the browser to inject; it needs the token off
   this machine like every other path.
-- `/healthz` answers `ok` without a token.
+- `/healthz` answers `ok` without a token, with the running code's hash in `X-Plot-Server-Code`.
 - Responses carry `Cache-Control: no-cache` plus an `ETag` (answered with 304 when unchanged), so
   reloading after a rerender shows the new file and an unchanged one is not sent again.
 - Text files of 64 KB or more are gzip-compressed on the fly for clients that accept it (plot HTML
@@ -187,7 +187,8 @@ replaced by a rename gets a new inode, which the next sync detects and re-binds 
 
 Re-run the install script after a release that changes `plot_server.py`, `plot-browser.html` or
 `plot-shell.js`:
-the service runs its root-owned copy, not the skill checkout. Useful commands:
+the service runs its root-owned copy, not the skill checkout, and `url` exits 5 until it matches.
+Useful commands:
 
 ```bash
 journalctl -u plot-server -f                          # access log: client, method, path, status, auth
@@ -227,5 +228,18 @@ python3 <skill>/scripts/plot_server.py serve             # run in the foreground
 ```
 
 `url` exits 2 when the file is not servable (outside every project's `plots/`), 3 when the server
-is not answering, and 4 when the server answers but does not serve this file yet (a sandboxed
-server before its sync job has published the project). It prints the URLs in every case but 2.
+is not answering, 4 when the server answers but does not serve this file yet (a sandboxed server
+before its sync job has published the project), and 5 when it serves the file but the code it runs
+differs from this skill's copy (the `X-Plot-Server-Code` header of `/healthz`, a hash taken when the
+server started, against `plot_server.py`, `plot-browser.html` and `plot-shell.js` here). It prints
+the URLs in every case but 2; on 5 the link works and only newer page features may be missing:
+re-run the install script, or restart the user service.
+
+### Adding a root
+
+Exit 2 for a file inside a project's `plots/` usually means the checkout is outside `plots.roots`, or
+deeper than `depth`, or has no `.git`. The server's reach is the user's decision: give them the
+absolute file path, which stays usable as it is, and say what would make it servable. They add the
+folder above the checkout to `roots` in `[plots]` of `~/.config/rigsync/machines.toml`, then restart
+the user service, or re-run the sandboxed install script, which copies the table into the system
+config. Do not edit the registry on your own.

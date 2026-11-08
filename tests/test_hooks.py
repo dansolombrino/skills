@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -241,6 +242,167 @@ class WaveReminderTests(unittest.TestCase):
         self.assertIn('WAVES_DIR = ".waves"', rigsync)
         self.assertIn(r'WAVE_RE = re.compile(r"^\d{8}-\d{6}$")', rigsync)
         self.assertIn('RIGSYNC_REGISTRY", "~/.config/rigsync/machines.toml"', supervisor)
+
+
+class DriftFactTests(unittest.TestCase):
+    """The checkout-level facts: local files plus one git config read, in a main checkout with an EXPERIMENTS.md."""
+
+    WAVE = "20261016-101500"
+    OTHER = "20261017-101500"
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.env = {"RIGSYNC_REGISTRY": str(self.root / "machines.toml")}
+        subprocess.run(["git", "init", "-q", "-b", "main", str(self.root)], check=True)
+        self.guard()
+
+    def guard(self, installed: bool = True) -> None:
+        args = ["config", "core.hooksPath", ".githooks"] if installed else ["config", "--unset", "core.hooksPath"]
+        subprocess.run(["git", "-C", str(self.root), *args], check=True)
+        hook = self.root / ".githooks" / "pre-commit"
+        if installed and not hook.exists():
+            hook.parent.mkdir()
+            hook.write_text("#!/bin/sh\n")
+            subprocess.run(["git", "-C", str(self.root), "add", ".githooks/pre-commit"], check=True)
+
+    def test_the_guard_needs_the_path_and_the_tracked_hook(self) -> None:
+        self.table()
+        subprocess.run(["git", "-C", str(self.root), "config", "core.hooksPath", "elsewhere"], check=True)
+        self.assertEqual(self.facts(), "The journal guard is not installed in this checkout: core.hooksPath is elsewhere, not .githooks.")
+        self.guard()
+        subprocess.run(["git", "-C", str(self.root), "rm", "-q", "--cached", ".githooks/pre-commit"], check=True)
+        self.assertEqual(self.facts(), "The journal guard is not installed in this checkout: .githooks/pre-commit is not tracked.")
+
+    def table(self, *rows: tuple[str, str]) -> None:
+        body = "\n".join(f"| rid | {wave} | {status} | n |" for wave, status in rows)
+        (self.root / "EXPERIMENTS.md").write_text(f"## 000_x\nrun_id version: 1 — a\n\n| run_id | wave | status | notes |\n|---|---|---|---|\n{body}\n\nProse.\n")
+
+    def queue(self, wave: str, finished: bool) -> None:
+        state = self.root / ".waves" / "_state" / wave
+        state.mkdir(parents=True)
+        (state / "queue.json").write_text(json.dumps({"finished_at": "2026-10-16T12:00:00" if finished else None, "runs": []}))
+
+    def facts(self, env: dict | None = None, cwd: Path | None = None) -> str | None:
+        proc, _ = run(WAVE, {"hook_event_name": "SessionStart", "cwd": str(cwd or self.root)}, {**self.env, **(env or {})})
+        self.assertEqual(proc.returncode, 0)
+        return context(proc)
+
+    def test_a_tidy_project_is_silent(self) -> None:
+        self.table((self.WAVE, "done"))
+        self.queue(self.WAVE, finished=True)
+        (self.root / "sync.toml").write_text('[git]\nremote = "origin"\nbranch = "main"\n')
+        self.assertIsNone(self.facts())
+
+    def test_silent_without_an_experiments_file(self) -> None:
+        self.guard(installed=False)
+        (self.root / "sync.toml").write_text('[git]\nbranch = "other"\n')
+        self.assertIsNone(self.facts())
+
+    def test_silent_for_a_supervisor_agent(self) -> None:
+        self.guard(installed=False)
+        self.table((self.WAVE, "inpr"))
+        self.assertIsNone(self.facts({"SWEEP_SUPERVISOR_MODEL": "opus"}))
+
+    def test_inpr_rows_of_a_closed_wave_are_counted(self) -> None:
+        self.table((self.WAVE, "inpr"), (self.WAVE, "inpr"), (self.WAVE, "done"), (self.OTHER, "inpr"))
+        self.queue(self.WAVE, finished=True)
+        self.queue(self.OTHER, finished=False)
+        self.assertEqual(self.facts().splitlines()[-1], f"EXPERIMENTS.md has inpr rows in closed waves: {self.WAVE} (2).")
+
+    def test_a_wave_with_no_supervisor_record_is_not_called_closed(self) -> None:
+        self.table((self.WAVE, "inpr"))
+        self.assertIsNone(self.facts())
+
+    def test_worktrees_of_finished_waves_are_named(self) -> None:
+        self.table((self.WAVE, "done"), (self.OTHER, "failed"), ("20261018-101500", "inpr"))
+        self.queue(self.WAVE, finished=True)
+        for wave in (self.WAVE, self.OTHER, "20261018-101500"):
+            (self.root / ".waves" / wave).mkdir(parents=True)
+        self.assertEqual(self.facts(), f"Worktrees of finished waves remain: .waves/{self.WAVE}, .waves/{self.OTHER}.")
+
+    def test_a_live_waves_worktree_is_no_fact(self) -> None:
+        self.table((self.WAVE, "done"))
+        self.queue(self.WAVE, finished=False)
+        (self.root / ".waves" / self.WAVE).mkdir(parents=True)
+        self.assertNotIn("Worktrees", self.facts())
+
+    def test_long_lists_are_cut(self) -> None:
+        waves = [f"20261016-1015{i:02d}" for i in range(7)]
+        self.table(*[(w, "inpr") for w in waves])
+        for wave in waves:
+            self.queue(wave, finished=True)
+        self.assertTrue(self.facts().endswith("and 2 more."))
+
+    def test_an_unset_hooks_path_is_stated(self) -> None:
+        self.guard(installed=False)
+        self.table()
+        self.assertEqual(self.facts(), "The journal guard is not installed in this checkout: core.hooksPath is unset.")
+
+    def test_a_hook_path_outside_a_repository_says_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as other:
+            plain = Path(other)
+            (plain / ".git").mkdir()  # not a repository git recognises: exit 128, not "unset"
+            (plain / "EXPERIMENTS.md").write_text("# nothing\n")
+            self.assertIsNone(self.facts(cwd=plain))
+
+    def test_a_checkout_off_the_projects_branch_is_stated(self) -> None:
+        self.table()
+        (self.root / "sync.toml").write_text('[git]\nremote = "origin"\nbranch = "trunk"\n')
+        self.assertEqual(self.facts(), "This checkout is on branch main; sync.toml names trunk as the project's branch.")
+        (self.root / ".git" / "HEAD").write_text("0" * 40 + "\n")
+        self.assertEqual(self.facts(), "This checkout is on a detached HEAD; sync.toml names trunk as the project's branch.")
+
+    def test_a_linked_worktree_gets_no_facts(self) -> None:
+        linked = self.root / "linked"
+        linked.mkdir()
+        (linked / ".git").write_text("gitdir: /elsewhere\n")
+        (linked / "EXPERIMENTS.md").write_text(f"| wave | status |\n|---|---|\n| {self.WAVE} | inpr |\n")
+        self.guard(installed=False)
+        self.assertIsNone(self.facts(cwd=linked))
+
+    def test_it_comes_after_the_live_wave_lines(self) -> None:
+        self.guard(installed=False)
+        self.table((self.WAVE, "inpr"))
+        self.queue(self.WAVE, finished=False)
+        lines = self.facts().splitlines()
+        self.assertTrue(lines[0].startswith(f"Live wave {self.WAVE}"))
+        self.assertEqual(lines[-1], "The journal guard is not installed in this checkout: core.hooksPath is unset.")
+
+    def test_facts_carry_no_instructions(self) -> None:
+        self.guard(installed=False)
+        self.table((self.WAVE, "inpr"), (self.OTHER, "done"))
+        self.queue(self.WAVE, finished=True)
+        (self.root / ".waves" / self.OTHER).mkdir(parents=True)
+        (self.root / "sync.toml").write_text('[git]\nbranch = "trunk"\n')
+        text = self.facts().lower()
+        self.assertEqual(len(text.splitlines()), 4)
+        for word in ("keep", "re-arm", "start", "post", "without asking", "must", "printout", "wake-up", "should", "run ", "prune", "reconcile", "install it"):
+            self.assertNotIn(word, text)
+
+    def test_a_large_table_is_fast(self) -> None:
+        self.guard(installed=False)
+        self.table(*[(self.WAVE, "done")] * 5000)
+        self.assertLess(run(WAVE, self.payload_for_speed(), self.env)[1], 0.5)
+
+    def payload_for_speed(self) -> dict:
+        return {"hook_event_name": "SessionStart", "cwd": str(self.root)}
+
+    def test_the_row_reader_agrees_with_reconcile(self) -> None:
+        spec = importlib.util.spec_from_file_location("reconcile_for_hooks", ROOT / "plugins/research/skills/experiments-tracking/scripts/reconcile.py")
+        reconcile = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = reconcile
+        spec.loader.exec_module(reconcile)
+        spec = importlib.util.spec_from_file_location("wave_reminder_for_hooks", WAVE)
+        reminder = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(reminder)
+        skill = (ROOT / "plugins/research/skills/experiments-tracking/SKILL.md").read_text()
+        example = skill.split("```markdown\n", 1)[1].split("\n```", 1)[0]
+        ours = [(row["wave"], row["status"]) for row in reminder.table_rows(example)]
+        theirs = [(row.wave, row.status) for section in reconcile.parse(example).sections for row in section.rows]
+        self.assertEqual(ours, theirs)
+        self.assertEqual(len(ours), 3)
 
 
 class OrchestrationNoteTests(unittest.TestCase):

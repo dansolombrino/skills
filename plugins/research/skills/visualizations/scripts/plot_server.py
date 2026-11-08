@@ -77,6 +77,18 @@ GZIP_TYPES = ("text/", "application/json", "application/javascript", "image/svg+
 BROWSER_PATH = Path(__file__).resolve().parents[1] / "assets" / "plot-browser.html"
 SHELL_PATH = BROWSER_PATH.with_name("plot-shell.js")  # injected by the browser into older plots
 DENIED = b"plot-server: access token required. Open any page once as ?token=<token>; a cookie then remembers it.\n"
+CODE_HEADER = "X-Plot-Server-Code"
+
+
+def code_hash() -> str:
+    """What the server runs and serves: this script and the two assets the install copies with it."""
+    digest = hashlib.sha256()
+    for path in (Path(__file__).resolve(), BROWSER_PATH, SHELL_PATH):
+        try:
+            digest.update(path.read_bytes())
+        except OSError:
+            digest.update(b"-")
+    return digest.hexdigest()[:16]
 
 
 class PlotServerError(Exception):
@@ -486,6 +498,7 @@ def presented_token(handler: BaseHTTPRequestHandler, query: str) -> tuple[str | 
 def make_handler(config: PlotsConfig, catalog: Catalog | None = None, access_log=None):
     """access_log, when given, receives one line per request (the service sends it to the journal)."""
     catalog = catalog or Catalog(config)
+    running_code = code_hash()  # taken once, at start: what this process runs, not what is on disk later
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "plot-server"
@@ -512,7 +525,9 @@ def make_handler(config: PlotsConfig, catalog: Catalog | None = None, access_log
         def _respond(self, head: bool) -> None:
             url = urlparse(self.path)
             if url.path == "/healthz":
-                self._send(200, "text/plain; charset=utf-8", b"ok\n", head=head)
+                self._headers(200, "text/plain; charset=utf-8", 3, None, {CODE_HEADER: running_code})
+                if not head:
+                    self.wfile.write(b"ok\n")
                 return
             set_cookie = None
             self.auth = "loopback" if is_loopback(self.client_address[0]) else ("open" if config.token is None else "-")
@@ -697,12 +712,22 @@ def server_answers(config: PlotsConfig, timeout: float = 2.0) -> bool:
         return False
 
 
+def server_code(config: PlotsConfig, timeout: float = 2.0) -> str | None:
+    """The code hash the running server reports; None from a server older than the header."""
+    try:
+        with urllib.request.urlopen(f"{local_base(config)}/healthz", timeout=timeout) as response:
+            return response.headers.get(CODE_HEADER)
+    except (urllib.error.URLError, OSError):
+        return None
+
+
 def cmd_url(config: PlotsConfig, args: argparse.Namespace) -> int:
     path = Path(os.path.abspath(args.file))
     if resolve_plot(config, path.as_posix()) is None:
         print(
             f"not servable: {path} (must be a file inside <project>/plots/ of a git checkout under "
-            f"{', '.join(map(str, config.roots))}, at most {config.depth} levels deep)",
+            f"{', '.join(map(str, config.roots))}, at most {config.depth} levels deep); give the file path "
+            "instead, and see \"Adding a root\" in references/plot-server.md",
             file=sys.stderr,
         )
         return 2
@@ -727,6 +752,15 @@ def cmd_url(config: PlotsConfig, args: argparse.Namespace) -> int:
         )
         return 4
     print("server: up")
+    running = server_code(config)
+    if running != code_hash():
+        print(
+            f"server: its running code ({running or 'older than the code report'}) differs from this skill's copy "
+            f"({code_hash()}), so new page features may be missing; the link works. Re-run the install or restart "
+            "the service; see references/plot-server.md",
+            file=sys.stderr,
+        )
+        return 5
     return 0
 
 

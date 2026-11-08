@@ -4,6 +4,8 @@ import importlib.util
 import io
 import json
 import os
+import re
+import subprocess
 import sys
 import tempfile
 import threading
@@ -87,6 +89,114 @@ class Fixture(unittest.TestCase):
         with redirect_stdout(out), redirect_stderr(err):
             code = plot_server.main(["--registry", str(self.registry), *args])
         return code, out.getvalue(), err.getvalue()
+
+
+def load_plot_check():
+    spec = importlib.util.spec_from_file_location("plot_check", SCRIPT.with_name("plot_check.py"))
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+plot_check = load_plot_check()
+
+
+class PlotCheckContractTest(unittest.TestCase):
+    """The page-contract verdicts, from what the browser would read; test needs no browser."""
+
+    def facts(self, **changes) -> dict:
+        assets = [
+            {"name": name, "text": (plot_check.ASSETS / name).read_text(), "position": position}
+            for position, name in enumerate(("plot-download.js", "plot-shell.js"))
+        ]
+        return {
+            "leaf": "loss.html", "hasData": True, "dataError": None, "unescaped": False, "runs": [HASH_A, HASH_B],
+            "hasSelected": True, "selected": [HASH_A], "selectedError": None, "controls": True, "provenance": True,
+            "assets": assets, "external": [],
+            "backgrounds": {"body": "rgb(255, 255, 255)", "figures": [{"paper": "#fff", "plot": "rgb(255, 255, 255)"}]},
+            **changes,
+        }
+
+    def kinds(self, **changes) -> list[str]:
+        return [i["kind"] for i in plot_check.contract_issues(self.facts(**changes)) if i["level"] == "error"]
+
+    def test_a_page_meeting_the_contract_has_no_issue(self) -> None:
+        self.assertEqual(plot_check.contract_issues(self.facts()), [])
+
+    def test_each_gap_is_its_own_error(self) -> None:
+        for changes, kind in (
+            ({"leaf": None}, "no-plot-leaf"),
+            ({"hasData": False}, "no-plot-data"),
+            ({"dataError": "bad"}, "plot-data-invalid"),
+            ({"runs": None}, "plot-data-invalid"),
+            ({"unescaped": True}, "plot-data-unescaped"),
+            ({"hasSelected": False}, "no-selected-runs"),
+            ({"selected": None, "selectedError": "boom"}, "selected-runs-invalid"),
+            ({"selected": "x"}, "selected-runs-invalid"),
+            ({"selected": ["rid-other"]}, "selected-runs-invalid"),
+            ({"controls": False}, "no-controls-mark"),
+            ({"provenance": False}, "no-provenance-mark"),
+            ({"external": ["https://cdn.plot.ly/plotly.js"]}, "external-reference"),
+        ):
+            with self.subTest(kind=kind, changes=changes):
+                self.assertEqual(self.kinds(**changes), [kind])
+
+    def test_backgrounds_must_be_white(self) -> None:
+        self.assertEqual(self.kinds(backgrounds={"body": "rgb(17, 17, 17)", "figures": [{"paper": "#fff", "plot": "#E5ECF6"}]}), ["not-white", "not-white"])
+        self.assertEqual(self.kinds(backgrounds={"body": "rgba(0, 0, 0, 0)", "figures": [{"paper": "white", "plot": None}]}), [])
+
+    def test_assets_must_be_there_and_word_for_word(self) -> None:
+        good = self.facts()["assets"]
+        self.assertEqual(self.kinds(assets=good[:1]), ["asset-missing"])
+        self.assertEqual(self.kinds(assets=[{**good[0], "text": good[0]["text"] + "\n// mine"}, good[1]]), ["asset-not-verbatim"])
+        self.assertEqual(self.kinds(assets=[{**good[0], "text": "\n" + good[0]["text"] + "\n\n"}, good[1]]), [])
+
+    def test_an_earlier_release_of_an_asset_is_a_warning_only(self) -> None:
+        good = self.facts()["assets"]
+        old = {**good[0], "text": "// plot-download: old"}
+        digest = plot_check.hashlib.sha256(old["text"].encode()).hexdigest()
+        with mock.patch.dict(plot_check.ASSET_HISTORY, {"plot-download.js": {digest}}):
+            issues = plot_check.contract_issues(self.facts(assets=[old, good[1]]))
+        self.assertEqual([(i["level"], i["kind"]) for i in issues], [("warning", "asset-outdated")])
+
+    def test_asset_order_is_a_warning(self) -> None:
+        good = self.facts()["assets"]
+        issues = plot_check.contract_issues(self.facts(assets=[{**good[0], "position": 1}, {**good[1], "position": 0}]))
+        self.assertEqual({(i["level"], i["kind"]) for i in issues}, {("warning", "asset-order")})
+
+    def test_the_asset_history_covers_every_committed_version(self) -> None:
+        repo = SCRIPT.parents[5]
+        for name in plot_check.ASSET_HISTORY:
+            relative = (plot_check.ASSETS / name).relative_to(repo).as_posix()
+            log = subprocess.run(["git", "-C", str(repo), "log", "--format=%H", "--", relative], capture_output=True, text=True)
+            if log.returncode:
+                self.skipTest("not a git checkout")
+            current = (plot_check.ASSETS / name).read_text().strip()
+            for commit in log.stdout.split():
+                text = subprocess.run(["git", "-C", str(repo), "show", f"{commit}:{relative}"], capture_output=True, text=True, check=True).stdout.strip()
+                if text != current:
+                    self.assertIn(plot_check.hashlib.sha256(text.encode()).hexdigest(), plot_check.ASSET_HISTORY[name], f"{name} at {commit}")
+
+    def test_every_finding_has_a_row_in_layout_fixes(self) -> None:
+        fixes = (plot_check.ASSETS.parent / "references/layout-fixes.md").read_text()
+        source = SCRIPT.with_name("plot_check.py").read_text()
+        found = set(re.findall(r'(?:err|warn)\("([a-z-]+)"', source)) | set(re.findall(r'add\("(?:error|warning)", "([a-z-]+)"', source)) | set(re.findall(r'"kind": "([a-z-]+)"', source))
+        self.assertGreater(len(found), 20)
+        for kind in found | {"html-text-clipped"}:
+            self.assertIn(f"`{kind}`", fixes, kind)
+
+    def test_links_go_through_the_server_script_and_only_a_working_one_counts(self) -> None:
+        for code, expected in ((0, 0), (5, 0), (2, 3), (3, 3), (4, 3)):
+            with mock.patch.object(plot_check.subprocess, "run", return_value=mock.Mock(returncode=code)) as called:
+                self.assertEqual(plot_check.print_links([Path("/x/plots/a.html")]), expected, code)
+            self.assertIn("url", called.call_args.args[0])
+            self.assertTrue(called.call_args.args[0][1].endswith("plot_server.py"))
+
+    def test_json_and_link_are_refused_together(self) -> None:
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            plot_check.main(["--json", "--link", "x.html"])
 
 
 class PlotServerTest(Fixture):
@@ -221,6 +331,8 @@ class PlotServerTest(Fixture):
         code, _, err = self.run_cli("url", str(self.outside))
         self.assertEqual(code, 2)
         self.assertIn("not servable", err)
+        self.assertIn("give the file path", err)
+        self.assertIn("Adding a root", (SCRIPT.parents[1] / "references/plot-server.md").read_text())
 
     def test_list_shows_projects_and_plots(self) -> None:
         code, out, _ = self.run_cli("list")
@@ -399,6 +511,31 @@ class LiveServerTest(Fixture):
         self.assertRegex(joined, r"127\.0\.0\.1 GET \S+/loss\.html 401 auth=missing")
         self.assertRegex(joined, r"GET \S+/loss\.html 401 auth=REJECTED")
         self.assertRegex(joined, r"GET / 200 auth=token")
+
+    def serve_on_registry_port(self) -> None:
+        base = self.start()
+        self.write_registry(f"port = {base.rsplit(':', 1)[1]}\n")
+
+    def test_url_is_quiet_when_the_running_code_matches(self) -> None:
+        self.serve_on_registry_port()
+        code, out, err = self.run_cli("url", str(self.plot))
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("server: up", out)
+
+    def test_url_warns_when_the_running_code_differs_and_still_gives_the_link(self) -> None:
+        self.serve_on_registry_port()
+        with mock.patch.object(plot_server, "code_hash", return_value="newer"):
+            code, out, err = self.run_cli("url", str(self.plot))
+        self.assertEqual(code, 5)
+        self.assertIn(f"local: http://127.0.0.1:{self.config.port}{self.plot}", out)
+        self.assertIn("differs from this skill's copy", err)
+
+    def test_healthz_reports_the_code_it_started_with_without_a_token(self) -> None:
+        self.write_registry(f'token = "{TOKEN}"\n')
+        base = self.start()
+        with mock.patch.object(plot_server, "is_loopback", return_value=False):
+            code, body, headers = self.get(base + "/healthz")
+        self.assertEqual((code, body, headers[plot_server.CODE_HEADER]), (200, b"ok\n", plot_server.code_hash()))
 
     def test_browser_page_and_json_api(self) -> None:
         base = self.start()
