@@ -622,13 +622,13 @@ def report_uv_cache(machine, target: Target, sync_output: str | None = None) -> 
         if needed is not None:
             wheels_gb = needed / 1024**3
             needed_gb = wheels_gb * UNPACK_FACTOR
+            # Unsized packages make the known sizes neither an upper nor a lower bound.
+            unsized = f" plus {unknown} package(s) with no size in the lock" if unknown else ""
             summary += (
                 f"; {plan[0]} of {len(plan[1])} packages to download: "
-                f"{'at least' if unknown else 'at most'} {wheels_gb:.1f}G of wheels, "
+                f"{'' if unknown else 'at most '}{wheels_gb:.1f}G of wheels{unsized}, "
                 f"roughly {needed_gb:.1f}G once unpacked"
             )
-            if unknown:
-                summary += f" ({unknown} with no size in the lock)"
     short = reading.below_floor or (needed_gb is not None and reading.free_gb - needed_gb < reading.floor_gb)
     print(f"{'WARN' if short else 'OK'} {summary}")
 

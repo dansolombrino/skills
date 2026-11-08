@@ -31,6 +31,8 @@ PLACEHOLDER_RE = re.compile(r"\{\{[A-Z_]+\}\}")
 VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
 PROJECT_NAME_RE = re.compile(r"[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?")
 ENVIRONMENT_NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
+# Remote and branch land inside sync.toml strings, so nothing that could end or escape one.
+GIT_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
 EXECUTABLE = {".githooks/pre-commit"}
 SECRET = {".env"}
 
@@ -100,7 +102,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 def scaffold(args: argparse.Namespace) -> None:
     root = args.path.resolve()
     if not (root / ".git").exists():
-        raise ScaffoldError(f"{root} is not the top level of a Git repository: run `git init -b main` first")
+        raise ScaffoldError(f"{root} is not the top level of a Git repository: run `git init -b {args.branch}` first")
     project_name = args.project_name or root.name
     if not PROJECT_NAME_RE.fullmatch(project_name):
         raise ScaffoldError(f"{project_name!r} is not a valid project name: pass --project-name")
@@ -109,6 +111,9 @@ def scaffold(args: argparse.Namespace) -> None:
     for label, version in (("--python", args.python), ("--uv", args.uv)):
         if not VERSION_RE.fullmatch(version):
             raise ScaffoldError(f"{label} must be an exact X.Y.Z, not {version!r}")
+    for label, name in (("--remote", args.remote), ("--branch", args.branch)):
+        if not GIT_NAME_RE.fullmatch(name):
+            raise ScaffoldError(f"{label} {name!r} is not a plain Git remote or branch name")
 
     files = plan_files(
         {

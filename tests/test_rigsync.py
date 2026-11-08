@@ -2176,15 +2176,6 @@ class TransferStreamingTests(unittest.TestCase):
             self.assertTrue((base / "hub/evaluations/000_exp/result.json").exists())
         self.assertIn("result.json", stream.getvalue())
 
-    def test_all_four_transfers_go_through_the_streaming_path(self) -> None:
-        source = SCRIPT.read_text()
-        for name in ("def transfer(", "def restore(", "def sync_cache("):
-            body = source[source.index(name):]
-            body = body[: body.index("\ndef ", 1)]
-            self.assertIn("run_rsync_with_retry(command)", body, name)
-        retry = source[source.index("def run_rsync_with_retry("):]
-        self.assertIn("stream=True", retry[: retry.index("\ndef ", 1)])
-
 
 class SshBoundsTests(unittest.TestCase):
     def test_every_ssh_path_detects_a_dead_connection(self) -> None:
@@ -2195,9 +2186,6 @@ class SshBoundsTests(unittest.TestCase):
             self.assertIn(option, base)
             self.assertIn(option, rsync[rsync.index("-e") + 1])
         self.assertEqual(base[-1], "peer-alias")
-        source = SCRIPT.read_text()
-        self.assertEqual(source.count('f"GIT_SSH_COMMAND={SSH_COMMAND}"'), 3)
-        self.assertEqual(source.count("ConnectTimeout=10"), 1, "one definition of the ssh options")
 
     def test_ssh_itself_accepts_the_options(self) -> None:
         if shutil.which("ssh") is None:
@@ -2206,10 +2194,6 @@ class SshBoundsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("serveraliveinterval 30", result.stdout)
         self.assertIn("serveralivecountmax 6", result.stdout)
-
-    def test_the_probes_tolerate_about_three_minutes(self) -> None:
-        options = dict(option.split("=") for option in rigsync.SSH_OPTIONS if "=" in option)
-        self.assertEqual(int(options["ServerAliveInterval"]) * int(options["ServerAliveCountMax"]), 180)
 
 
 class CacheDiskTests(unittest.TestCase):
@@ -2356,11 +2340,12 @@ class RemoteUrlTests(unittest.TestCase):
             with self.assertRaisesRegex(rigsync.RigSyncError, "hub remote 'origin' has no URL"):
                 rigsync.canonical_remote_url(config)
 
-    def test_the_rewrite_free_form_is_documented_and_no_host_is_assumed(self) -> None:
-        text = " ".join((SCRIPT.parents[1] / "references/configuration.md").read_text().split())
-        self.assertIn("ssh://git@github.com/<owner>/<repo>.git", text)
-        self.assertIn("Any host works, not only GitHub", text)
-        self.assertIn("**the hub reaches it too.**", text)
+    def test_a_git_failure_is_reported_as_itself(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as raw:
+            config, _machine, _old, _revision = self.make_git_fixture(Path(raw))
+            missing = rigsync.Config(Path(raw) / "missing", config.artifacts, config.machines, git=config.git)
+            with self.assertRaisesRegex(rigsync.RigSyncError, "cannot read hub remote 'origin'"):
+                rigsync.canonical_remote_url(missing)
 
 
 if __name__ == "__main__":

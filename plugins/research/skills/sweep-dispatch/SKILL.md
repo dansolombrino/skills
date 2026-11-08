@@ -68,8 +68,8 @@ First the values the scripts embed, which do not depend on the commit: stage the
 `environment-sync provision --staged` and `verify --staged --machines rig-4090` print
 `ENVIRONMENT_DIR` and `ENVIRONMENT_FINGERPRINT`.
 
-Then render, never hand-write: `python3 scripts/render_wave.py scripts --input <file> --root <project>`
-(this skill's installed `scripts/`, not the project's; input format in
+Then render, never hand-write: `python3 <skill>/scripts/render_wave.py scripts --input <file> --root <project>`
+(`<skill>`: this skill's install directory, not the project's `scripts/`; input format in
 [references/templates.md](references/templates.md)). The input and the manifest live in the
 **scratch area**, the hub's `shitpads/wave_<wave_id>/`; the project's `scripts/` holds shell only.
 The script writes each run's `wave.sh` and once-only `README.md` under

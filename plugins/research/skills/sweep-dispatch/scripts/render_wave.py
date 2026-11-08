@@ -136,6 +136,18 @@ def load_input(path: Path) -> dict:
     for rig in slurm_rigs(wave):
         _text(wave.get("slurm_account"), f"input: `slurm_account` (pool rig {rig} runs Slurm jobs)")
         _require(wave["pool"][rig], "default_walltime_s", int, f"input: pool.{rig}")
+    grants = wave.get("gpu_grants") or {}
+    if not isinstance(grants, dict):
+        raise RenderError("input: `gpu_grants` must be an object of rig -> grant")
+    for rig, grant in grants.items():
+        spot = f"input: gpu_grants.{rig}"
+        gpus = grant.get("gpus") if isinstance(grant, dict) else None
+        if not isinstance(gpus, list) or not gpus or not all(
+            isinstance(gpu, int) and not isinstance(gpu, bool) and gpu >= 0 for gpu in gpus
+        ):
+            raise RenderError(f"{spot}.gpus must list GPU indices")
+        _text(grant.get("user_words"), f"{spot}.user_words")
+        _text(grant.get("date"), f"{spot}.date")
     runs = _require(wave, "runs", list, "input")
     seen: set[str] = set()
     for position, run in enumerate(runs):

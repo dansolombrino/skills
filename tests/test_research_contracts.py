@@ -55,24 +55,7 @@ def machine_env_vars() -> frozenset[str]:
 
 
 class ResearchContractTests(unittest.TestCase):
-    def test_plugin_major_version_and_distributed_capabilities(self) -> None:
-        manifest = json.loads(
-            (ROOT / "plugins/research/.codex-plugin/plugin.json").read_text()
-        )
-        self.assertEqual(manifest["version"], "16.2.0")
-        claude_manifest = json.loads(
-            (ROOT / "plugins/research/.claude-plugin/plugin.json").read_text()
-        )
-        claude_marketplace = json.loads(
-            (ROOT / ".claude-plugin/marketplace.json").read_text()
-        )
-        research_entry = next(
-            plugin
-            for plugin in claude_marketplace["plugins"]
-            if plugin["name"] == "research"
-        )
-        self.assertEqual(claude_manifest["version"], manifest["version"])
-        self.assertEqual(research_entry["version"], manifest["version"])
+    def test_plugin_distributed_capabilities(self) -> None:
         self.assertTrue((ROOT / "plugins/research/skills/rig-sync/SKILL.md").is_file())
         self.assertTrue(
             (ROOT / "plugins/research/skills/environment-sync/SKILL.md").is_file()
@@ -802,7 +785,6 @@ class ResearchContractTests(unittest.TestCase):
         templates = (skill_dir / "references/templates.md").read_text()
         self.assertIn("Never ask what this skill resolves", skill)
         self.assertIn("every `board.rigs` machine in the user registry, never asked", skill)
-        self.assertIn("delete `.git` and `git init -b main`", skill)
         self.assertIn("There is no project description", skill)
         self.assertNotIn("PROJECT_DESCRIPTION", templates)
 
@@ -1110,7 +1092,9 @@ class ResearchContractTests(unittest.TestCase):
         ).read_text()
 
         self.assertEqual(dispatch_templates.count("class StatusWriter"), 0)
-        self.assertIn("../../research-project-init/references/templates.md", dispatch_templates)
+        link = "../../research-project-init/assets/project/code/common/status.py"
+        self.assertIn(link, dispatch_templates)
+        self.assertTrue((ROOT / "plugins/research/skills/sweep-dispatch/references" / link).resolve().is_file())
         self.assertIn('"schema_version": 3', project_templates)
         self.assertIn('"progress_completed": None', project_templates)
         self.assertIn("datetime.datetime.now().astimezone()", project_templates)

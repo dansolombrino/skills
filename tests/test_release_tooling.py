@@ -21,6 +21,9 @@ ROOT = Path(__file__).parents[1]
 RESEARCH = "research@dansolombrino-skills"
 CORE = "core@dansolombrino-skills"
 COPIED = (".agents", ".claude", ".claude-plugin", ".githooks", "plugins", "scripts")
+# File modes and git fixtures need a POSIX filesystem, which an ambient TMPDIR may not be (release.sh
+# pins the same default for the suite).
+SCRATCH = "/tmp"
 
 
 def load(name: str):
@@ -50,7 +53,7 @@ def copy_repo(target: Path) -> None:
 class CodexPluginStateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.module = load("codex_plugin_state")
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(dir=SCRATCH)
         self.addCleanup(self.tmp.cleanup)
         self.config = Path(self.tmp.name) / "config.toml"
         env = mock.patch.dict(os.environ, {"CODEX_HOME": self.tmp.name})
@@ -112,6 +115,13 @@ class CodexPluginStateTests(unittest.TestCase):
             self.assertEqual(code, 1, text)
             self.assertIn("by hand", output)
             self.assertEqual(self.config.read_text(), text)
+        # The line edit would hit the string's line first; the result must be refused, not written.
+        text = f'[plugins."{RESEARCH}"]\nnote = """\nenabled = false\n"""\nenabled = true\n'
+        self.config.write_text(text)
+        code, output = self.cli("set", RESEARCH, "true")
+        self.assertEqual(code, 1, output)
+        self.assertIn("by hand", output)
+        self.assertEqual(self.config.read_text(), text)
 
     def test_check_global_names_only_non_core_plugins(self) -> None:
         root = ("--root", str(ROOT))
@@ -126,7 +136,7 @@ class CodexPluginStateTests(unittest.TestCase):
 
 class VersionBumpTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(dir=SCRATCH)
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name).resolve() / "repo"
         copy_repo(self.repo)
@@ -208,7 +218,7 @@ class ValidatorRuleTests(unittest.TestCase):
     """Each rule must actually fire: a validator that always passes proves nothing."""
 
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(dir=SCRATCH)
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name).resolve() / "repo"
         copy_repo(self.repo)
@@ -241,6 +251,18 @@ class ValidatorRuleTests(unittest.TestCase):
     def test_catalog_must_not_carry_a_version(self) -> None:
         self.edit_json(".claude-plugin/marketplace.json", lambda d: d["plugins"][0].update(version="1.0.0"))
         self.assertIn("must not set version", self.validate())
+
+    def test_manifest_declared_hook_files_are_checked(self) -> None:
+        manifest = "plugins/research/.claude-plugin/plugin.json"
+        declared = json.loads((self.repo / manifest).read_text())["hooks"]
+        (self.repo / "plugins/research" / declared).write_text(
+            json.dumps({"hooks": {"PreToolUse": [{"hooks": [
+                {"type": "command", "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/gone.py" || true'}
+            ]}]}})
+        )
+        self.assertIn("PreToolUse hook runs missing file hooks/gone.py", self.validate())
+        self.edit_json(manifest, lambda d: d.update(hooks=["./hooks/absent.json"]))
+        self.assertIn("hooks file './hooks/absent.json' does not exist", self.validate())
 
     def test_host_name_in_a_distributed_skill_fails_outside_the_allowlist(self) -> None:
         self.append("plugins/core/skills/progress-updates/SKILL.md", "\nUse Claude Code here.\n")
@@ -347,7 +369,7 @@ class ReleaseScriptTests(unittest.TestCase):
     """release.sh end to end, against fake hosts and a local bare remote. Nothing leaves the temp dir."""
 
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(dir=SCRATCH)
         self.addCleanup(self.tmp.cleanup)
         base = Path(self.tmp.name).resolve()
         self.repo = base / "repo"

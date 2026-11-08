@@ -76,10 +76,19 @@ def rendered(text: str, plugin: str, value: bool) -> str:
 
 
 def without(config: dict, plugin: str) -> dict:
-    """The config minus this plugin's table, dropping `plugins` when that leaves it empty."""
-    plugins = {k: v for k, v in config.get("plugins", {}).items() if k != plugin}
+    """The config minus this plugin's `enabled`, the one value `set` may change. A plugin table
+    or a `plugins` table that this leaves empty is dropped, so adding one compares equal too."""
+    plugins = config.get("plugins")
+    if not isinstance(plugins, dict):
+        return config
+    kept = {k: v for k, v in plugins.items() if k != plugin}
+    entry = plugins.get(plugin)
+    if isinstance(entry, dict):
+        entry = {k: v for k, v in entry.items() if k != "enabled"}
+    if entry:
+        kept[plugin] = entry
     rest = {k: v for k, v in config.items() if k != "plugins"}
-    return {**rest, "plugins": plugins} if plugins else rest
+    return {**rest, "plugins": kept} if kept else rest
 
 
 def set_state(path: Path, plugin: str, value: bool) -> str | None:
@@ -102,12 +111,18 @@ def set_state(path: Path, plugin: str, value: bool) -> str | None:
     if text == current:
         return None
     target = path.resolve() if path.exists() else path
-    target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(target.name + ".tmp")
-    tmp.write_text(text)
-    if target.exists():
-        shutil.copymode(target, tmp)
-    os.replace(tmp, target)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Private until it takes the original's mode: the config can hold credentials.
+        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as handle:
+            handle.write(text)
+        if target.exists():
+            shutil.copymode(target, tmp)
+        os.replace(tmp, target)
+    except OSError as exc:
+        tmp.unlink(missing_ok=True)
+        return f"could not write {target} ({exc}); it is unchanged"
     return None
 
 

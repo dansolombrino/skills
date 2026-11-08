@@ -3500,9 +3500,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"OK notices: notify_command declared ({settings.notify_command[0]})")
             else:
                 print("OK notices: none declared; nothing is pushed, so notices reach a chat running watch, the printout and the viewer")
-            for rig, argv in settings.cert_renew:
+            for rig, renew in settings.cert_renew:
                 if rig in dict(settings.ssh_certs):
-                    print(f"OK certificate renewal: {rig} through {argv[0]}")
+                    print(f"OK certificate renewal: {rig} through {renew[0]}")
                 else:
                     print(f"WARN certificate renewal: {rig} declares cert_renew_command but no ssh_cert to watch, so it never runs")
             # only a warning here: the launcher and self-update run this, and a failing login must not

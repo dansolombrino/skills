@@ -844,10 +844,11 @@ wheels = [{{ url = "https://x/not_planned-1.0-py3-none-any.whl", size = {50 * GI
         self.assertEqual(order, ["dry-run", "report", "sync"])
         self.assertIn("Would download 2 packages", report.call_args.args[2])
 
-    def test_the_override_note_is_a_note(self) -> None:
-        text = " ".join((SCRIPT.parents[1] / "references/configuration.md").read_text().split())
-        self.assertIn("may be pinned instead, but only as an override recorded", text)
-        self.assertIn("this skill never chooses one", text)
+    def test_unsized_packages_drop_the_upper_bound_claim(self) -> None:
+        self.LOCK = '[[package]]\nname = "small"\nversion = "1.0"\nwheels = [{ url = "https://x/s-py3-none-any.whl" }]\n'
+        line = self.report(300.0, self.DRY_RUN)
+        self.assertNotIn("at most", line)
+        self.assertIn("plus 1 package(s) with no size in the lock", line)
 
     def test_doctor_runs_the_cache_disk_check_through_rig_sync(self) -> None:
         root = Path("/tmp/hub")

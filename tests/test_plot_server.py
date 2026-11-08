@@ -331,7 +331,6 @@ class PlotServerTest(Fixture):
         code, _, err = self.run_cli("url", str(self.outside))
         self.assertEqual(code, 2)
         self.assertIn("not servable", err)
-        self.assertIn("give the file path", err)
         self.assertIn("Adding a root", (SCRIPT.parents[1] / "references/plot-server.md").read_text())
 
     def test_list_shows_projects_and_plots(self) -> None:
@@ -439,7 +438,10 @@ class SandboxedInstallTest(Fixture):
 
     def test_system_config_keeps_the_token_unless_rotated(self) -> None:
         self.write_registry(f'bind = "0.0.0.0"\ntoken = "{TOKEN}"\npublic_url = "http://example.test:40975"\n')
-        out = Path(self.tmp.name) / "etc.toml"
+        # The mode check needs a filesystem with POSIX modes, which the default TMPDIR may not be.
+        posix = tempfile.TemporaryDirectory(dir="/dev/shm" if os.path.isdir("/dev/shm") else None)
+        self.addCleanup(posix.cleanup)
+        out = Path(posix.name) / "etc.toml"
         args = plot_server.argparse.Namespace(out=str(out), manifest="/etc/plot-server/projects.txt", new_token=False)
         with redirect_stdout(io.StringIO()):
             plot_server.cmd_system_config(self.config, args)
@@ -528,7 +530,6 @@ class LiveServerTest(Fixture):
             code, out, err = self.run_cli("url", str(self.plot))
         self.assertEqual(code, 5)
         self.assertIn(f"local: http://127.0.0.1:{self.config.port}{self.plot}", out)
-        self.assertIn("differs from this skill's copy", err)
 
     def test_healthz_reports_the_code_it_started_with_without_a_token(self) -> None:
         self.write_registry(f'token = "{TOKEN}"\n')

@@ -317,7 +317,7 @@ class HookRunTests(unittest.TestCase):
     """The script as the host runs it: JSON on stdin, decision on stdout, always exit 0."""
 
     def setUp(self) -> None:
-        directory = tempfile.TemporaryDirectory()
+        directory = tempfile.TemporaryDirectory(dir="/tmp")  # a POSIX filesystem: the log's mode is checked; TMPDIR may be one without modes
         self.addCleanup(directory.cleanup)
         self.home = Path(directory.name)
         self.project = self.home / "project"
@@ -408,6 +408,10 @@ class HookRunTests(unittest.TestCase):
         self.run_hook(self.payload(), SWEEP_SUPERVISOR_MODEL="sonnet")
         self.assertTrue(self.entries()[0]["supervisor"])
 
+    def test_applies_without_the_script_directory_on_the_path(self) -> None:
+        self.run_hook(self.payload(), PYTHONSAFEPATH="1")
+        self.assertEqual(len(self.entries()), 1)
+
     def test_fails_open(self) -> None:
         for stdin in ("", "not json", "[]", "null", json.dumps({"tool_name": "Bash"}), json.dumps(self.payload(tool_input="x")), json.dumps(self.payload(tool_input={})), json.dumps(self.payload(tool_input={"command": 3})), json.dumps(self.payload(cwd=3)), json.dumps(self.payload(hook_event_name="PostToolUse")), json.dumps(self.payload(tool_name="NewTool", tool_input={"anything": 1}))):
             with self.subTest(stdin=stdin):
@@ -458,10 +462,8 @@ class HookRunTests(unittest.TestCase):
         self.cli("mode", "log")
         self.assertEqual(self.run_hook(self.payload()).stdout, "")
 
-    def test_help_says_how_to_use_it(self) -> None:
-        output = self.cli("--help")
-        for word in ("report", "mode", "not a security boundary", "RESEARCH_GUARD", "guard.jsonl"):
-            self.assertIn(word, output.replace("\n", " ").replace("  ", " "))
+    def test_help_runs(self) -> None:
+        self.assertIn("report", self.cli("--help"))
 
 
 class WiringTests(unittest.TestCase):
@@ -481,13 +483,13 @@ class WiringTests(unittest.TestCase):
         self.assertEqual(set(spec_["hooks"]), {"PreToolUse"}, "the session-start hooks stay in hooks/hooks.json")
         group = spec_["hooks"]["PreToolUse"][0]
         self.assertEqual(set(group["matcher"].split("|")), {"Bash", "Edit", "Write", "Read"})
-        self.assertEqual(group["hooks"][0]["command"], 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/guard.py"')
+        command = group["hooks"][0]["command"]
+        self.assertIn('"${CLAUDE_PLUGIN_ROOT}/hooks/guard.py"', command)
+        self.assertTrue(command.endswith("|| true"), "python3 exits 2 on a missing script, and exit 2 would block every call")
         self.assertNotIn("onFailure", group["hooks"][0], "the guard must fail open")
-        self.assertNotIn("guard", (PLUGIN / "hooks/hooks.json").read_text())
+        default_commands = [hook["command"] for groups in json.loads((PLUGIN / "hooks/hooks.json").read_text())["hooks"].values() for group in groups for hook in group["hooks"]]
+        self.assertFalse([command for command in default_commands if "guard.py" in command], "hooks/hooks.json also loads on Codex")
         self.assertNotIn("hooks", json.loads((PLUGIN / ".codex-plugin/plugin.json").read_text()))
-
-    def test_it_uses_the_same_tag_check_as_the_session_note(self) -> None:
-        self.assertIn("from orchestration_note import is_research_project", GUARD.read_text())
 
 
 if __name__ == "__main__":

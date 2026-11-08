@@ -6,3 +6,5 @@ __pycache__/
 scratch/
 
 /references/
+
+.claude/worktrees/

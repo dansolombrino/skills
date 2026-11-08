@@ -14,8 +14,8 @@ Your brief names the plotting command or script and what the figure must show. F
 `visualizations` skill, which is loaded for you, in particular "Render and hand over":
 
 1. Render with the project's plotting command, from its main checkout.
-2. Run `plot_check.py --link` from the skill's directory on each file, by absolute path. It prints
-   each link only once the file is clean.
+2. Run `uv run <skill>/scripts/plot_check.py --link` (`<skill>`: the skill's install directory) on
+   each file, by absolute path. It prints each link only once the file is clean.
 3. Fix the cause of every error and rerun until clean. Only edit plotting code under
    `visualizations/`. If the data or the request is what's wrong, stop and report that.
 4. Read the screenshots for what geometry misses, and confirm hovers and offline downloads.

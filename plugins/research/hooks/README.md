@@ -68,8 +68,9 @@ one call you need yourself, run it in your own terminal: the guard sees only the
 
 ## Limits
 
-- Any error lets the call proceed (a bad payload, an unreadable tag). Only `deny` blocks; the guard
-  never uses `ask`, which an unattended tick could not answer.
+- Any error lets the call proceed (a bad payload, an unreadable tag, a missing script: the hook
+  command ends in `|| true`). Only `deny` blocks; the guard never uses `ask`, which an unattended
+  tick could not answer.
 - It applies when the working directory, the session's project directory, or the edited file's
   directory has a `.project.toml` tagged `research`.
 - `.env`: the guard adds the `Bash` reads and a log. A `Read(./.env)` deny rule in project settings

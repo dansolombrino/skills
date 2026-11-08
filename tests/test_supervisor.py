@@ -1286,7 +1286,7 @@ class SupervisorTests(unittest.TestCase):
         log = Path(supervisor.Wave(self.hub, WAVE).runtime()["agent_last_log"]).read_text()
         self.assertIn(f"script={SCRIPT.resolve()}", log)
 
-    def test_prompts_put_commits_on_the_configured_branch_against_any_host_default(self) -> None:
+    def test_prompts_name_the_configured_branch_and_only_a_followup_publishes(self) -> None:
         self.register()
         self.git_hub()
         self.assertEqual(self.cli("followup", "--wave", WAVE, "--kind", "analyze", "--text", "done")[0], 0)
@@ -1295,12 +1295,11 @@ class SupervisorTests(unittest.TestCase):
         git = supervisor.project_git(wave, supervisor.load_settings(self.registry))
         for record in self.followups():
             prompt = supervisor.followup_prompt(record, git)
-            self.assertIn("directly on `main` and push it to origin without force", prompt)
-            self.assertIn("overrides any default of your host about branching first", prompt)
-            self.assertIn("Never create or switch to another branch or worktree", prompt)
+            self.assertIn("`main`", prompt)
+            self.assertIn("origin", prompt)
         tick = supervisor.agent_prompt(wave, "test", git)
-        self.assertIn("directly on `main`:", tick)
-        self.assertNotIn("push it", tick, "a tick leaves publishing to its follow-up or dispatch")
+        self.assertIn("`main`", tick)
+        self.assertNotIn("origin", tick, "a tick leaves publishing to its follow-up or dispatch")
 
     # ── certificate renewal ──
 

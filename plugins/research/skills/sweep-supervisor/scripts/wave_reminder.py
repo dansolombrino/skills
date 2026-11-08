@@ -154,11 +154,14 @@ def experiments_root(cwd: str) -> Path | None:
 
 
 def table_rows(text: str) -> list[dict[str, str]]:
-    """Every row of a table with `wave` and `status` columns; a row of the wrong shape is reconcile.py's to report."""
+    """Every row of a table with `wave` and `status` columns, outside code fences; a row of the wrong shape is reconcile.py's to report."""
     rows: list[dict[str, str]] = []
     columns: list[str] | None = None
+    fenced = False
     for line in text.splitlines():
-        if not line.lstrip().startswith("|"):
+        if line.strip().startswith("```"):
+            fenced = not fenced
+        if fenced or not line.lstrip().startswith("|"):
             columns = None
             continue
         cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", line.strip().strip("|"))]

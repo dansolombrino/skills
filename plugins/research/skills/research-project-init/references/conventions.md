@@ -167,7 +167,7 @@ its wave tag; after that, **artifacts win**, then `.status.json`, then the log.
 1. **Final artifact** — declared at design time, under the run's checkpoint or evaluation
    directory (or its `<artifact>.offloaded.json` receipt). Present means done.
 2. **`.status.json`** in the run's evaluation directory, written by `code/common/status.py`
-   ([templates](templates.md#codecommonstatuspy)):
+   ([asset](../assets/project/code/common/status.py)):
 
    ```json
    {"schema_version": 3, "state": "running|done|failed", "started": "<ISO>",

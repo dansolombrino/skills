@@ -479,6 +479,8 @@ def run(
     stream: bool = False,
 ) -> subprocess.CompletedProcess:
     if stream:
+        if input_bytes is not None:
+            raise ValueError("a streamed command takes no input")
         result = run_streaming(command)
         show = False
     else:
@@ -583,6 +585,11 @@ def canonical_remote_url(config: Config) -> str:
     result = run(
         ["git", "-C", str(config.root), "config", "--get-all", f"remote.{git.remote}.url"], check=False
     )
+    # exit 1 is git's "no such key"; anything else is git failing, and its message says why
+    if result.returncode not in (0, 1):
+        raise RigSyncError(
+            f"cannot read hub remote {git.remote!r}: {result.stderr.decode(errors='replace').strip()}"
+        )
     url = _configured_url(result)
     if not url:
         raise RigSyncError(f"hub remote {git.remote!r} has no URL")

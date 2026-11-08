@@ -36,7 +36,7 @@ check covered them can fail here while looking fine; re-rendering from an up-to-
 | Finding | Usual cause | Fix |
 |---|---|---|
 | `network-request`, `external-reference` | a CDN or sibling-file `<script>`, `<link>` or image; Plotly exported with `include_plotlyjs="cdn"` | Inline everything: `include_plotlyjs=True`. The check blocks these requests, so what you see is what an offline reader sees. |
-| `no-plot-leaf`, `no-plot-data`, `plot-data-invalid`, `plot-data-unescaped` | the page template lacks the contract's data | `<html data-plot-leaf="<leaf>.html">`; a `<script type="application/json" id="plot-data">` holding `{"runs": {<run_id>: ...}}`, written with `<` replaced by `<`. |
+| `no-plot-leaf`, `no-plot-data`, `plot-data-invalid`, `plot-data-unescaped` | the page template lacks the contract's data | `<html data-plot-leaf="<leaf>.html">`; a `<script type="application/json" id="plot-data">` holding `{"runs": {<run_id>: ...}}`, written with `<` replaced by `\u003c`. |
 | `no-selected-runs`, `selected-runs-invalid` | no selection function, or one returning something else | `window.plotSelectedRuns = () => [...]`, the run_ids in view, each a key of `runs`. |
 | `no-controls-mark`, `no-provenance-mark` | the selection or provenance block is unmarked | Add `data-plot-controls` and `data-plot-provenance`; the toolbar and the download need them. |
 | `not-white` | a Plotly template (the Python default paints the plot area blue-grey) or a dark-mode stylesheet | `paper_bgcolor="#ffffff"`, `plot_bgcolor="#ffffff"`, `body {background:#ffffff}`, and no `prefers-color-scheme` rules. |

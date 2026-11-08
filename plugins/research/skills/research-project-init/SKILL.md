@@ -16,7 +16,7 @@ Never ask what this skill resolves (defaults, rigs, re-init, GitHub repo, taggin
 it. Stop only for a missing registry entry, a failed `gh auth status`, or existing content.
 
 1. The path is new, an empty directory, or an empty Git repository; one whose commits hold no
-   files counts as empty: delete `.git` and `git init -b main`. A path holding an existing
+   files counts as empty: delete `.git` and `git init -b <branch>`. A path holding an existing
    project, research content, or commits with files is unsupported. The project tag written by
    `project-init` does not count as content: `.project.toml`, `.claude/settings.json`, and
    `.codex/config.toml` are allowed when they hold only what `project-init` writes; leave them
@@ -54,9 +54,10 @@ Use the remote the user names; otherwise:
 One unattended run. No step waits for the user or a new session: a tag only decides
 which plugins the next session loads, and everything here runs by path.
 
-1. `git init -b main` unless the path is a repository already, since tagging needs one. If untagged,
-   run `project-init`'s `apply --categories research`; this request is the answer to its questions.
-2. `python3 scripts/scaffold.py <path> --python X.Y.Z --uv X.Y.Z`, then again with `--confirm`.
+1. `git init -b <branch>` unless the path is a repository already, since tagging needs one. If
+   untagged, run `project-init`'s `apply --categories research`; this request answers its questions.
+2. `python3 scripts/scaffold.py <path> --python X.Y.Z --uv X.Y.Z` (other overridden defaults: its
+   `--help` flags), then again with `--confirm`.
    It writes the taxonomy; root files such as `AGENTS.md`, `CLAUDE.md`, `.env` (0600), `sync.toml`,
    and `pyproject.toml`; `code/common/` (with `environment_smoke.py`, the default `gpu_smoke`
    target); and the journal guard, with `core.hooksPath` set. `AGENTS.md` holds the notes and

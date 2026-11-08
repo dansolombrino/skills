@@ -18,7 +18,6 @@ from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS = ROOT / "plugins/research/skills"
-SKILL = SKILLS / "sweep-dispatch/SKILL.md"
 TEMPLATES = SKILLS / "sweep-dispatch/references/templates.md"
 SPEC = importlib.util.spec_from_file_location("render_wave", SKILLS / "sweep-dispatch/scripts/render_wave.py")
 assert SPEC and SPEC.loader
@@ -163,6 +162,8 @@ class RenderedFilesTests(RenderWaveBase):
             "footprint_kib": dict(runs=[run_entry(RUN_A, footprint_kib=None)]),
             "duplicate": dict(runs=[run_entry(RUN_A), run_entry(RUN_A)]),
             "one non-empty line": dict(why="two\nlines"),
+            "must list GPU indices": dict(gpu_grants={"behemoth": {"gpus": ["5"], "user_words": "ok", "date": "d"}}),
+            "user_words": dict(gpu_grants={"behemoth": {"gpus": [5], "date": "d"}}),
         }
         for message, change in cases.items():
             with self.subTest(message):
@@ -394,41 +395,7 @@ class ManifestTests(RenderWaveBase):
         self.assertIsNone(queue["runs"][1]["cost_s"])
 
 
-class DispatchTextTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.skill = " ".join(SKILL.read_text().split())
-        self.templates = " ".join(TEMPLATES.read_text().split())
-
-    def test_the_board_is_probed_for_pool_rigs_only(self) -> None:
-        self.assertIn("status --reconcile --rig <rig>", self.skill)
-        self.assertNotIn("`rig-board status --reconcile`", self.skill)
-
-    def test_the_fingerprint_comes_before_generation_and_is_rechecked_after_deployment(self) -> None:
-        staged = self.skill.index("verify --staged")
-        render = self.skill.index("render_wave.py scripts")
-        commit = self.skill.index("Commit `dispatch(")
-        deploy = self.skill.index("rig-sync deploy-revision --wave")
-        wave_verify = self.skill.index("It must print the fingerprint the scripts embed")
-        self.assertLess(staged, render)
-        self.assertLess(render, commit)
-        self.assertLess(commit, deploy)
-        self.assertLess(deploy, wave_verify)
-
-    def test_scratch_area_is_defined_and_the_manifest_goes_there(self) -> None:
-        self.assertIn("**scratch area**, the hub's `shitpads/wave_<wave_id>/`", self.skill)
-        self.assertIn("**scratch area** `shitpads/wave_<wave_id>/`", self.templates)
-
-    def test_the_busy_hub_path_is_documented(self) -> None:
-        self.assertIn("CPU smoke on the hub plus `environment-sync verify --lane` on pool rigs", self.skill)
-        self.assertIn('CUDA_VISIBLE_DEVICES=""', self.templates)
-
-    def test_register_confirm_is_said_to_rerun_gates_without_listing_them(self) -> None:
-        self.assertIn("then `--confirm`, which re-runs the fast gates.", self.skill)
-
-    def test_cost_with_no_history_says_what_the_table_does(self) -> None:
-        self.assertIn("no basis yet", self.templates)
-        self.assertIn("a CPU smoke is no basis", self.templates)
-
+class RenderInputDocTests(unittest.TestCase):
     def test_every_input_field_the_template_lists_is_one_the_renderer_uses(self) -> None:
         text = TEMPLATES.read_text()
         block = text[text.index("## render_wave.py"):]

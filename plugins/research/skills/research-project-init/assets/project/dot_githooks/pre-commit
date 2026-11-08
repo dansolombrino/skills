@@ -2,7 +2,8 @@
 # Journal guard and storage-path lint for one commit. Rules: the research-journal skill.
 set -euo pipefail
 
-staged=$(git diff --cached --name-only)
+# --no-renames lists both sides of a move, so moving a file out of code/ still counts.
+staged=$(git -c core.quotePath=false diff --cached --name-only --no-renames)
 diff_cached() { git diff --cached --no-color --no-ext-diff --no-renames -U0 --src-prefix=a/ --dst-prefix=b/ "$@"; }
 
 # 1. Changes to experiment-relevant files come with a journal entry.

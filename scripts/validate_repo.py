@@ -151,26 +151,45 @@ def load_json(path: Path, errors: list[str]) -> dict:
 HOOK_SCRIPT_RE = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/([^\"'\s]+)")
 
 
-def validate_hooks(plugin_root: Path, errors: list[str]) -> None:
-    """A plugin's hooks/hooks.json runs in every session on both hosts, so a broken path or file
-    would fail silently everywhere: require valid JSON and every referenced plugin file to exist."""
-    hooks_path = plugin_root / "hooks" / "hooks.json"
-    if not hooks_path.exists():
-        return
-    data = load_json(hooks_path, errors)
-    hooks = data.get("hooks")
-    if not isinstance(hooks, dict) or not hooks:
-        errors.append(f"{hooks_path}: must hold a non-empty 'hooks' object")
-        return
-    for event, groups in hooks.items():
-        for group in groups if isinstance(groups, list) else []:
-            for hook in group.get("hooks", []) if isinstance(group, dict) else []:
-                command = hook.get("command", "") if isinstance(hook, dict) else ""
-                if not command:
-                    errors.append(f"{hooks_path}: {event} hook without a command")
-                for relative in HOOK_SCRIPT_RE.findall(command):
-                    if not (plugin_root / relative).is_file():
-                        errors.append(f"{hooks_path}: {event} hook runs missing file {relative}")
+def validate_hooks(plugin_root: Path, manifest_paths: list[Path], errors: list[str]) -> None:
+    """Hooks run in every session, so a broken path or file would fail silently everywhere. Check
+    hooks/hooks.json and every hook file or inline hook object a manifest's `hooks` key declares:
+    valid JSON, and every `${CLAUDE_PLUGIN_ROOT}/...` file a command runs exists."""
+    configs: list[tuple[Path, object]] = []
+    default = plugin_root / "hooks" / "hooks.json"
+    if default.exists():
+        configs.append((default, load_json(default, errors)))
+    for manifest_path in manifest_paths:
+        declared = load_json(manifest_path, []).get("hooks") if manifest_path.is_file() else None
+        if declared is None:
+            continue
+        for item in declared if isinstance(declared, list) else [declared]:
+            if isinstance(item, dict):
+                configs.append((manifest_path, item))
+                continue
+            target = (plugin_root / item).resolve() if isinstance(item, str) else None
+            if not isinstance(item, str) or not item.startswith("./"):
+                errors.append(f"{manifest_path}: hooks entry {item!r} must be a './' path or an object")
+            elif not target.is_relative_to(plugin_root.resolve()):
+                errors.append(f"{manifest_path}: hooks file {item!r} leaves its plugin")
+            elif not target.is_file():
+                errors.append(f"{manifest_path}: hooks file {item!r} does not exist")
+            elif target != default.resolve():
+                configs.append((target, load_json(target, errors)))
+    for source, data in configs:
+        hooks = data.get("hooks") if isinstance(data, dict) else None
+        if not isinstance(hooks, dict) or not hooks:
+            errors.append(f"{source}: must hold a non-empty 'hooks' object")
+            continue
+        for event, groups in hooks.items():
+            for group in groups if isinstance(groups, list) else []:
+                for hook in group.get("hooks", []) if isinstance(group, dict) else []:
+                    command = hook.get("command", "") if isinstance(hook, dict) else ""
+                    if not command:
+                        errors.append(f"{source}: {event} hook without a command")
+                    for relative in HOOK_SCRIPT_RE.findall(command):
+                        if not (plugin_root / relative).is_file():
+                            errors.append(f"{source}: {event} hook runs missing file {relative}")
 
 
 def validate_agents(plugin_root: Path, errors: list[str]) -> None:
@@ -327,7 +346,7 @@ def main() -> int:
                 f"{claude_manifest_path}: omit 'skills'; Claude auto-discovers ./skills/"
             )
 
-        validate_hooks(plugin_root, errors)
+        validate_hooks(plugin_root, [manifest_path, claude_manifest_path], errors)
         validate_agents(plugin_root, errors)
         validate_evals(plugin_root, errors)
         validate_host_names(root, plugin_root, errors)

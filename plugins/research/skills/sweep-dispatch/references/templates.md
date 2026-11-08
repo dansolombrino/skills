@@ -313,7 +313,7 @@ gpu 3 user-authorized 2026-08-02 for this wave only)`. A Leonardo wave adds the 
 ## StatusWriter — the python side of the signaling system
 
 Use the single canonical `code/common/status.py` implementation in
-[research-project-init templates](../../research-project-init/references/templates.md#codecommonstatuspy).
+[research-project-init's asset](../../research-project-init/assets/project/code/common/status.py).
 It writes schema-v3 status (schema-v2 numeric progress plus the lane's `rig`), timezone-aware timestamps, live elapsed time, and an
 automatic 60-second heartbeat. Experiment code calls
 `heartbeat(completed=<done>, total=<total>, unit=<label>)`; monitors compute ETA from those facts

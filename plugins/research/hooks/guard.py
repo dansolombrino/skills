@@ -536,6 +536,9 @@ def check_call(tool: str, tool_input: dict, ctx: dict) -> tuple[list[str], str]:
 
 
 def applies(cwd: str, path: str | None) -> bool:
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)  # with PYTHONSAFEPATH or under import, the script's directory is not on the path
     from orchestration_note import is_research_project  # lazily: tomllib costs time, and most calls never get here
 
     starts = [cwd, os.environ.get("CLAUDE_PROJECT_DIR"), os.path.dirname(path) if path else None]
