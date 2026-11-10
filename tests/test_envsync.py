@@ -387,8 +387,9 @@ class EnvironmentSyncTests(unittest.TestCase):
             )
         command = remote_mock.call_args.args[1]
         self.assertEqual(
-            command[:3],
-            ["env", "CUDA_VISIBLE_DEVICES=0,1", "/tmp/hub/.envs/0123456789abcdef/bin/python"],
+            command[:4],
+            ["env", "CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES=0,1",
+             "/tmp/hub/.envs/0123456789abcdef/bin/python"],
         )
         self.assertNotIn("uv", command)
 
@@ -406,6 +407,7 @@ class EnvironmentSyncTests(unittest.TestCase):
             command,
             [
                 "env",
+                "CUDA_DEVICE_ORDER=PCI_BUS_ID",
                 "CUDA_VISIBLE_DEVICES=0",
                 "/srv/proj/.envs/0123456789abcdef/bin/python",
                 "/srv/proj/.waves/20260802-120000/code/common/environment_smoke.py",
@@ -426,8 +428,8 @@ class EnvironmentSyncTests(unittest.TestCase):
         with mock.patch.object(envsync, "remote", return_value=completed) as remote_mock:
             envsync.run_gpu_smoke(settings, machine, envsync.Lane("peer", "0"), self.target())
         command = remote_mock.call_args.args[1]
-        self.assertEqual(command[3], "/srv/proj/.waves/20260802-120000/code/common/environment_smoke.py")
-        self.assertEqual(command[4:], ["--strict", "fp8"])
+        self.assertEqual(command[4], "/srv/proj/.waves/20260802-120000/code/common/environment_smoke.py")
+        self.assertEqual(command[5:], ["--strict", "fp8"])
 
     def test_gpu_smoke_rejects_configs_with_no_resolvable_script(self) -> None:
         rejected = {
