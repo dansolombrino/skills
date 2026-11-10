@@ -462,9 +462,11 @@ watching the old wave follows the link to the new one.
 
 ## Pool and initial estimate
 
-There is no static assignment. The wave has one ordered queue and a **pool** of lanes; each lane
-takes the next run it is eligible for when it has room, so a fast card simply takes more runs and
-a wrong estimate corrects itself once real runtimes arrive. Dispatch decides the pool, the queue
+There is no static assignment. The wave has one ordered queue and a **pool** of lanes; a lane with
+room takes the next run it is eligible for unless another live lane would finish that run sooner
+(the supervisor weighs each rig's speed: its weight, then the rate this wave measured). A fast card
+takes more runs, a slow card never takes the last long run a fast card would finish first, and a
+wrong estimate corrects itself once real runtimes arrive. Dispatch decides the pool, the queue
 order, and the initial estimate.
 
 1. **Pool.** Every lane of ours on the project's rigs — free on the fleet board, or held by another
@@ -481,14 +483,15 @@ order, and the initial estimate.
    that wave's median, and a Slurm job gets `default_walltime_s`.
 3. **Order.** Sort runs by cost descending. Longest-first matters: a long run claimed last is what
    leaves one lane working alone at the end of the wave.
-4. **Estimate.** Simulate the feeder (each run to the eligible lane predicted free first, runtime
-   `cost / weight`) for the predicted wave completion and each lane's share. A run pinned by VRAM
-   or data to one rig is named as such.
+4. **Estimate.** Simulate the feeder (each run, in queue order, to the eligible lane that finishes
+   it first, runtime `cost / weight`) for the predicted wave completion and each lane's share. A
+   run pinned by VRAM or data to one rig is named as such.
 
 Worked example — 12 equal-cost runs, one hour each on `rig-4090`, across `rig-4090` gpu0 (1.0),
 `rig-3090-ti` gpu0 (0.5), and `behemoth` gpu0 (2.0). The feeder lands 3 / 2 / 7 and the wave takes
 about 4.0 h; an even 4 / 4 / 4 split would take 8.0 h with behemoth idle for six of them. If
-`rig-3090-ti` turns out slower than its weight, it simply claims fewer runs — nobody re-plans.
+`rig-3090-ti` turns out slower than its weight, the supervisor measures that and sends it fewer
+runs — nobody re-plans.
 
 ## render_wave.py — the JSON input
 

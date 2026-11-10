@@ -285,7 +285,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertTrue((self.base / "board" / "supervisor" / f"proj__{WAVE}.json").exists())
         self.assertEqual(self.cli("register", "--wave", WAVE, "--manifest", manifest, "--confirm")[0], 2)
 
-    def test_cycle_starts_lanes_and_feeds_shallow_buffers_in_queue_order(self) -> None:
+    def test_cycle_starts_lanes_and_feeds_each_run_to_the_lane_that_finishes_it_first(self) -> None:
         self.register()
         code, out, err = self.cli("cycle", "--wave", WAVE)
         self.assertEqual(code, 0, err)
@@ -293,8 +293,9 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(sessions, [f"proj_000_exp_{WAVE}_hub_gpu0", f"proj_000_exp_{WAVE}_peer_gpu0"])
         queue = self.queue()
         placed = {run["id"]: run["lane"]["rig"] for run in queue["runs"] if run["state"] == "assigned"}
-        self.assertEqual(placed, {"model=m0": "hub", "model=m1": "hub", "model=m2": "peer", "model=m3": "peer"})
-        self.assertEqual(queue["runs"][4]["state"], "queued")
+        # peer runs at half hub's speed: it skips m3, which hub finishes sooner, and takes m4 behind m1
+        self.assertEqual(placed, {"model=m0": "hub", "model=m1": "peer", "model=m2": "hub", "model=m4": "peer"})
+        self.assertEqual(queue["runs"][3]["state"], "queued")
         entries = sorted(p.name for p in (self.lane(self.hub) / "queue").iterdir())
         self.assertEqual(len(entries), supervisor.BUFFER_DEPTH)
         self.assertEqual((self.lane(self.hub) / "queue" / entries[0]).read_text(), queue["runs"][0]["script"])
@@ -304,19 +305,23 @@ class SupervisorTests(unittest.TestCase):
         self.cli("cycle", "--wave", WAVE)
         self.assertEqual(sum(run["state"] == "assigned" for run in self.queue()["runs"]), 4)
 
-    def test_a_fast_lane_takes_more_runs_and_outcomes_follow_the_artifact(self) -> None:
+    def test_a_fast_lane_takes_more_runs_reclaims_a_slow_lanes_buffer_and_outcomes_follow_the_artifact(self) -> None:
         self.register()
         self.cli("cycle", "--wave", WAVE)
         first = self.queue()["runs"][0]
         self.finish_entry(self.hub, first["entry"], 0, first["artifact"])
-        second = self.queue()["runs"][1]
+        second = self.queue()["runs"][2]
         self.finish_entry(self.hub, second["entry"], 1, None)
         self.cli("cycle", "--wave", WAVE)
         queue = self.queue()
         states = {run["id"]: run["state"] for run in queue["runs"]}
         self.assertEqual(states["model=m0"], "done")
-        self.assertEqual(states["model=m1"], "failed")
-        self.assertEqual(queue["runs"][4]["lane"], {"rig": "hub", "gpu": "0"})
+        self.assertEqual(states["model=m2"], "failed")
+        # hub measured ~36x its weight: peer's unstarted runs come back, and m4 waits for hub, not peer
+        self.assertEqual(sorted((e["run"], e["rig"], e["to_rig"]) for e in self.events("run-reclaimed")), [("model=m1", "peer", "hub"), ("model=m4", "peer", "hub")])
+        self.assertEqual(len(list((self.lane(self.peer) / "retracted").iterdir())), 2)
+        self.assertEqual([queue["runs"][i]["lane"] for i in (1, 3)], [{"rig": "hub", "gpu": "0"}] * 2)
+        self.assertEqual(queue["runs"][4]["state"], "queued")
         events = [record["event"] for record in supervisor.Wave(self.hub, WAVE).ledger()]
         self.assertIn("run-failed", events)
         self.assertEqual(supervisor.wake_due(supervisor.Wave(self.hub, WAVE), supervisor.load_settings(self.registry)), "event: run-failed")
@@ -333,10 +338,10 @@ class SupervisorTests(unittest.TestCase):
     def test_a_reserved_exit_blames_the_lane_and_requeues_the_run(self) -> None:
         self.register()
         self.cli("cycle", "--wave", WAVE)
-        run = self.queue()["runs"][2]
+        run = self.queue()["runs"][1]
         self.finish_entry(self.peer, run["entry"], 87, None)
         self.cli("cycle", "--wave", WAVE)
-        after = self.queue()["runs"][2]
+        after = self.queue()["runs"][1]
         self.assertEqual(after["exclude"], ["peer"])
         self.assertNotEqual((after.get("lane") or {}).get("rig"), "peer")
         stopped = [r for r in supervisor.Wave(self.hub, WAVE).ledger() if r["event"] == "lane-stopped"]
@@ -485,14 +490,14 @@ class SupervisorTests(unittest.TestCase):
         lane_file = self.base / "board" / "lanes" / "peer" / "gpu0.json"
         held = board.read_json(lane_file)
         board.write_json(lane_file, {**held, "tmux_session": "other_000_exp_20260101-000000_peer_gpu0"})
-        code, _out, err = self.cli("steal", "--wave", WAVE, "--run", "model=m3", "--reason", "tail", "--confirm")
+        code, _out, err = self.cli("steal", "--wave", WAVE, "--run", "model=m4", "--reason", "tail", "--confirm")
         self.assertEqual(code, 2)
         self.assertIn("not held by this wave", err)
         board.write_json(lane_file, held)
-        self.assertEqual(self.cli("steal", "--wave", WAVE, "--run", "model=m3", "--reason", "tail")[0], 2)
-        code, _out, err = self.cli("steal", "--wave", WAVE, "--run", "model=m3", "--reason", "tail", "--exclude-source", "--confirm")
+        self.assertEqual(self.cli("steal", "--wave", WAVE, "--run", "model=m4", "--reason", "tail")[0], 2)
+        code, _out, err = self.cli("steal", "--wave", WAVE, "--run", "model=m4", "--reason", "tail", "--exclude-source", "--confirm")
         self.assertEqual(code, 0, err)
-        run = [r for r in self.queue()["runs"] if r["id"] == "model=m3"][0]
+        run = [r for r in self.queue()["runs"] if r["id"] == "model=m4"][0]
         self.assertEqual((run["state"], run["exclude"]), ("queued", ["peer"]))
         self.assertEqual(len(list((self.lane(self.peer) / "retracted").iterdir())), 1)
 
@@ -1466,8 +1471,11 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(len(self.events("heartbeat-stale")), 2, "a new staleness episode is news again")
 
     def test_an_idle_lane_with_nothing_to_take_wakes_the_agent_for_tail_stealing_once(self) -> None:
-        self.register(runs=4)
-        self.cli("cycle", "--wave", WAVE)
+        self.register(runs=3)
+        self.cli("cycle", "--wave", WAVE)  # hub takes m0 and m2, peer m1
+        [slow] = [r for r in self.queue()["runs"] if r["lane"] == {"rig": "peer", "gpu": "0"}]
+        lane = self.lane(self.peer)
+        (lane / "queue" / slow["entry"]).rename(lane / "running" / slow["entry"])  # started: no longer reclaimable
         for run in [r for r in self.queue()["runs"] if r["lane"] == {"rig": "hub", "gpu": "0"}]:
             self.finish_entry(self.hub, run["entry"], 0, run["artifact"])
         self.cli("cycle", "--wave", WAVE)

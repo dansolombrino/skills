@@ -40,7 +40,7 @@ python3 "$SUPERVISOR" followups                               # every follow-up,
 | | hub service (`serve`, every cycle) | unattended agent (on events; a safety tick) | chat |
 |---|---|---|---|
 | lanes | start, feed, relaunch after a fault, drain | unblock, admit a new lane on one of our pool cards | — |
-| runs | assign in queue order to the lane free first; settle outcomes from the artifact | reorder, pin, exclude, requeue, steal, constrain | — |
+| runs | give each to the lane finishing it first; settle outcomes from the artifact | reorder, pin, exclude, requeue, steal, constrain | — |
 | cluster jobs | submit under the caps, resubmit machine faults, resize a `TIMEOUT` from measured progress, pull a `PENDING` job to an idle lane | budget and walltime judgment | — |
 | disk | `rig-sync offload` pass on offload rigs (every non-hub lane rig by default; Slurm targets such as `leonardo` excluded) | turn offload on or off for a rig | — |
 | evaluations | `rig-sync collect` from every pool rig to the hub | settle a `collect-failed` identity mismatch with the user | — |
@@ -48,9 +48,9 @@ python3 "$SUPERVISOR" followups                               # every follow-up,
 | after the wave | `finish`: prune every machine, queue the `analyze` follow-up; run follow-ups one per project | queue a `fix` follow-up for a deterministic engineering error | — |
 | the user | notices through `notify_command`, if declared: wave finished, failures, rig down, blocked lane, certificate expiring | `ask` without blocking; `say` | relay `watch`; `answer` |
 
-The queue is ordered once by dispatch. A lane holds at most one run in flight plus one buffered,
-so a fast card simply takes more runs: a wrong initial estimate corrects itself, and an unstarted
-run can still be re-routed. The hub reaches rigs; rigs never reach the hub.
+A lane holds one run in flight plus one buffered and takes a run only when no other live lane
+finishes it sooner (rig weight, then measured rate); a buffered run another lane finishes clearly
+sooner is taken back (`run-reclaimed`). The hub reaches rigs; rigs never reach the hub.
 
 The agent is woken at once by every event that needs judgment: a failed run or job, a lane stopped,
 blocked or relaunched, a rig down or back, an answer, a collect/offload/submit failure, the wave

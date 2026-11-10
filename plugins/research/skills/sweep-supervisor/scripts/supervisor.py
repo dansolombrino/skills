@@ -3,8 +3,10 @@
 
 A wave's runs live in one ordered queue on the hub. Every lane (one GPU set on one rig) keeps a
 shallow local buffer that its own shell loop claims from atomically; this service tops the buffers
-up, so a fast card simply takes more runs and a wrong initial estimate corrects itself. Rigs are
-only ever reached hub -> rig, never the other way.
+up. A lane takes a run only when no other live lane would finish it sooner, judged from each rig's
+speed (its weight, then what this wave measured), so a fast card takes more runs and a slow card
+never takes the last long one a fast card would finish first. Rigs are only ever reached
+hub -> rig, never the other way.
 
 The service owns what must keep happening while no agent is awake (feeding, relaunching a dead
 lane, offload, the fleet board, the status table). Judgment (why did it fail, move this run, fetch
@@ -62,6 +64,9 @@ class SupervisorError(RuntimeError):
 SCHEMA_VERSION = 1
 STATE_DIR = "_state"  # under .waves/, already ignored by every supported project; never a wave id
 BUFFER_DEPTH = 2  # the run in flight plus one waiting: shallow, so late data can still re-route
+# a buffered, unstarted run moves to another lane only for a clear gain, the same margin as a tail steal
+RECLAIM_MIN_GAIN_S = 600
+RECLAIM_MIN_GAIN_FRACTION = 0.2
 DEFAULT_CYCLE_EVERY_S = 60
 DEFAULT_TICK_EVERY_S = 1800  # a safety net: every event that needs judgment wakes the agent at once
 DEFAULT_IDLE_TICK_EVERY_S = 6 * 3600  # with nothing new since the last good tick, a real tick only this often
@@ -922,30 +927,72 @@ def lane_vram(board_config, rig: str, gpu: str) -> int | None:
     return min(sizes) if sizes and len(sizes) == len(wanted) else None
 
 
+def feed_order(queue: dict) -> list[dict]:
+    """The order lanes take runs in: runs requeued to the front first, then the dispatch order."""
+    return sorted(queue["runs"], key=lambda r: not r.get("front"))
+
+
+def earliest_finish(
+    queue: dict, lane_free: dict[tuple[str, str], float], vram: dict[tuple[str, str], int | None], runs: list[dict],
+) -> tuple[dict[str, tuple[tuple[str, str], float]], list[str], str | None]:
+    """List scheduling by earliest finish: each run, in order, goes to the eligible lane that would
+    finish it first, counting both when the lane frees up and how fast its rig runs that run. A slow
+    card gets a run only when no faster card would finish it sooner, so the longest runs, which come
+    first, go to fast cards and the slow ones fill in behind. Returns each placed run's lane and
+    finish (seconds from now), the runs no lane here can take, and the first run with no estimate
+    basis (then nothing is placed)."""
+    free = dict(lane_free)
+    placed: dict[str, tuple[tuple[str, str], float]] = {}
+    unplaced: list[str] = []
+    # estimate_run scans the whole queue; per rig its answer depends on the run only through cost_s
+    rates: dict[str, float] = {}
+    uncosted: dict[str, float | None] = {}
+
+    def cost_on(run: dict, rig: str) -> float | None:
+        if run.get("cost_s"):
+            if rig not in rates:
+                rates[rig] = rig_rate(queue, rig)[0]
+            return run["cost_s"] * rates[rig]
+        if rig not in uncosted:
+            uncosted[rig] = estimate_run(queue, run, rig)[0]
+        return uncosted[rig]
+
+    for run in runs:
+        best: tuple[tuple[float, float], tuple[str, str]] | None = None
+        for lane in sorted(free):
+            if not eligible(queue, run, lane[0], vram.get(lane)):
+                continue
+            cost = cost_on(run, lane[0])
+            if cost is None:
+                return {}, [], run["id"]
+            rank = (free[lane] + cost, free[lane])
+            if best is None or rank < best[0]:
+                best = (rank, lane)
+        if best is None:
+            unplaced.append(run["id"])
+            continue
+        (finish, _start), lane = best
+        free[lane] = finish
+        placed[run["id"]] = (lane, finish)
+    return placed, unplaced, None
+
+
 def simulate(queue: dict, lane_free: dict[tuple[str, str], float | None], vram: dict[tuple[str, str], int | None]) -> tuple[float | None, str]:
     """Wave completion in seconds from now if the feeder keeps doing what it does; None with the blocker."""
     free = dict(lane_free)
-    if not free and not any(pool["kind"] == "slurm" for pool in queue["pool"].values()):
+    cluster = any(pool["kind"] == "slurm" for pool in queue["pool"].values())
+    if not free and not cluster:
         return None, "every lane is waiting for the fleet board"
     if any(value is None for value in free.values()):
         blocked = [f"{rig} gpu{gpu}" for (rig, gpu), value in free.items() if value is None]
         return None, "lane ETA unavailable: " + ", ".join(sorted(blocked))
-    horizon = max(free.values(), default=0.0)
-    for run in queue["runs"]:
-        if run["state"] != "queued":
-            continue
-        candidates = [lane for lane in free if eligible(queue, run, lane[0], vram.get(lane))]
-        if not candidates:
-            if any(pool["kind"] == "slurm" for pool in queue["pool"].values()):
-                continue  # a cluster job's start is the scheduler's call; it never bounds the lanes
-            return None, f"no eligible lane for {run['id']}"
-        lane = min(candidates, key=lambda key: free[key])
-        cost, _basis = estimate_run(queue, run, lane[0])
-        if cost is None:
-            return None, f"no estimate basis for {run['id']}"
-        free[lane] += cost
-        horizon = max(horizon, free[lane])
-    return horizon, "feeder simulation"
+    queued = [run for run in feed_order(queue) if run["state"] == "queued"]
+    placed, unplaced, missing = earliest_finish(queue, free, vram, queued)
+    if missing is not None:
+        return None, f"no estimate basis for {missing}"
+    if unplaced and not cluster:  # a cluster job's start is the scheduler's call; it never bounds the lanes
+        return None, f"no eligible lane for {unplaced[0]}"
+    return max([*free.values(), *(finish for _lane, finish in placed.values())], default=0.0), "feeder simulation"
 
 
 # ───────────────────────────── one cycle ─────────────────────────────
@@ -1144,16 +1191,74 @@ class Cycle:
         self.event("lane-relaunched" if launched_before else "lane-launched", rig=machine.name, gpu=gpu, session=session, rebooted=rebooted)
         return True
 
-    def feed(self, queue: dict, machine, gpu: str, view: dict, vram: int | None) -> None:
+    def lane_plan(self, queue: dict, lanes: list[tuple[str, str]], vram: dict[tuple[str, str], int | None]) -> dict | None:
+        """Where the feeder would place every run not yet started: the queued ones and those sitting
+        in a live lane's buffer, each lane counted from when its running run ends. A lane whose
+        running run has no estimate (a stale heartbeat, no basis) is left out and fed in queue order.
+        None when a run has no estimate basis at all: then every lane takes runs in queue order."""
+        free: dict[tuple[str, str], float] = {}
+        for rig, gpu in lanes:
+            active = next((r for r in queue["runs"] if r["state"] == "running" and r["lane"] == {"rig": rig, "gpu": gpu}), None)
+            remaining = remaining_active(queue, active, rig, self.at)[0] if active else 0.0
+            if remaining is not None:
+                free[(rig, gpu)] = remaining
+        movable = [
+            run for run in feed_order(queue)
+            if run["state"] == "queued" or (run["state"] == "assigned" and run.get("lane") and (run["lane"]["rig"], run["lane"]["gpu"]) in free)
+        ]
+        placed, _unplaced, missing = earliest_finish(queue, free, vram, movable)
+        return None if missing is not None else {"free": free, "placed": placed}
+
+    def reclaim(self, queue: dict, lanes: list[tuple[str, str]], vram: dict[tuple[str, str], int | None]) -> None:
+        """Take back a buffered, unstarted run when the plan puts it on another live lane that finishes
+        it clearly sooner (RECLAIM_MIN_GAIN_*). The retraction is the lane loop's own atomic `mv`, so a
+        run the lane claimed meanwhile stays where it is."""
+        plan = self.lane_plan(queue, lanes, vram)
+        if plan is None:
+            return
+        for rig, gpu in lanes:
+            if (rig, gpu) not in plan["free"]:
+                continue
+            here = plan["free"][(rig, gpu)]
+            buffered = sorted(
+                (r for r in queue["runs"] if r["state"] == "assigned" and r["lane"] == {"rig": rig, "gpu": gpu} and r.get("entry")),
+                key=lambda r: r["entry"],
+            )
+            for run in buffered:
+                cost = estimate_run(queue, run, rig)[0]
+                if cost is None:
+                    break
+                target, there = plan["placed"].get(run["id"], ((rig, gpu), here + cost))
+                gain = here + cost - there
+                if target == (rig, gpu) or gain < max(RECLAIM_MIN_GAIN_S, RECLAIM_MIN_GAIN_FRACTION * (here + cost)):
+                    here += cost
+                    continue
+                machine = self.config.machines[rig]
+                result = sh(machine, 'mkdir -p "$1/retracted" && mv "$1/queue/$2" "$1/retracted/$2"', lane_dir(machine, queue["wave_id"], gpu), run["entry"])
+                if result.returncode != 0:
+                    here += cost  # the lane claimed it first
+                    continue
+                self.requeue(run)
+                run["attempts"] -= 1  # it never started here
+                self.event(
+                    "run-reclaimed", run=run["id"], rig=rig, gpu=gpu, to_rig=target[0], to_gpu=target[1],
+                    finish_here_s=int(here + cost), finish_there_s=int(there),
+                )
+
+    def feed(self, queue: dict, machine, gpu: str, view: dict, vram: int | None, plan: dict | None) -> None:
+        """Top up the lane's buffer with the runs the plan gives this lane; with no plan for it, in queue order."""
         buffers = view["lanes"].get(gpu, {"queue": [], "running": []})
         assigned_here = [r for r in queue["runs"] if r["state"] in ("assigned", "running") and r["lane"] == {"rig": machine.name, "gpu": gpu}]
         room = BUFFER_DEPTH - max(len(buffers["queue"]) + len(buffers["running"]), len(assigned_here))
-        ordered = sorted((r for r in queue["runs"] if r["state"] == "queued"), key=lambda r: not r.get("front"))
-        for run in ordered:
+        lane = (machine.name, gpu)
+        planned = plan is not None and lane in plan["free"]
+        for run in feed_order(queue):
             if room <= 0:
                 break
-            if not eligible(queue, run, machine.name, vram):
+            if run["state"] != "queued" or not eligible(queue, run, machine.name, vram):
                 continue
+            if planned and plan["placed"].get(run["id"], (lane,))[0] != lane:
+                continue  # another lane finishes it sooner
             entry = f"{queue['next_seq']:06d}__{run['token']}"
             result = sh(
                 machine,
@@ -1507,6 +1612,7 @@ class Cycle:
                 else:
                     self.absorb_rig(queue, rig, view)
             vram: dict[tuple[str, str], int | None] = {}
+            live: list[tuple[str, str]] = []  # lanes whose session runs and whose card the board gives us
             for rig, pool in queue["pool"].items():
                 view = views[rig]
                 if view is None:
@@ -1523,20 +1629,25 @@ class Cycle:
                         # nothing left in the queue for this lane: a job the cluster has not started is fair game
                         self.steal_pending_job(queue, machine, gpu, vram[(rig, gpu)])
                         waiting = any(r["state"] == "queued" and eligible(queue, r, rig, vram[(rig, gpu)]) for r in queue["runs"])
-                    alive = self.ensure_lane(queue, machine, gpu, view, waiting or mine)
-                    if not alive:
-                        if view["lanes"].get(gpu, {}).get("drain") and self.holds_lane(rig, gpu, session_name(queue, rig, gpu)):
-                            # the drained loop has exited: only now is the card really free for someone else
-                            self.board_release(rig, gpu, f"wave {queue['wave_id']} has nothing left for this lane")
-                        continue
-                    self.feed(queue, machine, gpu, view, vram[(rig, gpu)])
-                    still_mine = any(r["state"] in ("assigned", "running") and r["lane"] == {"rig": rig, "gpu": gpu} for r in queue["runs"])
-                    if not still_mine:
-                        still_waiting = any(r["state"] == "queued" and eligible(queue, r, rig, vram[(rig, gpu)]) for r in queue["runs"])
-                        if not still_waiting and not view["lanes"].get(gpu, {}).get("drain"):
-                            sh(machine, 'mkdir -p "$1" && : > "$1/drain"', lane_dir(machine, queue["wave_id"], gpu))
-                            self.event("lane-drained", rig=rig, gpu=gpu)
-                if rig in queue["offload"]:
+                    if self.ensure_lane(queue, machine, gpu, view, waiting or mine):
+                        live.append((rig, gpu))
+                    elif view["lanes"].get(gpu, {}).get("drain") and self.holds_lane(rig, gpu, session_name(queue, rig, gpu)):
+                        # the drained loop has exited: only now is the card really free for someone else
+                        self.board_release(rig, gpu, f"wave {queue['wave_id']} has nothing left for this lane")
+            # every live lane is known before any is fed, so the plan weighs them all
+            self.reclaim(queue, live, vram)
+            for rig, gpu in live:
+                machine, view = self.config.machines[rig], views[rig]
+                self.feed(queue, machine, gpu, view, vram[(rig, gpu)], self.lane_plan(queue, live, vram))
+                still_mine = any(r["state"] in ("assigned", "running") and r["lane"] == {"rig": rig, "gpu": gpu} for r in queue["runs"])
+                if not still_mine:
+                    still_waiting = any(r["state"] == "queued" and eligible(queue, r, rig, vram[(rig, gpu)]) for r in queue["runs"])
+                    if not still_waiting and not view["lanes"].get(gpu, {}).get("drain"):
+                        sh(machine, 'mkdir -p "$1" && : > "$1/drain"', lane_dir(machine, queue["wave_id"], gpu))
+                        self.event("lane-drained", rig=rig, gpu=gpu)
+            for rig, pool in queue["pool"].items():
+                if views[rig] is not None and pool["kind"] != "slurm" and rig in queue["offload"]:
+                    machine = self.config.machines[rig]
                     self.offload(queue, rig)
                     sh(machine, 'mkdir -p "$1" && : > "$1/offload"', rig_state_dir(machine, queue["wave_id"]))
             # every rig's evaluation records converge on the hub, each pass; a rig whose probe failed waits

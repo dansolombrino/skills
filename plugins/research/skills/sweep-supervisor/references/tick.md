@@ -55,10 +55,12 @@ a code problem.
 ### Tail stealing
 
 Near the end a fast lane idles while a slow lane works through its last runs; the service wakes
-you with `lane-idle-tail` the cycle that happens. For each idle lane, consider the in-flight and
-buffered runs of slower lanes:
+you with `lane-idle-tail` the cycle that happens. The service already keeps the last long runs off
+slow lanes and takes back buffered runs another lane finishes clearly sooner, so what is left is
+mostly in-flight runs:
 
-- A **buffered** run (not started) is free to move: `steal --run <id> --reason "<why>" --front --confirm`.
+- A **buffered** run (not started) the service left in place is free to move when evidence says
+  its estimate is wrong: `steal --run <id> --reason "<why>" --front --confirm`.
 - An **in-flight** run is stolen only when all hold: finishing it on the idle lane — from its
   newest checkpoint when the run resumes, from zero when it does not — beats leaving it by a clear
   margin (at least 20% of its remaining time and at least ten minutes); the work thrown away is
