@@ -90,6 +90,7 @@ export RESEARCH_PROJECT_ROOT="$PROJECT_ROOT"
 # a Slurm allocation sets the card itself; everywhere else the lane's GPU set is the card
 if [ -z "${SLURM_JOB_ID:-}" ]; then
   [ -n "$LANE_GPUS" ] || { echo "[abort] started without LANE_GPUS" >&2; exit 1; }
+  export CUDA_DEVICE_ORDER=PCI_BUS_ID  # lane GPU ids are nvidia-smi (PCI bus) indices, not CUDA fastest-first
   export CUDA_VISIBLE_DEVICES="$LANE_GPUS"
 fi
 

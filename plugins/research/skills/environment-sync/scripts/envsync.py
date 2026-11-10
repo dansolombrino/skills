@@ -717,7 +717,7 @@ def run_gpu_smoke(settings: EnvironmentSettings, machine, lane: Lane, target: Ta
     script = target.source(machine) / settings.gpu_smoke[1]
     command = [
         "env",
-        f"CUDA_VISIBLE_DEVICES={lane.gpus}",
+        "CUDA_DEVICE_ORDER=PCI_BUS_ID", f"CUDA_VISIBLE_DEVICES={lane.gpus}",
         str(venv_python(settings, machine, target)),
         str(script),
         *settings.gpu_smoke[2:],

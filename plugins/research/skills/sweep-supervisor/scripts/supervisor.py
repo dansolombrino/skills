@@ -1082,6 +1082,9 @@ class Cycle:
         env = {
             "LANE_RIG": machine.name,
             "LANE_GPUS": gpu,
+            # nvidia-smi numbers GPUs in PCI bus order, CUDA fastest-first: without this a lane named after an
+            # nvidia-smi index can run on another card of a mixed-GPU rig (found 2026-11-10 on gladia-fourier).
+            "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
             "MIN_FREE_KIB": str(floor_kib),
             "QUOTA_FS": (root.quota_fs if root and root.quota_fs else ""),
         }
