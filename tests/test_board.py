@@ -397,9 +397,14 @@ class BoardTests(unittest.TestCase):
 
     def test_reconcile_releases_lane_whose_session_is_gone(self) -> None:
         self.claim()
-        code, out = self.reconcile_with(
-            {"rig-4090": probe_output([], [(0, 0, 0)], "2026-09-01 08:00:00"), "behemoth": probe_output([], [], "2026-09-01 08:00:00")}
-        )
+        gone = {"rig-4090": probe_output([], [(0, 0, 0)], "2026-09-01 08:00:00"), "behemoth": probe_output([], [], "2026-09-01 08:00:00")}
+        code, out = self.reconcile_with(gone)
+        self.assertEqual(code, 0)
+        self.assertIsNotNone(self.lane(), "a fresh claim has no session yet: the orchestrator is still verifying the lane")
+        lane = self.lane()
+        lane["last_claim_at"] = board.iso(board.now() - timedelta(seconds=board.CLAIM_GRACE_S + 1))
+        board.write_json(self.config.lane_path("rig-4090", "0"), lane)
+        code, out = self.reconcile_with(gone)
         self.assertEqual(code, 0)
         self.assertIn("session gone → released", out)
         self.assertIsNone(self.lane())

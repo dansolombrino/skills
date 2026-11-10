@@ -35,12 +35,23 @@ stopped, blocked or relaunched, a rig down or back, a run whose heartbeat went s
 runs (`lane-idle-tail`, once per episode), a collect, offload or submission failure, an answer, the
 wave turning terminal — so `tick_every` is only a safety net. An explicit value is respected.
 
-A scheduled tick is skipped while nothing changed: no ledger record since the last tick that exited
-cleanly began, and no edit of `EXPERIMENTS.md` since a tick last ended. A real tick (`idle tick`) still
-runs every `idle_tick_every`. A failed tick is never idle: the next one runs at `tick_every`, and a
-terminal wave no tick has finished keeps that period too. What a script cannot see waits for the next
-real tick, so on a quiet wave it can take up to `idle_tick_every`: one of our cards free and not yet a
-lane, a run stalled under a live heartbeat, and the `eta` column of `EXPERIMENTS.md`.
+A scheduled tick is skipped while nothing needs an agent: no `budget-cap` or `checkout-off-branch`
+since the last tick that exited cleanly began, and no edit of `EXPERIMENTS.md` by a person since a
+tick of this project last ended. Routine progress (runs assigned, started, done, jobs submitted) is
+not news: the service settles it. A real tick (`idle tick`) still runs every `idle_tick_every`. A
+failed tick is never idle: the next one runs at `tick_every`, and a terminal wave no tick has
+finished keeps that period too. What a script cannot see waits for the next real tick, so it can
+take up to `idle_tick_every`: one of our cards free and not yet a lane, a run stalled under a live
+heartbeat, and the rows of `EXPERIMENTS.md` (reconciled by every tick that does run, and at the end).
+
+Two waves of one project never tick at once (`<project>/.waves/_state/tick.lock`): each tick edits
+`EXPERIMENTS.md` and commits in the same checkout. A tick held back by a sibling's runs the cycle
+after it ends.
+
+Nothing the service runs can hold it forever: a shell snippet on a rig is cut after two minutes
+(the rig then counts as not answering), a `rig-sync collect` or `offload` pass and a lane's
+revision/environment check after fifteen. A cut `offload` pass keeps its partial files and resumes
+next cycle; a wave whose cycle fails or crashes is skipped that pass and the others go on.
 
 `command` is an argv list, never a shell string. `{prompt}`, `{model}`, and `{effort}` are
 substituted per tick; `{prompt}` is required. The tick runs with the project root as its working

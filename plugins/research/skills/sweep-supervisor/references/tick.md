@@ -25,10 +25,11 @@ default about branching before a commit. Never create or switch to another branc
 - Any `collect-failed` event: the rig, the run, and whether it is a transient ssh failure or an
   identity mismatch.
 - Every event that needs judgment wakes you at once. A `scheduled tick` (half-hourly by default) runs
-  only when something changed since the last good tick, or that tick failed. An `idle tick` (six hours
-  of nothing, by default) is the safety net for what raises no event: one of our cards free and not
-  yet a lane, a run stalled under a live heartbeat, drift in `EXPERIMENTS.md`. Check for those, record
-  "nothing to do" if so, and exit.
+  only when a person edited `EXPERIMENTS.md`, a `budget-cap` or `checkout-off-branch` arrived, the
+  wave is terminal, or the last tick failed; routine progress never causes one. An `idle tick` (six
+  hours of nothing, by default) is the safety net for what raises no event: one of our cards free and
+  not yet a lane, a run stalled under a live heartbeat, drift in `EXPERIMENTS.md`. Check for those,
+  record "nothing to do" if so, and exit.
 
 ## 2. Judge, then act
 
@@ -47,7 +48,7 @@ a code problem.
 | cluster `job-timeout` | the service already resized it from measured progress; confirm the number is sane, else `queue constrain --walltime-s`. A run that restarts from scratch and cannot fit 24 h goes to the user |
 | `budget-cap` reached (only when the user set a cap) | `decide` reporting it; the cluster takes no new jobs until the user raises the cap with `pool --rig leonardo --core-hours-cap <n> --reason "user: ..."`; the lanes keep running |
 | `collect-failed` | read the problem. A transient ssh failure needs nothing: the next cycle retries. An identity mismatch (`.run_id.json`/`.run_config.json` differ between rig and hub) → `ask`, and never overwrite either copy |
-| `claim-refused` (lane `waiting for board`) | nothing to do: the lane is in the pool and starts the cycle its holder releases it. If the hold looks stale, `rig-board status --reconcile` evidence goes to the user, never a forced release |
+| `claim-refused` (lane `waiting for board`) | nothing to do: the lane is in the pool and starts the cycle its holder releases it. The service asks for a held card only when its plan would use it, and gives back one of ours the plan no longer feeds. If the hold looks stale, `rig-board status --reconcile` evidence goes to the user, never a forced release |
 | one of our cards on a pool rig is free and not yet a lane | `lane add --rig <rig> --gpu <ids> --reason "<why>"`; the service runs the revision and environment gates before it starts the lane. A shared rig's card beyond ours needs the user's grant: `ask` |
 | `rig-down` while the printout shows the rig's SSH certificate expired | nothing to ask: the service already tried any declared `cert_renew_command` and issued its notice and warning, and it resumes the rig when it answers. `decide` what keeps running meanwhile |
 | `checkout-off-branch` (`⚠ project checkout is on branch …`) | a person may be working there: never merge, switch or commit around it, and leave `deploy-revision` blocked. `say` what it blocks, once |
@@ -71,9 +72,12 @@ mostly in-flight runs:
 
 ## 3. Record
 
-- Reconcile `EXPERIMENTS.md` per `experiments-tracking` — during a wave this tick is its single
-  writer: rows flip from the ledger and the on-disk signals, `rig`/`gpu` are filled from the lane
-  that claimed the run, `eta` is recomputed.
+- Reconcile `EXPERIMENTS.md` per `experiments-tracking` — during a wave the ticks are its only
+  writers, and the service runs one tick at a time per project, so no other wave's tick edits or
+  commits while you do: rows flip from the ledger and the on-disk signals, `rig`/`gpu` are filled
+  from the lane that claimed the run, `eta` is recomputed. Rows may be several hours behind when you
+  start (routine progress wakes nobody): bring every row of this wave up to date, not only the
+  event's.
 - One `SUP decide "<what, why, evidence>"` per decision, including "nothing to do" when an event
   needed no action. This log is the only decision record; the user reads it under the table.
 - Journal a meaningful scientific or engineering event per `research-journal` (append; no

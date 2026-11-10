@@ -62,9 +62,9 @@ def write(path: Path, text: str, executable: bool = False) -> None:
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
 
-def local_remote(machine, argv, *, check=True, input_bytes=None):
+def local_remote(machine, argv, *, check=True, input_bytes=None, timeout=None):
     """Every rig is a directory on this host: the shell the supervisor sends really runs."""
-    return rigsync.run(argv, check=check, input_bytes=input_bytes)
+    return rigsync.run(argv, check=check, input_bytes=input_bytes, timeout=timeout)
 
 
 class SupervisorTests(unittest.TestCase):
@@ -117,7 +117,7 @@ class SupervisorTests(unittest.TestCase):
             self.addCleanup(patch.stop)
         self.addCleanup(self.tmp.cleanup)
 
-    def fake_rigsync(self, wave, settings, *argv: str) -> subprocess.CompletedProcess:
+    def fake_rigsync(self, wave, settings, *argv: str, timeout: int | None = None) -> subprocess.CompletedProcess:
         self.rigsync_calls.append(argv)
         if self.rigsync_failures:
             return subprocess.CompletedProcess(argv, 2, "", f"rigsync: {self.rigsync_failures.pop(0)}")
@@ -579,6 +579,64 @@ class SupervisorTests(unittest.TestCase):
         moved = [r for r in self.queue()["runs"] if r["lane"] == {"rig": "hub", "gpu": "0"} and r["state"] == "assigned"]
         self.assertEqual(len(moved), 1)
 
+    def test_a_pending_job_is_never_cancelled_for_a_card_another_wave_holds(self) -> None:
+        held = self.hold_for_another_wave("hub")
+        pool = {"hub": {"lanes": ["0"]}, "cluster": {"max_jobs": 2, "core_hours_cap": 1000, "default_walltime_s": 3600}}
+        self.register(runs=2, pool=pool)
+        self.cli("cycle", "--wave", WAVE)
+        jobs = {run["id"]: run["job_id"] for run in self.queue()["runs"]}
+        self.assertTrue(all(jobs.values()), "the lane has no card, so the cluster takes both runs")
+        write(self.base / "slurm" / "squeue", "".join(f"{job}|{WAVE}__{name}|PENDING|0:00|1:30:00|Priority\n" for name, job in jobs.items()))
+        self.cli("cycle", "--wave", WAVE)
+        self.cli("cycle", "--wave", WAVE)
+        self.assertFalse((self.base / "slurm" / "cancelled").exists(), "the job would lose its place for a lane that cannot run it")
+        held.unlink()
+        self.cli("cycle", "--wave", WAVE)
+        self.assertEqual(len((self.base / "slurm" / "cancelled").read_text().split()), 1, "the card is free now: the lane pulls one")
+
+    def test_a_slow_card_the_plan_gives_nothing_is_left_on_the_board_for_other_waves(self) -> None:
+        self.register(runs=1)  # hub finishes the one run sooner than peer (weight 0.5) ever could
+        self.cli("cycle", "--wave", WAVE)
+        self.assertEqual(self.queue()["runs"][0]["lane"], {"rig": "hub", "gpu": "0"})
+        self.assertFalse((self.base / "board" / "lanes" / "peer" / "gpu0.json").exists())
+        sessions = (self.base / "tmux-sessions").read_text() if (self.base / "tmux-sessions").exists() else ""
+        self.assertNotIn("_peer_gpu0", sessions)
+        self.assertNotIn("peer:0", self.queue().get("waiting_lanes", {}))
+
+    def test_a_card_held_elsewhere_is_not_waited_for_when_the_plan_would_not_use_it(self) -> None:
+        self.hold_for_another_wave("peer")
+        self.register(runs=1)
+        self.cli("cycle", "--wave", WAVE)
+        self.assertEqual(self.events("claim-refused"), [], "nothing to wait for: hub finishes the run sooner")
+
+    def test_unstarted_cluster_jobs_make_the_wave_eta_a_lower_bound_not_now(self) -> None:
+        pool = {"cluster": {"max_jobs": 1, "default_walltime_s": 3600}}
+        self.register(runs=2, pool=pool)
+        self.cli("cycle", "--wave", WAVE)  # one job submitted and pending, one run still queued behind the job cap
+        snapshot = board.read_json(supervisor.Wave(self.hub, WAVE).snapshot_path)
+        self.assertTrue(snapshot["wave_eta_basis"].startswith(supervisor.EARLIEST_BASIS), snapshot["wave_eta_basis"])
+        self.assertIn("2 cluster jobs not started", snapshot["wave_eta_basis"])
+        ahead = (supervisor.parse_iso(snapshot["wave_eta"]) - supervisor.parse_iso(snapshot["written_at"])).total_seconds()
+        self.assertAlmostEqual(ahead, 3600 + 3599, delta=5, msg="one slot: the two jobs run one after the other")
+        self.assertIn("at the earliest", self.cli("table", "--wave", WAVE)[1])
+
+    def test_cluster_jobs_drain_through_the_job_slots(self) -> None:
+        self.assertEqual(supervisor.cluster_drain(2, [100.0], [50.0, 50.0, 50.0]), 150.0)  # slots: 100 -> 150, 0 -> 50 -> 100
+        self.assertEqual(supervisor.cluster_drain(1, [], []), 0.0)
+        clusters = {"c": {"slots": 1, "running": [600.0], "unstarted": [300.0]}}
+        horizon, basis = supervisor.with_cluster_jobs(0.0, "feeder simulation", {"c job 1": 600.0}, clusters)
+        self.assertEqual(horizon, 900.0)
+        self.assertTrue(basis.startswith(supervisor.EARLIEST_BASIS))
+
+    def test_a_rig_that_answers_and_hangs_reads_as_a_failed_command_not_a_stalled_service(self) -> None:
+        machine = argparse.Namespace(name="peer", local=False)
+        with mock.patch.object(rigsync, "remote", side_effect=subprocess.TimeoutExpired("ssh", supervisor.SH_TIMEOUT_S)):
+            result = supervisor.sh(machine, "true")
+        self.assertEqual(result.returncode, 124)
+        self.assertIn("no answer within", result.stderr)
+        done = supervisor.bounded([sys.executable, "-c", "import time; time.sleep(30)"], 1)
+        self.assertEqual((done.returncode, done.stderr), (124, "timed out after 1s"))
+
     def test_a_job_slurm_has_but_the_queue_lost_is_adopted_not_resubmitted(self) -> None:
         pool = {"cluster": {"max_jobs": 1, "core_hours_cap": 1000, "default_walltime_s": 3600}}
         self.register(runs=1, pool=pool)
@@ -1009,13 +1067,36 @@ class SupervisorTests(unittest.TestCase):
         self.registry.write_text(self.registry.read_text().replace("cycle_every = 60", "cycle_every = 60\nidle_tick_every = 90000"))
         self.assertIsNone(supervisor.wake_due(wave, supervisor.load_settings(self.registry)), "the registry can set it")
 
-    def test_a_ledger_record_since_the_last_good_tick_keeps_the_half_hourly_tick(self) -> None:
+    def test_routine_progress_is_not_news_but_a_persons_edit_and_a_budget_cap_are(self) -> None:
         wave = self.ticked()
         settings = supervisor.load_settings(self.registry)
         wave.log("agent-tick", reason="x", outcome="exit 0")
-        self.assertIsNone(supervisor.wake_due(wave, settings), "a tick's own record is not news")
         wave.log("run-done", run="m0", rig="hub", gpu="0")
+        wave.log("decide", text="nothing to do")
+        self.assertIsNone(supervisor.wake_due(wave, settings), "the service settles runs; a tick's own records are not news")
+        experiments = self.hub / "EXPERIMENTS.md"
+        experiments.write_text("| run | state |\n")
+        self.assertEqual(supervisor.wake_due(wave, settings), "scheduled tick", "a person edited EXPERIMENTS.md")
+        supervisor.record_experiments_seen(wave)
+        self.assertIsNone(supervisor.wake_due(wave, settings), "what a tick of this project left behind is not a person's edit")
+        wave.log("budget-cap", rig="leo", spent_h=10.0, cap_h=10)
         self.assertEqual(supervisor.wake_due(wave, settings), "scheduled tick")
+
+    def test_two_waves_of_one_project_never_tick_at_once(self) -> None:
+        self.register()
+        wave = supervisor.Wave(self.hub, WAVE)
+        settings = supervisor.load_settings(self.registry)
+        import fcntl
+
+        with (wave.dir.parent / "tick.lock").open("a+") as sibling, contextlib.redirect_stdout(io.StringIO()) as out:
+            fcntl.flock(sibling, fcntl.LOCK_EX)  # another wave of this project is ticking
+            with mock.patch.object(supervisor, "run_agent") as run:
+                self.assertEqual(supervisor.wake(wave, settings, "scheduled tick"), 0)
+            run.assert_not_called()
+        self.assertIn("another wave of this project is ticking", out.getvalue())
+        self.assertEqual(supervisor.wake_due(wave, settings), "scheduled tick", "the skipped tick stays due")
+        self.assertEqual(self.cli("wake", "--wave", WAVE)[0], 0)
+        self.assertIsNotNone(wave.runtime().get("agent_ticked_at"))
 
     def test_a_failed_tick_forces_the_next_one_at_the_tick_period_not_each_cycle(self) -> None:
         wave = self.ticked(result="exit 1")

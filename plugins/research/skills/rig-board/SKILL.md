@@ -88,9 +88,10 @@ Set `RIGSYNC_REGISTRY` or pass `--registry` to use another registry.
 - `sweep-dispatch` reads `status --reconcile` before building a pool; held and foreign
   lanes are not free capacity, and free cards on an `opt-in` rig are offers to put to the user,
   never capacity to take.
-- The supervisor service `claim`s a lane immediately after it starts that lane's tmux session. A
-  claim on a held lane exits 3: the lane stays out of the wave and the refusal is reported. A
-  same-session claim is a re-claim (recovery relaunch).
+- The supervisor service `claim`s a lane before it verifies and starts that lane's tmux session, so
+  the card is never taken twice meanwhile; `reconcile` leaves a lane claimed in the last twenty
+  minutes alone even with no session yet. A claim on a held lane exits 3: the lane stays out of the
+  wave and the refusal is reported. A same-session claim is a re-claim (recovery relaunch).
 - It `refresh`es every ten minutes and `release`s a lane as soon as the wave has nothing left for
   it, or when the wave is terminal. A machine fault leaves the lane on the board as interrupted
   until the supervisor re-claims it or the user releases it.

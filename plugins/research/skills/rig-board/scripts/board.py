@@ -48,6 +48,7 @@ MIN_RECONCILE_EVERY_S = 10  # each tick SSHes into every rig and the Slurm login
 FOREIGN_MEMORY_MIB = 1024
 ORCHESTRATOR_SILENT_S = 30 * 60
 SSH_TIMEOUT_S = 25
+CLAIM_GRACE_S = 20 * 60  # longest a claimed lane may lack its tmux session: revision, environment and smoke checks come first
 
 SESSION_RE = re.compile(
     r"^(?P<prefix>.+)_(?P<wave>\d{8}-\d{6})_(?P<rig>[A-Za-z0-9][A-Za-z0-9-]*)_gpu(?P<gpu>\d+(?:,\d+)*)$"
@@ -346,6 +347,7 @@ def claim(config: BoardConfig, args: argparse.Namespace) -> int:
             "tmux_session": session,
             "hub_project_root": args.project_root,
             "claimed_at": existing.get("claimed_at", stamp) if existing else stamp,
+            "last_claim_at": stamp,  # every claim and re-claim: reconcile leaves the lane alone for CLAIM_GRACE_S
             "runs_total": args.runs_total,
             "runs_done": existing.get("runs_done", 0) if existing else 0,
             "active_run": existing.get("active_run") if existing else None,
@@ -1162,6 +1164,11 @@ def reconcile_rig(config: BoardConfig, rig: Rig, probe: dict) -> list[str]:
                 append_history(config, "interrupted", rig=rig.name, gpu=gpu, session=session, boot_at=probe["boot_at"])
             lane["observed"] = {"at": stamp, "session_alive": False, "state": "interrupted", "boot_at": probe["boot_at"]}
             write_json(path, lane)
+            continue
+        # the orchestrator claims a card first, then verifies the lane and starts its session, and
+        # this probe may predate the claim: a fresh claim with no session yet is not a dead lane
+        fresh = parse_iso(lane.get("last_claim_at") or lane.get("claimed_at"))
+        if fresh and (now() - fresh).total_seconds() < CLAIM_GRACE_S:
             continue
         path.unlink()
         append_history(config, "release", rig=rig.name, gpu=gpu, session=session, reason="reconcile: session gone")

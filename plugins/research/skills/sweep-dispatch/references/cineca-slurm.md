@@ -192,7 +192,6 @@ the bare shebang; inside a job the script leaves `CUDA_VISIBLE_DEVICES` to Slurm
 #SBATCH --time=<HH:MM:SS: ETA × 1.5, rounded up to 15 min, capped at 24:00:00>
 #SBATCH --output=logs/<NNN_exp>/<run_id folder>/wave_<wave_id>/slurm-%j.out
 #SBATCH --error=logs/<NNN_exp>/<run_id folder>/wave_<wave_id>/slurm-%j.out
-#SBATCH --signal=B:USR1@600
 #SBATCH --no-requeue
 # run: <run_id_name>   experiment: <NNN_exp>
 # label: <run_id_label under hashed-v2; the flat run_id under a legacy pin>
@@ -221,10 +220,10 @@ set -uo pipefail
   cost that differs by dataset (a tiny dataset that validates every few steps) is exactly what a
   flat guess gets wrong. A run whose
   estimate exceeds 24 h routes to the user with `boost_qos_lprod` as the proposal.
-- `--signal=B:USR1@600` delivers `SIGUSR1` to the batch shell ten minutes before the walltime.
-  The script does not trap it; it exists so a project that checkpoints on that signal can do so
-  without changing the header. Whether a resubmitted run resumes or restarts was fixed at
-  experiment design time, never here.
+- No `--signal` directive: Slurm would deliver the signal to the batch shell, which does not trap
+  it and is killed by it, ending the job that long before its walltime (a 15-minute job at minute
+  five). Whether a resubmitted run resumes or restarts was fixed at experiment design time, never
+  here.
 - `--no-requeue`: Slurm must not resubmit on its own. Recovery is the supervisor's explicit action
   (below) so that it is recorded in the wave's ledger and reported.
 - The `tee` log path is unchanged; the extra `slurm-%j.out` beside it captures what Slurm itself

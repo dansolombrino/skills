@@ -477,14 +477,17 @@ def run(
     check: bool = True,
     show: bool = False,
     stream: bool = False,
+    timeout: float | None = None,
 ) -> subprocess.CompletedProcess:
+    """`timeout` bounds a captured command and raises `subprocess.TimeoutExpired`; the ssh alive
+    probes only end a dead connection, never a remote command that answers and hangs."""
     if stream:
         if input_bytes is not None:
             raise ValueError("a streamed command takes no input")
         result = run_streaming(command)
         show = False
     else:
-        result = subprocess.run(command, input=input_bytes, capture_output=True)
+        result = subprocess.run(command, input=input_bytes, capture_output=True, timeout=timeout)
     if show:
         if result.stdout:
             print(result.stdout.decode(errors="replace"), end="")
@@ -497,12 +500,12 @@ def run(
 
 
 def remote(
-    machine: Machine, argv: list[str], *, check: bool = True, input_bytes: bytes | None = None
+    machine: Machine, argv: list[str], *, check: bool = True, input_bytes: bytes | None = None, timeout: float | None = None
 ) -> subprocess.CompletedProcess:
     if machine.local:
-        return run(argv, input_bytes=input_bytes, check=check)
+        return run(argv, input_bytes=input_bytes, check=check, timeout=timeout)
     command = ssh_base(machine) + [shlex.join(argv)]
-    result = run(command, input_bytes=input_bytes, check=False)
+    result = run(command, input_bytes=input_bytes, check=False, timeout=timeout)
     if check and result.returncode:
         stderr = result.stderr.decode(errors="replace").strip()
         hint = _ssh_failure_hint(machine) if result.returncode == 255 else ""

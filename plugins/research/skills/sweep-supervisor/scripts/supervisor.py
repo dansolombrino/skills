@@ -25,12 +25,14 @@ import json
 import os
 import re
 import shlex
+import signal
 import statistics
 import subprocess
 import sys
 import threading
 import time
 import tomllib
+import traceback
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -96,6 +98,9 @@ LANE_STOPPING = {86, 87}
 WALLTIME_MARGIN = 1.5
 WALLTIME_CAP_S = 24 * 3600
 WALLTIME_STEP_S = 15 * 60
+SH_TIMEOUT_S = 120  # a probe, a queue write, an sbatch: none takes this long on a rig that works
+TRANSFER_TIMEOUT_S = 900  # one collect or offload pass; rsync keeps partial files, so the next pass resumes
+VERIFY_TIMEOUT_S = 900  # revision, environment and lane smoke before a lane starts
 EFFORT_VALUES = ("low", "medium", "high", "xhigh", "max")
 RUN_STATES = ("queued", "assigned", "running", "done", "failed", "excluded")
 TERMINAL_STATES = ("done", "failed", "excluded")
@@ -123,6 +128,8 @@ URGENT_EVENTS = frozenset(
         "lane-idle-tail",
     }
 )
+# Not worth waking the agent at once, but worth its next half-hourly tick instead of the idle one.
+SCHEDULED_EVENTS = frozenset({"budget-cap", "checkout-off-branch"})
 # What goes out through `notify_command`, when one is declared. `ask` and `say` always do too.
 CERT_EVENTS = frozenset({"cert-expiring", "cert-expired", "cert-renewed", "cert-renew-failed"})
 NOTIFY_EVENTS = CERT_EVENTS | {"wave-terminal", "rig-down", "recovery-blocked", "submit-failed", "agent-failing", "checkout-off-branch"}
@@ -725,15 +732,24 @@ def _text(value: object) -> str:
     return value.decode(errors="replace") if isinstance(value, bytes) else (value or "")
 
 
-def sh(machine, script: str, *args: str, check: bool = False) -> subprocess.CompletedProcess:
+def sh(machine, script: str, *args: str, check: bool = False, timeout: int | None = None) -> subprocess.CompletedProcess:
     """Run a shell snippet on a rig (or here, for the hub) and hand back text, not bytes.
 
     The snippet goes over stdin, not argv: a probe over ~100 live runs outgrows the kernel's
     128 KiB per-argument limit and exec fails with E2BIG. The brace group is parsed whole before
     it runs, and its `</dev/null` keeps any command inside from eating the rest of the script.
+
+    Every snippet here is short, so one that has not answered within SH_TIMEOUT_S is a rig that
+    hangs after login: it reads as exit 124 rather than holding up every other wave.
     """
     piped = "{\n" + script + "\n} </dev/null\n"
-    result = rigsync.remote(machine, ["sh", "-s", "--", *args], check=check, input_bytes=piped.encode())
+    limit = timeout or SH_TIMEOUT_S
+    try:
+        result = rigsync.remote(machine, ["sh", "-s", "--", *args], check=check, input_bytes=piped.encode(), timeout=limit)
+    except subprocess.TimeoutExpired as exc:
+        if check:
+            raise rigsync.RigSyncError(f"{machine.name}: no answer within {limit}s") from exc
+        return subprocess.CompletedProcess(["sh", "-s", "--", *args], 124, "", f"{machine.name}: no answer within {limit}s")
     return subprocess.CompletedProcess(result.args, result.returncode, _text(result.stdout), _text(result.stderr))
 
 
@@ -1013,10 +1029,30 @@ def cert_expiry(path: Path) -> datetime | None:
         return None
 
 
-def run_rigsync(wave: Wave, settings: Settings, *argv: str) -> subprocess.CompletedProcess:
+def bounded(command: list[str], timeout: int | None) -> subprocess.CompletedProcess:
+    """A subprocess that cannot outlast `timeout`: one hung transfer must not stop the service for
+    every wave. Its whole process group goes (the ssh and rsync it started too), SIGTERM first so a
+    cut transfer keeps its partial file; it then reads as exit 124."""
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        for signum in (signal.SIGTERM, signal.SIGKILL):
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signum)
+            try:
+                process.communicate(timeout=10)
+                break
+            except subprocess.TimeoutExpired:
+                continue
+        return subprocess.CompletedProcess(command, 124, "", f"timed out after {timeout}s")
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def run_rigsync(wave: Wave, settings: Settings, *argv: str, timeout: int | None = None) -> subprocess.CompletedProcess:
     """rig-sync as a subprocess against this wave's project, so its output and exit code are its own."""
     command = [sys.executable, str(RIGSYNC_SCRIPT), "--root", str(wave.project_root), "--registry", str(settings.registry_path), *argv]
-    return subprocess.run(command, capture_output=True, text=True, check=False)
+    return bounded(command, timeout)
 
 
 def collect_once(wave: Wave, settings: Settings, queue: dict, rig: str, at: datetime) -> dict:
@@ -1027,7 +1063,7 @@ def collect_once(wave: Wave, settings: Settings, queue: dict, rig: str, at: date
     one a minute.
     """
     try:
-        result = run_rigsync(wave, settings, "collect", "--wave", queue["wave_id"], "--machine", rig, "--confirm")
+        result = run_rigsync(wave, settings, "collect", "--wave", queue["wave_id"], "--machine", rig, "--confirm", timeout=TRANSFER_TIMEOUT_S)
         code, stdout, stderr = result.returncode, result.stdout, result.stderr
     except (OSError, subprocess.SubprocessError) as exc:
         code, stdout, stderr = 1, "", str(exc)
@@ -1154,7 +1190,7 @@ class Cycle:
             "verify", "--wave", queue["wave_id"], "--revision", queue["revision"], "--machines", machine.name,
             "--lane", f"{machine.name}:{gpu}",
         ]
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        result = bounded(command, VERIFY_TIMEOUT_S)
         if result.returncode != 0:
             return "environment: " + (result.stderr.strip() or result.stdout.strip())[-400:]
         return None
@@ -1190,6 +1226,25 @@ class Cycle:
         launched_before = any(r.get("event") == "lane-launched" and r.get("rig") == machine.name and r.get("gpu") == gpu for r in self.wave.ledger())
         self.event("lane-relaunched" if launched_before else "lane-launched", rig=machine.name, gpu=gpu, session=session, rebooted=rebooted)
         return True
+
+    def card_available(self, queue: dict, rig: str, gpu: str) -> bool:
+        """Whether the fleet board would give this wave the card now: it holds it, or nobody holds any of it."""
+        session = session_name(queue, rig, gpu)
+        cards = board.gpu_indices(gpu)
+        return not any(
+            held.get("rig") == rig and held.get("tmux_session") != session and board.gpu_indices(str(held.get("gpu", ""))) & cards
+            for held in board.list_lanes(self.board_config)
+        )
+
+    def wanted_lanes(self, queue: dict, lanes: list[tuple[str, str]], vram: dict[tuple[str, str], int | None]) -> set[tuple[str, str]]:
+        """The lanes among `lanes` the plan gives at least one unstarted run, plus those it leaves out
+        and feeds in queue order. A slow card every run finishes sooner without is not among them: the
+        wave neither claims nor keeps it. With no plan at all, every lane is wanted."""
+        plan = self.lane_plan(queue, lanes, vram)
+        if plan is None:
+            return set(lanes)
+        fed = {lane for lane, _finish in plan["placed"].values()}
+        return {lane for lane in lanes if lane not in plan["free"] or lane in fed}
 
     def lane_plan(self, queue: dict, lanes: list[tuple[str, str]], vram: dict[tuple[str, str], int | None]) -> dict | None:
         """Where the feeder would place every run not yet started: the queued ones and those sitting
@@ -1460,9 +1515,12 @@ class Cycle:
     # -- offload and collect ----------------------------------------------
 
     def offload(self, queue: dict, rig: str) -> None:
-        result = run_rigsync(self.wave, self.settings, "offload", "--machine", rig, "--wave", queue["wave_id"], "--confirm")
+        result = run_rigsync(self.wave, self.settings, "offload", "--machine", rig, "--wave", queue["wave_id"], "--confirm", timeout=TRANSFER_TIMEOUT_S)
         summary = [line for line in result.stdout.splitlines() if line.startswith("[offload-summary]")]
-        if result.returncode != 0:
+        if result.returncode == 124:
+            # a long copy cut at the bound, not a failure: the partial files stay and the next pass resumes
+            queue.setdefault("offload_last", {})[rig] = {"at": iso(self.at), "summary": f"pass cut after {TRANSFER_TIMEOUT_S}s, resuming next cycle"}
+        elif result.returncode != 0:
             self.event("offload-failed", rig=rig, problem=(result.stderr.strip() or result.stdout.strip())[-300:])
         elif summary:
             queue.setdefault("offload_last", {})[rig] = {"at": iso(self.at), "summary": summary[-1]}
@@ -1613,6 +1671,16 @@ class Cycle:
                     self.absorb_rig(queue, rig, view)
             vram: dict[tuple[str, str], int | None] = {}
             live: list[tuple[str, str]] = []  # lanes whose session runs and whose card the board gives us
+            # the cards this wave could use now: ours on the board or nobody's, on a rig that answers
+            usable: list[tuple[str, str]] = []
+            for rig, pool in queue["pool"].items():
+                if views[rig] is None or pool["kind"] == "slurm":
+                    continue
+                for gpu in pool["lanes"]:
+                    vram[(rig, gpu)] = lane_vram(self.board_config, rig, gpu)
+                    if f"{rig}:{gpu}" not in queue["blocked_lanes"] and self.card_available(queue, rig, gpu):
+                        usable.append((rig, gpu))
+            wanted = self.wanted_lanes(queue, usable, vram)
             for rig, pool in queue["pool"].items():
                 view = views[rig]
                 if view is None:
@@ -1622,29 +1690,41 @@ class Cycle:
                     self.submit_jobs(queue, machine)
                     continue
                 for gpu in pool["lanes"]:
-                    vram[(rig, gpu)] = lane_vram(self.board_config, rig, gpu)
-                    waiting = any(r["state"] == "queued" and eligible(queue, r, rig, vram[(rig, gpu)]) for r in queue["runs"])
+                    lane = (rig, gpu)
+                    waiting = any(r["state"] == "queued" and eligible(queue, r, rig, vram[lane]) for r in queue["runs"])
                     mine = any(r["state"] in ("assigned", "running") and r["lane"] == {"rig": rig, "gpu": gpu} for r in queue["runs"])
-                    if not mine and not waiting:
-                        # nothing left in the queue for this lane: a job the cluster has not started is fair game
-                        self.steal_pending_job(queue, machine, gpu, vram[(rig, gpu)])
-                        waiting = any(r["state"] == "queued" and eligible(queue, r, rig, vram[(rig, gpu)]) for r in queue["runs"])
-                    if self.ensure_lane(queue, machine, gpu, view, waiting or mine):
-                        live.append((rig, gpu))
+                    # a card the plan gives nothing is not taken, and one already drained is let go:
+                    # another wave may want it. One another wave holds is asked for only if the plan
+                    # would use it, so the wait is on record and a freed card is not taken for nothing.
+                    with_it = wanted if lane in usable else self.wanted_lanes(queue, [*usable, lane], vram)
+                    feeds = waiting and lane in with_it
+                    if not feeds and not mine:
+                        queue.get("waiting_lanes", {}).pop(f"{rig}:{gpu}", None)
+                    if not mine and not waiting and lane in usable:
+                        # nothing left in the queue for this lane, and the card is ours to use: a job the
+                        # cluster has not started is fair game. Never for a card another wave holds: the
+                        # job would lose its place in the cluster's queue for a lane that cannot run it.
+                        self.steal_pending_job(queue, machine, gpu, vram[lane])
+                        feeds = any(r["state"] == "queued" and eligible(queue, r, rig, vram[lane]) for r in queue["runs"])
+                    if self.ensure_lane(queue, machine, gpu, view, feeds or mine):
+                        live.append(lane)
                     elif view["lanes"].get(gpu, {}).get("drain") and self.holds_lane(rig, gpu, session_name(queue, rig, gpu)):
                         # the drained loop has exited: only now is the card really free for someone else
                         self.board_release(rig, gpu, f"wave {queue['wave_id']} has nothing left for this lane")
             # every live lane is known before any is fed, so the plan weighs them all
             self.reclaim(queue, live, vram)
             for rig, gpu in live:
+                self.feed(queue, self.config.machines[rig], gpu, views[rig], vram[(rig, gpu)], self.lane_plan(queue, live, vram))
+            wanted = self.wanted_lanes(queue, live, vram)
+            for rig, gpu in live:
                 machine, view = self.config.machines[rig], views[rig]
-                self.feed(queue, machine, gpu, view, vram[(rig, gpu)], self.lane_plan(queue, live, vram))
                 still_mine = any(r["state"] in ("assigned", "running") and r["lane"] == {"rig": rig, "gpu": gpu} for r in queue["runs"])
                 if not still_mine:
                     still_waiting = any(r["state"] == "queued" and eligible(queue, r, rig, vram[(rig, gpu)]) for r in queue["runs"])
-                    if not still_waiting and not view["lanes"].get(gpu, {}).get("drain"):
+                    # drained when the queue holds nothing for it, or only runs the plan gives to faster lanes
+                    if not (still_waiting and (rig, gpu) in wanted) and not view["lanes"].get(gpu, {}).get("drain"):
                         sh(machine, 'mkdir -p "$1" && : > "$1/drain"', lane_dir(machine, queue["wave_id"], gpu))
-                        self.event("lane-drained", rig=rig, gpu=gpu)
+                        self.event("lane-drained", rig=rig, gpu=gpu, unfed=still_waiting)
             for rig, pool in queue["pool"].items():
                 if views[rig] is not None and pool["kind"] != "slurm" and rig in queue["offload"]:
                     machine = self.config.machines[rig]
@@ -1692,14 +1772,19 @@ def build_snapshot(queue: dict, runtime: dict, wave: Wave, vram: dict, at: datet
     rows: list[dict] = []
     lane_free: dict[tuple[str, str], float | None] = {}
     jobs_left: dict[str, float | None] = {}  # running cluster jobs: the wave is not over before they are
+    clusters: dict[str, dict] = {}  # per Slurm rig: job slots, running jobs' remaining time, unstarted jobs' durations
     for rig, pool in sorted(queue["pool"].items()):
         down = (runtime.get("rigs", {}).get(rig) or {}).get("down_since")
         if pool["kind"] == "slurm":
+            load = clusters.setdefault(rig, {"slots": pool["max_jobs"], "running": [], "unstarted": []})
             for run in queue["runs"]:
                 if (run.get("lane") or {}).get("rig") == rig and run["state"] in ("assigned", "running"):
                     rows.append(job_row(queue, run, rig, at))
                     if run["state"] == "running":
                         jobs_left[f"{rig} job {run['job_id']}"] = remaining_active(queue, run, rig, at)[0]
+                        load["running"].append(jobs_left[f"{rig} job {run['job_id']}"])
+                    else:
+                        load["unstarted"].append(job_duration(queue, run, rig))
             continue
         for gpu in pool["lanes"]:
             mine = [r for r in queue["runs"] if r["lane"] == {"rig": rig, "gpu": gpu}]
@@ -1748,7 +1833,15 @@ def build_snapshot(queue: dict, runtime: dict, wave: Wave, vram: dict, at: datet
                 }
             )
     horizon, basis = simulate(queue, lane_free, vram) if any(r["state"] not in TERMINAL_STATES for r in queue["runs"]) else (0.0, "terminal")
-    horizon, basis = with_cluster_jobs(horizon, basis, jobs_left)
+    if horizon is not None and clusters:
+        # queued runs no lane of this wave can take are the cluster's: not submitted yet, they still take their time
+        queued = [run for run in feed_order(queue) if run["state"] == "queued"]
+        unplaced = set(earliest_finish(queue, {lane: free for lane, free in lane_free.items() if free is not None}, vram, queued)[1])
+        for run in queued:
+            rig = next((rig for rig in sorted(clusters) if run["id"] in unplaced and eligible(queue, run, rig, None)), None)
+            if rig is not None:
+                clusters[rig]["unstarted"].append(job_duration(queue, run, rig))
+    horizon, basis = with_cluster_jobs(horizon, basis, jobs_left, clusters)
     questions = [q for q in wave.questions() if q.get("status") == "open"]
     return {
         "schema_version": SCHEMA_VERSION,
@@ -1781,20 +1874,45 @@ def build_snapshot(queue: dict, runtime: dict, wave: Wave, vram: dict, at: datet
     }
 
 
-def with_cluster_jobs(horizon: float | None, basis: str, jobs_left: dict[str, float | None]) -> tuple[float | None, str]:
-    """The lanes' horizon stretched to the last running cluster job. The feeder simulation only sees
-    lanes, so a wave whose remaining work is all on a cluster would otherwise read as due now. A
-    running job with no estimate makes the wave ETA unavailable, the way a lane without one does;
-    a pending job's start stays the scheduler's call and is not counted."""
-    if horizon is None or not jobs_left:
+EARLIEST_BASIS = "at the earliest"
+
+
+def job_duration(queue: dict, run: dict, rig: str) -> float:
+    """How long a cluster job of this run takes once it starts: the estimate, else what it asked for."""
+    estimate = estimate_run(queue, run, rig)[0]
+    return float(estimate or run.get("walltime_s") or queue["pool"][rig]["default_walltime_s"])
+
+
+def cluster_drain(slots: int, running: list[float], unstarted: list[float]) -> float:
+    """Seconds until a cluster has run every job, if each unstarted one began the moment a slot opened."""
+    free = sorted([*running, *([0.0] * max(0, slots - len(running)))]) or [0.0]
+    for duration in unstarted:
+        free[0] += duration
+        free.sort()
+    return free[-1]
+
+
+def with_cluster_jobs(
+    horizon: float | None, basis: str, jobs_left: dict[str, float | None], clusters: dict[str, dict] | None = None,
+) -> tuple[float | None, str]:
+    """The lanes' horizon stretched to the cluster's work. The feeder simulation only sees lanes, so
+    a wave whose remaining work is all on a cluster would otherwise read as due now. A running job
+    with no estimate makes the wave ETA unavailable, the way a lane without one does. A job the
+    cluster has not started counts from now through its job slots: when it starts is the
+    scheduler's call, so the ETA is then a lower bound and its basis says so (EARLIEST_BASIS)."""
+    if horizon is None:
         return horizon, basis
     unknown = sorted(name for name, left in jobs_left.items() if left is None)
     if unknown:
         return None, "cluster job ETA unavailable: " + ", ".join(unknown)
-    longest = max(left for left in jobs_left.values() if left is not None)
+    longest = max(jobs_left.values(), default=0.0)
     if longest > horizon:
-        return longest, "running cluster jobs' progress"
-    return horizon, basis
+        horizon, basis = longest, "running cluster jobs' progress"
+    unstarted = sum(len(load["unstarted"]) for load in (clusters or {}).values())
+    if not unstarted:
+        return horizon, basis
+    drained = max(cluster_drain(load["slots"], load["running"], load["unstarted"]) for load in clusters.values())
+    return max(horizon, drained), f"{EARLIEST_BASIS}: {unstarted} cluster job{'s' if unstarted != 1 else ''} not started, queue wait unknown"
 
 
 def fraction(observed: dict) -> float | None:
@@ -1985,6 +2103,8 @@ def render_brief(snapshot: dict) -> str:
     eta = view["eta"]
     if eta["kind"] == "finished":
         head = f"finished {clock(eta['at'], at)}"
+    elif eta["kind"] == "eta" and (eta["basis"] or "").startswith(EARLIEST_BASIS):
+        head = f"ETA {clock(eta['at'], at)} {eta['basis']}"
     elif eta["kind"] == "eta":
         head = f"ETA {clock(eta['at'], at)} (~{humanize(eta['seconds'])})"
     else:
@@ -2020,7 +2140,8 @@ def render_table(snapshot: dict, fmt: str) -> str:
     agent = snapshot["agent"]
     tick_age = humanize((at - parse_iso(snapshot["agent_ticked_at"])).total_seconds()) + " ago" if parse_iso(snapshot.get("agent_ticked_at")) else "never"
     backlog = "; ".join(f"{rig}: {(info or {}).get('summary', 'no pass yet')}" for rig, info in sorted(snapshot["offload"].items())) or "off"
-    eta = f"ETA {clock(snapshot['wave_eta'], at)} (estimated)" if snapshot["wave_eta"] else f"ETA unavailable: {snapshot['wave_eta_basis']}"
+    estimated = snapshot.get("wave_eta_basis") if (snapshot.get("wave_eta_basis") or "").startswith(EARLIEST_BASIS) else "estimated"
+    eta = f"ETA {clock(snapshot['wave_eta'], at)} ({estimated})" if snapshot["wave_eta"] else f"ETA unavailable: {snapshot['wave_eta_basis']}"
     if snapshot.get("finished_at"):
         eta = f"finished {clock(snapshot['finished_at'], at)}"
     header = (
@@ -2598,16 +2719,21 @@ def run_agent(wave: Wave, profile: AgentProfile, prompt: str, log_path: Path, ti
 
 
 def wake(wave: Wave, settings: Settings, reason: str) -> int:
-    """Run one headless agent on this wave. Single-flight: a tick in progress is never doubled."""
+    """Run one headless agent on this wave. Single-flight: a tick in progress is never doubled, and
+    two waves of one project never tick at once: each edits EXPERIMENTS.md and commits in the same
+    checkout. A tick skipped for either reason stays due."""
     profile = require_agent(settings)
     wave.agent_logs.mkdir(parents=True, exist_ok=True)
     lock = (wave.dir / "agent.lock").open("a+")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        print(f"[wake] wave {wave.wave_id}: an agent tick is already running; skipped")
-        lock.close()
-        return 0
+    project_lock = (wave.dir.parent / "tick.lock").open("a+")
+    for handle, busy in ((lock, "an agent tick is already running"), (project_lock, "another wave of this project is ticking")):
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(f"[wake] wave {wave.wave_id}: {busy}; skipped")
+            lock.close()
+            project_lock.close()
+            return 0
     try:
         started = now()
         with WaveLock(wave):
@@ -2631,6 +2757,7 @@ def wake(wave: Wave, settings: Settings, reason: str) -> int:
                 runtime["agent_failures"] = runtime.get("agent_failures", 0) + 1
             if session:
                 runtime["agent_session"] = session
+            record_experiments_seen(wave)
             wave.save_runtime(runtime)
             wave.log("agent-tick", reason=reason, outcome=outcome, model=profile.model, effort=profile.effort, session=session)
             if runtime["agent_failures"] == AGENT_FAILING_AFTER:
@@ -2641,7 +2768,7 @@ def wake(wave: Wave, settings: Settings, reason: str) -> int:
         print(f"[wake] wave {wave.wave_id}: {outcome} ({log_path})")
         return 0 if outcome == "exit 0" else 1
     finally:
-        fcntl.flock(lock, fcntl.LOCK_UN)
+        project_lock.close()  # closing releases the flock
         lock.close()
 
 
@@ -2682,14 +2809,29 @@ def last_good_tick(runtime: dict) -> datetime | None:
     return started
 
 
-def has_news(wave: Wave, runtime: dict, ledger: list[dict], ticked: datetime) -> bool:
-    """Whether a scheduled tick has anything to read: a ledger record since the last good tick began,
-    or a person's edit of EXPERIMENTS.md since a tick last ended (ticks write it themselves)."""
-    since = last_good_tick(runtime)
-    if since is None or any(record.get("event") != "agent-tick" and (parse_iso(record.get("at")) or now()) >= since for record in ledger):
-        return True
+def experiments_seen_path(wave: Wave) -> Path:
+    """Project-wide, not per wave: every wave's tick writes the same EXPERIMENTS.md."""
+    return wave.dir.parent / "experiments_seen.json"
+
+
+def record_experiments_seen(wave: Wave) -> None:
+    """Remember EXPERIMENTS.md as a tick left it, so only a later edit by a person reads as news."""
     with contextlib.suppress(OSError):
-        return (wave.project_root / "EXPERIMENTS.md").stat().st_mtime > ticked.timestamp()
+        board.write_json(experiments_seen_path(wave), {"mtime": (wave.project_root / "EXPERIMENTS.md").stat().st_mtime})
+
+
+def has_news(wave: Wave, runtime: dict, ledger: list[dict], ticked: datetime) -> bool:
+    """Whether a scheduled tick has anything only an agent can settle: one of SCHEDULED_EVENTS since
+    the last good tick began, or a person's edit of EXPERIMENTS.md since a tick of this project last
+    ended (ticks write it themselves, one at a time per project). Routine progress is not news: the
+    service settles runs, every event that needs judgment wakes the agent at once, and the idle and
+    closing ticks reconcile the rest."""
+    since = last_good_tick(runtime)
+    if since is None or any(record.get("event") in SCHEDULED_EVENTS and (parse_iso(record.get("at")) or now()) >= since for record in ledger):
+        return True
+    seen = (board.read_json(experiments_seen_path(wave)) or {}).get("mtime")
+    with contextlib.suppress(OSError):
+        return (wave.project_root / "EXPERIMENTS.md").stat().st_mtime > (seen if isinstance(seen, (int, float)) else ticked.timestamp())
     return False
 
 
@@ -3121,6 +3263,7 @@ def serve(board_config, settings: Settings) -> int:
     require_agent(settings)
     print(f"[serve] {Path(__file__).resolve()}: cycle every {settings.cycle_every}s, agent tick every {settings.tick_every}s (idle every {settings.idle_tick_every}s)", flush=True)
     wakers: dict[str, threading.Thread] = {}
+    ticking: dict[str, Path] = {}  # wave id -> project root of each tick thread
     followups: dict[str, threading.Thread] = {}
     sent: dict[str, float] = {}
     health_due = 0.0
@@ -3132,7 +3275,12 @@ def serve(board_config, settings: Settings) -> int:
     def start(wave: Wave, reason: str) -> None:
         thread = threading.Thread(target=wake, args=(wave, settings, reason), daemon=True)
         wakers[wave.wave_id] = thread
+        ticking[wave.wave_id] = wave.project_root
         thread.start()
+
+    def sibling_ticking(wave: Wave) -> bool:
+        """Ticks edit EXPERIMENTS.md and commit in the project's one checkout: one at a time per project."""
+        return any(thread.is_alive() and ticking.get(key) == wave.project_root for key, thread in wakers.items() if key != wave.wave_id)
 
     try:
         while True:
@@ -3146,14 +3294,17 @@ def serve(board_config, settings: Settings) -> int:
                 write_heartbeat(board_config)  # a long cycle over several waves stays proven alive
                 try:
                     outcome = cycle_wave(wave, board_config, settings)
-                except (SupervisorError, rigsync.RigSyncError, board.BoardError, OSError) as exc:
+                except (SupervisorError, rigsync.RigSyncError, board.BoardError, OSError, subprocess.SubprocessError) as exc:
                     print(f"[serve] wave {wave.wave_id}: cycle failed: {exc}", file=sys.stderr)
+                    continue
+                except Exception:  # one wave's bug must not stop the service for every other wave
+                    print(f"[serve] wave {wave.wave_id}: cycle crashed:\n{traceback.format_exc()}", file=sys.stderr)
                     continue
                 notify_events(wave, settings, outcome["events"], sent)
                 if alive(wakers, wave.wave_id):
                     continue
-                if reason := wake_due(wave, settings):
-                    start(wave, reason)
+                if (reason := wake_due(wave, settings)) and not sibling_ticking(wave):
+                    start(wave, reason)  # a tick held back by a sibling's is due again next cycle
             start_followups(board_config, settings, followups)
             time.sleep(settings.cycle_every)
     except KeyboardInterrupt:

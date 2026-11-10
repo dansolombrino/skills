@@ -50,13 +50,14 @@ python3 "$SUPERVISOR" followups                               # every follow-up,
 
 A lane holds one run in flight plus one buffered and takes a run only when no other live lane
 finishes it sooner (rig weight, then measured rate); a buffered run another lane finishes clearly
-sooner is taken back (`run-reclaimed`). The hub reaches rigs; rigs never reach the hub.
+sooner is taken back (`run-reclaimed`). A card the plan does not feed is released. The hub
+reaches rigs; rigs never reach the hub.
 
 The agent is woken at once by every event that needs judgment: a failed run or job, a lane stopped,
 blocked or relaunched, a rig down or back, an answer, a collect/offload/submit failure, the wave
 turning terminal, `heartbeat-stale` (a run's heartbeat older than three minutes) and `lane-idle-tail`
 (a lane with nothing it can take while another still holds runs), each once per episode. The scheduled tick (`tick_every`, default 30 minutes) is only a safety net, skipped while
-nothing changed, with a real tick every `idle_tick_every` (6 hours); a failed tick is never idle.
+nothing needs it, with a real tick every `idle_tick_every` (6 hours); a failed tick is never idle.
 
 - **Evaluations converge on the hub.** Every cycle runs `rigsync collect` for each reachable pool rig
   except the hub. A failure is one `collect-failed` event per new problem and never stops the cycle.
@@ -115,8 +116,8 @@ work requests that same profile.
   may be working there): a `⚠` line and a notice.
 - **Releases.** Running from a versioned install, the service moves onto a newer installed version
   between cycles once that copy's `check` passes and no agent it started runs.
-- **Held GPUs.** A lane `waiting for board` never makes the wave ETA unavailable while another can run.
-- **Cluster jobs.** The wave ETA waits for the last running cluster job, not for a pending one.
+- **Held GPUs.** A lane `waiting for board` never makes the wave ETA unavailable while others run.
+- **Cluster jobs.** Unstarted ones make the ETA a lower bound.
 
 ## Follow-ups
 
