@@ -85,7 +85,7 @@ small.stamp{font-size:13px}
 .slots{display:flex;gap:4px;padding:7px;border-radius:10px;background:var(--panel);border:1px solid var(--rule);box-shadow:var(--shadow);transition:border-color .15s}
 .slot{width:16px;height:48px;border-radius:4px;position:relative;overflow:hidden;background:color-mix(in srgb,var(--c) 10%,var(--panel));box-shadow:inset 0 0 0 1.5px var(--c);--c:var(--unk)}
 .slot i{position:absolute;left:0;right:0;bottom:0;height:calc(var(--u,0)*100%);background:var(--c);opacity:.6}
-.slot.free{--c:var(--free)}.slot.held{--c:var(--run)}.slot.foreign{--c:var(--foreign)}.slot.silent{--c:var(--warn)}
+.slot.free{--c:var(--free)}.slot.held{--c:var(--run)}.slot.foreign{--c:var(--foreign)}.slot.silent{--c:var(--warn)}.slot.hold{--c:var(--pend)}
 .slot.bad{--c:var(--bad);background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--bad) 30%,var(--panel)) 0 3px,var(--panel) 3px 6px)}
 .slot.unknown{--c:var(--unk);box-shadow:inset 0 0 0 1.5px var(--rule2);background:var(--sunk)}
 .slot.unknown::after{content:"";position:absolute;inset:0;background:repeating-linear-gradient(0deg,transparent 0 5px,var(--rule2) 5px 6px)}
@@ -159,7 +159,7 @@ small.stamp{font-size:13px}
 .gpu::before{content:"";position:absolute;left:0;top:16px;bottom:16px;width:3px;border-radius:0 3px 3px 0;background:var(--c)}
 .gpu.free{--c:var(--free)}.gpu.running,.gpu.claimed{--c:var(--run)}.gpu.silent{--c:var(--warn)}
 .gpu.interrupted{--c:var(--bad);background:color-mix(in srgb,var(--bad) var(--tint),var(--panel))}
-.gpu.unreachable,.gpu.unknown{--c:var(--unk)}.gpu.foreign{--c:var(--foreign)}.gpu.pending{--c:var(--pend)}
+.gpu.unreachable,.gpu.unknown{--c:var(--unk)}.gpu.foreign{--c:var(--foreign)}.gpu.pending,.gpu.hold{--c:var(--pend)}
 .gpu.silent{background:color-mix(in srgb,var(--warn) var(--tint),var(--panel))}
 .gh{display:flex;align-items:baseline;gap:4px 12px;flex-wrap:wrap;min-width:0}
 .gid{font-weight:600;white-space:nowrap;font-size:15px}
@@ -167,7 +167,7 @@ small.stamp{font-size:13px}
 .st{margin-left:auto;font-size:13px;font-weight:500;color:var(--c);white-space:nowrap;display:inline-flex;align-items:center;gap:7px}
 .st::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--c)}
 .st.free{--c:var(--free)}.st.running,.st.claimed{--c:var(--run)}.st.silent{--c:var(--warn)}.st.interrupted{--c:var(--bad)}
-.st.unreachable,.st.unknown{--c:var(--unk)}.st.foreign{--c:var(--foreign)}.st.pending{--c:var(--pend)}
+.st.unreachable,.st.unknown{--c:var(--unk)}.st.foreign{--c:var(--foreign)}.st.pending,.st.hold{--c:var(--pend)}
 .free-line{display:grid;grid-template-columns:auto auto 1fr auto;gap:4px 12px;align-items:baseline}
 .free-line .gauges{grid-column:1/-1;margin-top:8px}
 .who{font-size:17px;font-weight:600;letter-spacing:-.2px;overflow-wrap:anywhere;margin-top:6px;line-height:1.35}
@@ -257,7 +257,7 @@ details ul{margin:8px 0 0;padding-left:20px;font-size:14px;line-height:1.7}
 .hist td{padding:12px 16px;border-bottom:1px solid var(--rule);vertical-align:baseline}
 .hist tr:last-child td{border-bottom:0}
 .hist td.ev{white-space:nowrap;font-weight:600}
-.ev.claim,.ev.reclaim,.ev.adopt{color:var(--run)}.ev.release{color:var(--free)}.ev.interrupted{color:var(--bad)}.ev.reconcile{color:var(--muted)}.ev.refresh{color:var(--faint)}
+.ev.claim,.ev.reclaim,.ev.adopt{color:var(--run)}.ev.release{color:var(--free)}.ev.interrupted{color:var(--bad)}.ev.reconcile{color:var(--muted)}.ev.refresh{color:var(--faint)}.ev.hold{color:var(--pend)}
 
 /* notes */
 .notes{color:var(--muted);font-size:13px;padding:24px 0 8px;border-top:1px solid var(--rule);margin-top:16px;max-width:100ch;line-height:1.6}
@@ -384,7 +384,7 @@ details.fin[open]>summary{margin-bottom:20px}
 <div class="wrap">
 <section id="fleethead">
   <div class="hero"><div class="answer" id="answer"></div><div class="rack" id="rack"></div>
-    <div class="legend"><span style="--c:var(--free)"><i></i>free</span><span style="--c:var(--run)"><i></i>held by a lane</span><span style="--c:var(--foreign)"><i></i>someone else</span><span style="--c:var(--bad)"><i></i>needs recovery</span><span style="--c:var(--unk)"><i></i>unknown</span><span>fill shows utilization</span></div></div>
+    <div class="legend"><span style="--c:var(--free)"><i></i>free</span><span style="--c:var(--run)"><i></i>held by a lane</span><span style="--c:var(--pend)"><i></i>on hold</span><span style="--c:var(--foreign)"><i></i>someone else</span><span style="--c:var(--bad)"><i></i>needs recovery</span><span style="--c:var(--unk)"><i></i>unknown</span><span>fill shows utilization</span></div></div>
   <div class="next" id="next"></div>
   <div class="issues" id="issues" hidden></div>
   <div class="filters"><input type="search" id="q" placeholder="Filter by project, experiment, run, user" autocomplete="off" aria-label="Filter"><span class="seg" id="tiles"></span><button id="freefirst" title="Rigs with free GPUs first">Free first</button></div>
@@ -456,10 +456,11 @@ document.addEventListener("click",async e=>{const b=e.target.closest("button.cop
   const old=b.textContent;b.textContent="Copied";b.classList.add("ok");setTimeout(()=>{b.textContent=old;b.classList.remove("ok")},1200)});
 
 // ── derived ──
-function laneState(l){const st=(l.observed&&l.observed.state)||"claimed";if(st==="running"&&l.observed&&l.observed.orchestrator_silent_s!=null&&l.observed.orchestrator_silent_s>1800)return "silent";return st}
+function laneState(l){if(l.hold)return "hold";const st=(l.observed&&l.observed.state)||"claimed";if(st==="running"&&l.observed&&l.observed.orchestrator_silent_s!=null&&l.observed.orchestrator_silent_s>1800)return "silent";return st}
+const laneWho=l=>l.hold?`on hold: ${l.hold.reason||"?"}`:`${l.project} / ${l.experiment}`;
 function laneKey(rig,l){return rig+" GPU "+l.gpu}
 const gpuIdx=g=>String(g).split(",").map(Number);
-function rigMatches(rig,q){if(!q)return true;const hay=[rig.rig,...(rig.lanes||[]).flatMap(l=>[l.project,l.experiment,l.wave_id,l.active_run,l.progress,l.tmux_session]),...(rig.gpus||[]).flatMap(g=>(g.processes||[]).flatMap(p=>[p.user,p.name])),...(rig.jobs||[]).flatMap(j=>[j.name,j.project,j.experiment,j.job_id,j.partition,j.nodes])].join(" ").toLowerCase();return hay.includes(q)}
+function rigMatches(rig,q){if(!q)return true;const hay=[rig.rig,...(rig.lanes||[]).flatMap(l=>[l.project,l.experiment,l.wave_id,l.active_run,l.progress,l.tmux_session,l.hold&&l.hold.reason]),...(rig.gpus||[]).flatMap(g=>(g.processes||[]).flatMap(p=>[p.user,p.name])),...(rig.jobs||[]).flatMap(j=>[j.name,j.project,j.experiment,j.job_id,j.partition,j.nodes])].join(" ").toLowerCase();return hay.includes(q)}
 function rigCats(rig){const c=new Set();if(rig.kind==="slurm"){c.add("slurm");if(rig.reachable===false||(rig.budgets||[]).some(b=>b.in_use&&!["ok","low"].includes(b.status)))c.add("issues");return c}
   if((rig.free_gpus||[]).length)c.add("free");if((rig.lanes||[]).length)c.add("held");if((rig.foreign||[]).length)c.add("foreign");
   if(rig.reachable===false||rig.gpu_probe_ok===false||(rig.lanes||[]).some(l=>["interrupted","silent","unreachable"].includes(laneState(l))))c.add("issues");return c}
@@ -477,7 +478,7 @@ function slotStates(rig){const out=new Map();const gpus=rig.gpus||[];const down=
   for(const g of gpus)out.set(g.index,{st:down?"unknown":"unknown",g});
   for(const i of rig.free_gpus||[])out.set(i,{st:down?"unknown":"free",g:out.get(i)&&out.get(i).g});
   for(const i of rig.foreign||[])out.set(i,{st:"foreign",g:out.get(i)&&out.get(i).g});
-  for(const l of rig.lanes||[]){const s=laneState(l);const st=s==="interrupted"?"bad":s==="silent"?"silent":s==="unreachable"?"unknown":"held";for(const i of gpuIdx(l.gpu))out.set(i,{st,g:out.get(i)&&out.get(i).g,l})}
+  for(const l of rig.lanes||[]){const s=laneState(l);const st=s==="interrupted"?"bad":s==="silent"?"silent":s==="unreachable"?"unknown":s==="hold"?"hold":"held";for(const i of gpuIdx(l.gpu))out.set(i,{st,g:out.get(i)&&out.get(i).g,l})}
   return [...out.entries()].sort((a,b)=>a[0]-b[0])}
 
 // ── header ──
@@ -487,14 +488,14 @@ function drawHeader(d,nowMs){const s=d.summary||{};$("stamp").innerHTML=`Board r
   $("answer").innerHTML=`<div class="n ${free?"":"none"}">${free}</div><div class="of">GPUs free of <b>${esc(s.gpus??"?")}</b></div>${stale>0?`<div class="of" title="free at the last probe, but the rig did not answer the latest one">+${stale} last known free on unreachable rigs</div>`:""}`;
   // rack: every card in the fleet, by machine, machines by group
   const bay=(r,g)=>{const down=r.reachable===false;const sl=slotStates(r);
-    const cells=sl.map(([i,x])=>{const u=x.g&&x.g.utilization!=null?x.g.utilization/100:0;const who=x.l?`${x.l.project} / ${x.l.experiment}`:x.st==="foreign"?((x.g&&x.g.processes||[]).map(p=>p.user).join(", ")||"another user"):x.st;
+    const cells=sl.map(([i,x])=>{const u=x.g&&x.g.utilization!=null?x.g.utilization/100:0;const who=x.l?laneWho(x.l)+(x.l.hold?`, ends ${clock(x.l.hold.until)}`:""):x.st==="foreign"?((x.g&&x.g.processes||[]).map(p=>p.user).join(", ")||"another user"):x.st;
       return `<span class="slot ${x.st}" style="--u:${u}" title="${esc(r.rig)} GPU ${i}: ${esc(who)}${x.g?` (${x.g.utilization??"?"}% util)`:""}"><i></i></span>`}).join("")||`<span class="slot unknown" title="no GPUs reported"></span>`;
     return `<button class="bay ${down?"down":""} ${r.opt_in?"optin":""}" data-rig="${esc(r.rig)}" title="${esc(r.rig)}${r.opt_in?" (opt-in)":""}${down?" (unreachable)":""}"><span class="slots">${cells}</span><span class="bayn">${esc(g.stem?r.rig.slice(g.key.length+1):r.rig)}</span></button>`};
   $("rack").innerHTML=fleetGroups(d.rigs||[]).map(g=>`<div class="rgroup"><div class="rgl">${esc(g.stem?g.key+"-*":g.key)}</div><div class="rbays">${g.rigs.map(r=>bay(r,g)).join("")}</div></div>`).join("")+
     ((d.slurm||[]).length?`<div class="rgroup"><div class="rgl">Slurm clusters</div><div class="rbays">`:"")+(d.slurm||[]).map(c=>{const jobs=c.jobs||[];const pips=jobs.slice(0,40).map(j=>`<span class="slot jobdot ${j.state==="RUNNING"?"held":j.state==="PENDING"?"pending":"unknown"}" title="${esc(j.job_id)} ${esc(j.state)}"></span>`).join("");
       return `<button class="bay ${c.reachable===false?"down":""}" data-rig="${esc(c.rig)}" title="${esc(c.rig)}: ${c.running||0} running, ${c.pending||0} pending"><span class="slots cluster">${pips||`<span class="stamp" style="font-size:11px">idle</span>`}</span><span class="bayn">${esc(c.rig)} ${c.running||0}+${c.pending||0}</span></button>`}).join("")+((d.slurm||[]).length?`</div></div>`:"");
   const nf=s.next_free;
-  $("next").innerHTML=nf?`<span class="lbl">Next to free</span><b>${esc(nf.rig)} GPU ${esc(nf.gpu)}</b><span>${esc(nf.project)} <span class="stamp">/ ${esc(nf.experiment)}</span></span><span>${until(nf.eta,nowMs)}</span>${nf.eta_basis?`<small class="stamp">${esc(nf.eta_basis)}</small>`:""}`:(s.held?`<span class="lbl">No held lane has reported an ETA yet.</span>`:`<span class="lbl">Nothing is held on the board.</span>`);
+  $("next").innerHTML=nf?`<span class="lbl">Next to free</span><b>${esc(nf.rig)} GPU ${esc(nf.gpu)}</b><span>${nf.hold?`on hold <span class="stamp">/ ${esc(nf.hold.reason)}</span>`:`${esc(nf.project)} <span class="stamp">/ ${esc(nf.experiment)}</span>`}</span><span>${until(nf.eta,nowMs)}</span>${nf.eta_basis?`<small class="stamp">${esc(nf.eta_basis)}</small>`:""}`:(s.held?`<span class="lbl">No held lane has reported an ETA yet.</span>`:`<span class="lbl">Nothing is held on the board.</span>`);
   // the things to act on, one line each
   const iss=[];
   for(const a of s.budget_alerts||[]){const rig=(String(a).match(/^(\S+)/)||[])[1]||"";iss.push(["bad","Budget",`${esc(a)}<sup><a href="#fn-saldo">1</a></sup>`,rig])}
@@ -533,8 +534,15 @@ function params(text,opts){if(!text)return "";const o=opts||{};const toks=String
   const chips=[],dirs=[];for(const t of toks){const i=t.indexOf("=");if(i>0)chips.push([t.slice(0,i),dec(t.slice(i+1))]);else if(!o.hideDirs)dirs.push(t)}
   return `<span class="params" title="${esc(text)}">${dirs.length?`<span class="dir">${esc(dirs.join("/"))}</span>`:""}${chips.map(([k,v])=>`<span class="chip"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></span>`).join("")}</span>`}
 function runParams(key,text){if(!text)return `<span class="stamp">no run reported</span>`;return params(text,{hideDirs:true})}
-const LABEL={running:"running",claimed:"claimed",silent:"silent orchestrator",interrupted:"interrupted",unreachable:"unreachable"};
-function laneHtml(rig,l,gpus,nowMs){const st=laneState(l);const gIdx=gpuIdx(l.gpu);const g=gIdx.length===1?gpus.get(gIdx[0]):null;
+const LABEL={running:"running",claimed:"claimed",silent:"silent orchestrator",interrupted:"interrupted",unreachable:"unreachable",hold:"on hold"};
+// A hold keeps cards away from every wave until its end time; no session, no runs, no orchestrator.
+function holdHtml(l,gpus,nowMs){const gIdx=gpuIdx(l.gpu);const g=gIdx.length===1?gpus.get(gIdx[0]):null;const end=l.hold.until;const t=Date.parse(end),d=(t-nowMs)/1000;
+  const eta=isNaN(t)?`<div class="etab na"><div class="s">ends at</div><div class="t">${esc(end||"?")}</div></div>`:`<div class="etab"><div class="s">ends at</div><div class="t">${esc(hhmm(end))}</div><div class="s">${d>=0?`in <b>${fmtAge(d)}</b>`:`<span class="over">ended ${fmtAge(-d)} ago</span>`}${dayTag(end)?" "+esc(dayTag(end)):""}</div></div>`;
+  return `<div class="gpu hold"><div class="gh"><span class="gid">GPU ${esc(l.gpu)}</span>${gIdx.length>1?`<span class="gmodel">${gIdx.length} cards</span>`:g?`<span class="gmodel">${gpuName(g)}</span>`:""}<span class="st hold">on hold</span></div>
+    <div class="lbody"><div class="l"><div class="who">${esc(l.hold.reason||"")}</div><div class="stamp" style="margin-top:4px">Kept away from every wave until ${esc(abs(end))}${d<0?"; the next probe releases it":""}.</div></div>${eta}</div>
+    ${g?gpuGauges(g):""}
+    <div class="foot"><span>held ${ago(l.claimed_at,nowMs)}</span><span>updated ${ago(l.updated_at,nowMs)}</span></div></div>`}
+function laneHtml(rig,l,gpus,nowMs){if(l.hold)return holdHtml(l,gpus,nowMs);const st=laneState(l);const gIdx=gpuIdx(l.gpu);const g=gIdx.length===1?gpus.get(gIdx[0]):null;
   const tot=l.runs_total,done=l.runs_done;const adopted=l.observed&&l.observed.adopted;
   const lr=l.observed&&l.observed.run;const frac=lr?(lr.state==="done"?1:lr.state==="running"&&typeof lr.completed==="number"&&typeof lr.total==="number"&&lr.total>0?Math.min(1,lr.completed/lr.total):0):0;
   const overall=tot&&done!=null?Math.min(tot,done+frac):null;
@@ -652,15 +660,15 @@ function draw(){if(!last)return;const nowMs=Date.now();drawHeader(last,nowMs);if
 let histData=null,histAt=0;
 async function loadHistory(){try{const r=await fetch("api/history?hours=24"+tokenQ(),{cache:"no-store"});if(!r.ok)throw new Error(r.status);histData=await r.json();histAt=Date.now()}catch(e){histData={events:[],error:String(e)}}}
 function evText(e){const s=e.session?`<code>${esc(e.session)}</code>`:"";
-  switch(e.event){case "claim":return `claimed ${s}`;case "reclaim":return `re-claimed (recovery) ${s}`;case "adopt":return `adopted live session ${s}`;case "release":return `released: ${esc(e.reason||"")} ${s}`;case "interrupted":return `interrupted: rig rebooted ${e.boot_at?abs(e.boot_at):""} ${s}`;case "refresh":return `refresh, ${esc(e.active_run||"")}`;case "reconcile":return (e.changes||[]).map(esc).join("<br>");default:return esc(JSON.stringify(e))}}
+  switch(e.event){case "claim":return `claimed ${s}`;case "reclaim":return `re-claimed (recovery) ${s}`;case "adopt":return `adopted live session ${s}`;case "hold":return `${e.renewed?"hold changed":"on hold"} until ${esc(abs(e.until))}: ${esc(e.reason||"")}`;case "release":return `released: ${esc(e.reason||"")} ${s}`;case "interrupted":return `interrupted: rig rebooted ${e.boot_at?abs(e.boot_at):""} ${s}`;case "refresh":return `refresh, ${esc(e.active_run||"")}`;case "reconcile":return (e.changes||[]).map(esc).join("<br>");default:return esc(JSON.stringify(e))}}
 async function drawHistory(force){const sec=$("hist");if(ui.tab!=="history")return;if(force||!histData||Date.now()-histAt>30000)await loadHistory();const nowMs=Date.now();
   const ev=(histData.events||[]);sec.innerHTML=`<h2>The last 24 hours</h2><div class="sub">${ev.length} event${ev.length===1?"":"s"} on the board; ten-minute refresh ticks are hidden.${histData.error?` <span style="color:var(--bad)">Failed to load: ${esc(histData.error)}</span>`:""}</div>`+(ev.length?`<div style="overflow-x:auto"><table><tr><th>When</th><th>Event</th><th>Where</th><th>Detail</th></tr>${ev.map(e=>`<tr><td style="white-space:nowrap">${ago(e.at,nowMs)}</td><td class="ev ${esc(e.event)}">${esc(e.event)}</td><td style="white-space:nowrap">${esc(e.rig||"")}${e.gpu!=null?" GPU "+esc(e.gpu):""}</td><td>${evText(e)}</td></tr>`).join("")}</table></div>`:`<div class="empty big">A quiet day<small>No claims, releases, adoptions or interruptions in the last 24 hours.</small></div>`);
   $("stamp").innerHTML=`History read ${esc(clock(new Date(histAt||nowMs).toISOString()))}`}
 
 // ── notifications ──
-function diffAndNotify(d){const cur=new Map();for(const r of d.rigs||[])for(const l of r.lanes||[])cur.set(laneKey(r.rig,l),{st:laneState(l),who:`${l.project} / ${l.experiment}`});
+function diffAndNotify(d){const cur=new Map();for(const r of d.rigs||[])for(const l of r.lanes||[])cur.set(laneKey(r.rig,l),{st:laneState(l),who:laneWho(l)});
   if(prevLanes&&ui.notify&&"Notification"in window&&Notification.permission==="granted"){const msgs=[];
-    for(const [k,v] of cur){const p=prevLanes.get(k);if(!p)msgs.push(`${k} claimed by ${v.who}`);else if(p.st!==v.st&&["interrupted","silent"].includes(v.st))msgs.push(`${k} ${v.st} (${v.who})`)}
+    for(const [k,v] of cur){const p=prevLanes.get(k);if(!p)msgs.push(v.st==="hold"?`${k} ${v.who}`:`${k} claimed by ${v.who}`);else if(p.st!==v.st&&["interrupted","silent"].includes(v.st))msgs.push(`${k} ${v.st} (${v.who})`)}
     for(const [k,p] of prevLanes)if(!k.startsWith("__rig__")&&!cur.has(k))msgs.push(`${k} freed (was ${p.who})`);
     for(const r of d.rigs||[])if(r.reachable===false){const was=prevLanes.get("__rig__"+r.rig);if(was!=="down")msgs.push(`${r.rig} unreachable`)}
     if(msgs.length)try{new Notification("rig-board",{body:msgs.join("\n")})}catch(e){}}

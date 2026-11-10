@@ -293,6 +293,119 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("unknown rig", err)
 
+    # ── hold ──
+
+    def hold(self, rig: str = "rig-4090", gpu: str = "0", until: str = "6h", reason: str = "colleague borrows the card") -> tuple[int, str, str]:
+        return self.run_cli("hold", "--rig", rig, "--gpu", gpu, "--until", until, "--reason", reason)
+
+    def test_hold_writes_a_lane_no_wave_can_mistake_for_its_own(self) -> None:
+        code, out, err = self.hold(rig="behemoth", gpu="2,3")  # not our cards on a shared rig: a hold needs no grant
+        self.assertEqual(code, 0, out + err)
+        lane = self.lane("behemoth", "2,3")
+        assert lane is not None
+        self.assertIsNone(lane["tmux_session"])
+        self.assertIsNone(lane["wave_id"])
+        self.assertEqual(lane["project"], "hold")
+        self.assertEqual(lane["observed"]["state"], "hold")
+        self.assertEqual(lane["hold"]["reason"], "colleague borrows the card")
+        self.assertEqual(lane["eta"], lane["hold"]["until"])
+        first_claimed = lane["claimed_at"]
+        code, out, err = self.hold(rig="behemoth", gpu="2,3", until="2d", reason="still borrowed")
+        self.assertEqual(code, 0, out + err)
+        lane = self.lane("behemoth", "2,3")
+        assert lane is not None
+        self.assertEqual(lane["hold"]["reason"], "still borrowed")
+        self.assertEqual(lane["claimed_at"], first_claimed)
+        self.assertEqual([(h["event"], h["renewed"]) for h in self.history()], [("hold", False), ("hold", True)])
+
+    def test_hold_refuses_a_held_set_and_an_overlapping_one(self) -> None:
+        self.assertEqual(self.claim()[0], 0)
+        code, _, err = self.hold()
+        self.assertEqual(code, 3)
+        self.assertIn("held by grokking wave 20260908-101500", err)
+        self.assertEqual(self.lane()["tmux_session"], SESSION)  # type: ignore[index]
+        self.assertEqual(self.hold(rig="behemoth", gpu="0,1")[0], 0)
+        code, _, err = self.hold(rig="behemoth", gpu="1")
+        self.assertEqual(code, 3)
+        self.assertIn("overlaps gpu1: a hold until", err)
+        self.assertIsNone(self.lane("behemoth", "1"))
+
+    def test_claim_and_refresh_refuse_a_set_on_hold(self) -> None:
+        self.assertEqual(self.hold()[0], 0)
+        code, _, err = self.claim()
+        self.assertEqual(code, 3)
+        self.assertIn("is held by a hold until", err)
+        code, _, err = self.claim(**{"--gpu": "0,1"})
+        self.assertEqual(code, 3)
+        self.assertIn("overlaps gpu0,1: a hold until", err)
+        code, _, err = self.run_cli("refresh", "--rig", "rig-4090", "--gpu", "0", "--progress", "x")
+        self.assertEqual(code, 2)
+        self.assertIn("change it with hold", err)
+        self.assertEqual(self.lane()["project"], "hold")  # type: ignore[index]
+
+    def test_hold_until_accepts_durations_and_iso_times(self) -> None:
+        start = datetime.fromisoformat("2026-11-10T10:00:00+01:00")
+        self.assertEqual(board.parse_until("6h", start), start + timedelta(hours=6))
+        self.assertEqual(board.parse_until("90m", start), start + timedelta(minutes=90))
+        self.assertEqual(board.parse_until("2d", start), start + timedelta(days=2))
+        self.assertEqual(board.parse_until("2026-11-10T18:30:00+01:00", start), start + timedelta(hours=8, minutes=30))
+        self.assertIsNotNone(board.parse_until("2099-01-01T08:00", start).tzinfo)  # naive means local time
+        for bad in ("soon", "6 weeks", "0h", "2026-11-10T09:00:00+01:00"):
+            with self.assertRaises(board.BoardError, msg=bad):
+                board.parse_until(bad, start)
+        code, _, err = self.hold(until="tomorrow")
+        self.assertEqual(code, 2)
+        self.assertIn("until must be", err)
+        self.assertIsNone(self.lane())
+
+    def test_reconcile_keeps_a_hold_without_a_session_and_releases_it_once_it_ends(self) -> None:
+        self.assertEqual(self.hold(until="2h")[0], 0)
+        reboot = (datetime.now().astimezone() + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+        probes = {"rig-4090": probe_output([SESSION], [(0, 20000, 95)], reboot), "behemoth": probe_output([], [], reboot)}
+        code, out = self.reconcile_with(probes)
+        self.assertEqual(code, 0)
+        lane = self.lane()
+        assert lane is not None
+        self.assertEqual(lane["observed"]["state"], "hold")  # not interrupted by the reboot, nothing adopted over it
+        self.assertIsNone(lane["tmux_session"])
+        self.assertIn("not adopted", out)
+        self.assertEqual(board.read_json(self.config.rig_path("rig-4090"))["foreign"], [])  # type: ignore[index]
+        self.assertEqual(self.reconcile_with({"rig-4090": None, "behemoth": None})[0], 0)
+        self.assertEqual(self.lane()["observed"]["state"], "hold")  # type: ignore[index]
+        later = datetime.now().astimezone() + timedelta(hours=3)
+        with mock.patch.object(board, "now", return_value=later):
+            code, out = self.reconcile_with({"rig-4090": None, "behemoth": None})
+        self.assertEqual(code, 0)
+        self.assertIsNone(self.lane())
+        self.assertIn("hold expired → released", out)
+        release = [h for h in self.history() if h["event"] == "release"]
+        self.assertEqual([(h["gpu"], h["reason"]) for h in release], [("0", "hold expired")])
+
+    def test_status_free_and_history_show_a_hold(self) -> None:
+        self.assertEqual(self.hold(until="90m", reason="ad-hoc profiling")[0], 0)
+        code, out, _ = self.run_cli("status", "--json")
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        lane = data["rigs"][0]["lanes"][0]
+        self.assertEqual(lane["hold"]["reason"], "ad-hoc profiling")
+        summary = data["summary"]
+        self.assertEqual((summary["held"], summary["on_hold"]), (1, 1))
+        self.assertEqual(summary["next_free"]["eta"], lane["hold"]["until"])
+        self.assertEqual(summary["next_free"]["hold"]["reason"], "ad-hoc profiling")
+        code, out, _ = self.run_cli("status")
+        self.assertEqual(code, 0)
+        self.assertIn("gpu0  hold", out)
+        self.assertIn("ad-hoc profiling  until", out)
+        self.assertIn("1 held (1 on hold)", out)
+        code, out, _ = self.run_cli("free", "rig-4090", "0")
+        self.assertEqual(code, 1)
+        self.assertIn("hold (ad-hoc profiling)", out)
+        code, out, _ = self.run_cli("history")
+        self.assertIn("ad-hoc profiling", out)
+        self.assertEqual(self.run_cli("release", "--rig", "rig-4090", "--gpu", "0", "--reason", "profiling done")[0], 0)
+        self.assertEqual(self.history()[-1]["reason"], "profiling done")
+        self.assertEqual(self.run_cli("free", "rig-4090", "0")[0], 0)
+
     # ── reconcile ──
 
     def reconcile_with(

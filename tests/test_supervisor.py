@@ -188,7 +188,7 @@ class SupervisorTests(unittest.TestCase):
             "weights": {"hub": 1.0, "peer": 0.5, "cluster": 1.0},
             "offload": extra.get("offload", []),
             "runs": entries,
-            **{key: extra[key] for key in ("fix_depth", "fixes_wave") if key in extra},
+            **{key: extra[key] for key in ("fix_depth", "fixes_wave", "priority") if key in extra},
         }
         payload["weights"] = {rig: payload["weights"][rig] for rig in payload["pool"]}
         path = self.base / "manifest.json"
@@ -602,6 +602,84 @@ class SupervisorTests(unittest.TestCase):
         sessions = (self.base / "tmux-sessions").read_text() if (self.base / "tmux-sessions").exists() else ""
         self.assertNotIn("_peer_gpu0", sessions)
         self.assertNotIn("peer:0", self.queue().get("waiting_lanes", {}))
+
+    # ── several waves, one fleet ──
+
+    def ask_for(self, rig: str, *, priority: int = 0, remaining_s: float = 1.0, age_s: int = 0) -> Path:
+        """Another wave's standing request for a card, as its own cycle would have written it."""
+        path = supervisor.requests_path(board.load_config(self.registry), rig, "0")
+        at = supervisor.iso(supervisor.now() - supervisor.timedelta(seconds=age_s))
+        board.write_json(path, {"other__20260101-000000": {"project": "other", "wave_id": "20260101-000000", "priority": priority, "remaining_s": remaining_s, "at": at}})
+        return path
+
+    def test_which_wave_goes_first_on_a_card_both_want(self) -> None:
+        wave = lambda priority, remaining_s: {"priority": priority, "remaining_s": remaining_s}  # noqa: E731
+        self.assertTrue(supervisor.goes_first(wave(1, 9e6), wave(0, 10.0)), "the higher priority, whatever is left")
+        self.assertFalse(supervisor.goes_first(wave(0, 10.0), wave(1, 9e6)))
+        self.assertTrue(supervisor.goes_first(wave(0, 50.0), wave(0, 100.0)), "equal priority: clearly less work left")
+        self.assertFalse(supervisor.goes_first(wave(0, 90.0), wave(0, 100.0)), "too close: the card would change hands every run")
+        self.assertFalse(supervisor.goes_first(wave(0, 100.0), wave(0, 100.0)))
+
+    def test_a_wave_hands_its_card_to_one_that_goes_first_between_runs_and_asks_for_it_back(self) -> None:
+        self.register()
+        self.cli("cycle", "--wave", WAVE)
+        before = [r["id"] for r in self.queue()["runs"] if r["lane"] == {"rig": "hub", "gpu": "0"}]
+        self.assertTrue(before)
+        requests = self.ask_for("hub", priority=1, remaining_s=9e9)
+        self.cli("cycle", "--wave", WAVE)
+        queue = self.queue()
+        self.assertEqual([r["id"] for r in queue["runs"] if r["lane"] == {"rig": "hub", "gpu": "0"}], [], "its unstarted runs are taken back")
+        self.assertTrue(queue["waiting_lanes"]["hub:0"].startswith("yielded to other wave 20260101-000000"))
+        self.assertEqual(len(self.events("lane-yielded")), 1)
+        self.assertTrue((self.lane(self.hub) / "drain").exists())
+        self.assertTrue([r for r in queue["runs"] if r["lane"] == {"rig": "peer", "gpu": "0"}], "its other lane goes on")
+        lane_file = self.base / "board" / "lanes" / "hub" / "gpu0.json"
+        self.assertTrue(lane_file.exists(), "held until the lane's loop has exited")
+        sessions = self.base / "tmux-sessions"
+        sessions.write_text("".join(line + "\n" for line in sessions.read_text().split() if "_hub_gpu0" not in line))
+        self.cli("cycle", "--wave", WAVE)
+        self.assertFalse(lane_file.exists(), "the card is free for the wave that goes first")
+        self.assertEqual(len(self.events("lane-yielded")), 1, "one event per hand-over")
+        self.assertIn(f"proj__{WAVE}", board.read_json(requests), "it still has runs for the card: it asks for it back")
+        self.assertIn("yielded to other wave", self.cli("table", "--wave", WAVE)[1])
+        requests.unlink()
+        self.cli("cycle", "--wave", WAVE)
+        self.assertTrue(lane_file.exists(), "nobody ahead any more: the wave takes its card again")
+
+    def test_a_free_card_is_left_for_a_wave_that_goes_first(self) -> None:
+        self.ask_for("peer", priority=5)
+        self.register()
+        self.cli("cycle", "--wave", WAVE)
+        self.assertFalse((self.base / "board" / "lanes" / "peer" / "gpu0.json").exists())
+        self.assertTrue((self.base / "board" / "lanes" / "hub" / "gpu0.json").exists())
+
+    def test_a_request_nobody_renewed_or_from_a_wave_that_does_not_go_first_changes_nothing(self) -> None:
+        self.register()
+        for request in (dict(priority=5, age_s=supervisor.REQUEST_TTL_S + 5), dict(priority=0, remaining_s=9e9), dict(priority=-1)):
+            self.ask_for("hub", **request)
+            self.cli("cycle", "--wave", WAVE)
+            self.assertEqual(self.events("lane-yielded"), [], request)
+        self.assertTrue([r for r in self.queue()["runs"] if r["lane"] == {"rig": "hub", "gpu": "0"}])
+
+    def test_a_refused_wave_asks_for_the_card_and_stops_asking_once_it_has_it(self) -> None:
+        held = self.hold_for_another_wave("peer")
+        self.register()
+        self.cli("cycle", "--wave", WAVE)
+        requests = supervisor.requests_path(board.load_config(self.registry), "peer", "0")
+        mine = board.read_json(requests)[f"proj__{WAVE}"]
+        self.assertEqual((mine["priority"], mine["remaining_s"]), (0, float(sum(3600 - index for index in range(5)))))
+        held.unlink()
+        self.cli("cycle", "--wave", WAVE)
+        self.assertFalse(requests.exists())
+
+    def test_priority_comes_from_the_manifest_and_only_a_command_changes_it(self) -> None:
+        self.register(priority=2)
+        self.assertEqual(self.queue()["priority"], 2)
+        self.assertEqual(self.cli("priority", "--wave", WAVE, "--set", "-1", "--reason", "user: let the other study go first")[0], 0)
+        self.assertEqual(self.queue()["priority"], -1)
+        self.cli("cycle", "--wave", WAVE)
+        self.assertIn("priority -1", self.cli("table", "--wave", WAVE, "--full")[1])
+        self.assertEqual(self.events("priority")[0]["reason"], "user: let the other study go first")
 
     def test_a_card_held_elsewhere_is_not_waited_for_when_the_plan_would_not_use_it(self) -> None:
         self.hold_for_another_wave("peer")

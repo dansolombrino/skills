@@ -35,8 +35,9 @@ is never a lane: Slurm is its own coordination center and the cluster does not r
   overlapping GPU set, whoever holds it. Lane panes and Slurm jobs keep the project root as their
   working directory, so project inference is unchanged.
 - **Single writer per lane.** Only the wave's **orchestrator** — the `sweep-supervisor` service
-  on the hub — claims, refreshes and releases its lanes. No chat and no agent writes the board by
-  hand. `reconcile` may run from anywhere and only corrects provenance.
+  on the hub — claims, refreshes and releases its lanes. A chat writes only a `hold` (the user wants
+  cards kept from every wave: ad-hoc work, a lent card), not a fake tmux session; a hold
+  evicts nothing and expires by itself. `reconcile` may run anywhere and only corrects provenance.
 - Board ETAs are copies of the supervisor's own estimates (`experiments-tracking` hierarchy) of
   when the lane falls free, refreshed every ten minutes. An adopted lane has no ETA until an orchestrator reports.
 
@@ -49,6 +50,7 @@ python3 scripts/board.py reconcile [--rig <rig|cluster>]...  # probe rigs, corre
 python3 scripts/board.py claim --rig <rig> --gpu <ids> --project <name> --experiment <NNN_exp> --wave <wave_id> --project-root <abs path> --runs-total <n> [--tmux-session <name>]
 python3 scripts/board.py refresh --rig <rig> --gpu <ids> --wave <wave_id> --active-run <run_id_name> --progress "<display>" --eta <ISO|''> --eta-basis "<basis>" --runs-done <n> [--runs-total <n>]
 python3 scripts/board.py release --rig <rig> --gpu <ids> --reason "<why>"
+python3 scripts/board.py hold --rig <rig> --gpu <ids> --until <ISO|6h|90m|2d> --reason "<why>"
 python3 scripts/board.py history [--hours 24] [--limit 500] [--refresh] [--json]   # what happened on the board
 python3 scripts/board.py serve [--port 8765] [--bind 0.0.0.0] [--reconcile-every 120]   # probe period: registry [board] reconcile_every, 0 disables, min 10
 python3 scripts/board.py token                            # fresh access token for [board] token
@@ -114,18 +116,17 @@ each group heading carries its counts and collapses on click. Each rig card (upt
 MB/s down / up at probe time) has one row per GPU: free with model, VRAM and gauges; a lane with
 holder, wave, run, the run's live progress, heartbeat and linear ETA from its `.status.json`
 plus the tmux pane's last line, the orchestrator's wave ETA, held-since, orchestrator age and
-copy buttons for `tmux attach` and the project path; a foreign card with user, process, memory
-and age; stray sessions collapsed. The Slurm card folds sweep jobs into groups (running /
-pending / completed / failed shares of the accounting window, stacked bar, end-time window,
-earliest pending start, shared configuration, per-job varying name) under the account budgets,
-with footnotes for the nightly lag and accounting unit. A filter box, free-first sort and a
-History tab (`/#history`, last 24 h) complete it; theme, notifications on lane changes and the
-refresh period are in Settings. Fonts (Geist, Geist Mono) come from Google Fonts, system fonts
-offline. Title and favicon carry the verified free count. The refresh period (1 s to 5 min,
-default 5 s, remembered per browser, `?every=` for one visit) re-reads the
-board files only, so any setting is cheap, while the rig probe period is the server's
-`reconcile_every` (see the configuration reference). Polling pauses while the pointer is over a
-card or text is selected, and a lost server shows the last good read as stale. `/api/board`
+copy buttons for `tmux attach` and the project path; a hold with its reason and end countdown; a
+foreign card with user, process, memory and age; stray sessions collapsed. The Slurm card folds
+sweep jobs into groups (running / pending / completed / failed shares of the accounting window,
+stacked bar, end-time window, earliest pending start, shared configuration, per-job varying name)
+under the account budgets, with footnotes for the nightly lag and accounting unit. A filter box,
+free-first sort and a History tab (`/#history`, last 24 h) complete it; theme, notifications on
+lane changes and the refresh period are in Settings. The refresh period (1 s to 5 min, default
+5 s, remembered per browser, `?every=` for one visit) re-reads the board files only, so any
+setting is cheap, while the rig probe period is the server's `reconcile_every` (see the
+configuration reference). Polling pauses over a card or a selection; a lost server shows the last
+good read as stale. `/api/board`
 (schema `api_version` 2, additive over v1: `summary`, `serve`, per-rig `free_gpus`,
 `stray_sessions`, `gpu_probe_ok`, `load`, per-GPU `name`, `memory_total_mib`, `temperature_c`,
 `power_w`, `processes`; per-cluster `groups`) and `/api/history?hours=&limit=&refresh=` are the

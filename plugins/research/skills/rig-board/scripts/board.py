@@ -10,7 +10,10 @@ Layout under `[board] root` from the rigsync user registry:
 
     lanes/<rig>/gpu<ids>.json   one file per held lane; absent = free
     rigs/<rig>.json             last probe of that rig (sessions, GPUs, boot time)
-    history.jsonl               append-only claim / refresh / release / reconcile events
+    history.jsonl               append-only claim / refresh / release / hold / reconcile events
+
+A hold (`hold`) is a lane file with no tmux session: it keeps a GPU set away from every wave
+until its `until` time (ad-hoc work, a colleague borrowing a card); reconcile drops it then.
 
 Honesty comes from `reconcile`, which probes each rig (tmux session list + nvidia-smi) and
 corrects the board: a lane whose session is gone is released (or marked interrupted after a
@@ -60,7 +63,10 @@ WAVE_IN_NAME_RE = re.compile(r"\d{8}-\d{6}")
 API_VERSION = 2
 HISTORY_DEFAULT_HOURS = 24
 HISTORY_MAX_EVENTS = 500
-RECONCILE_DUPLICATE_RE = re.compile(r"adopted live session|session gone → released|→ lane interrupted")
+RECONCILE_DUPLICATE_RE = re.compile(r"adopted live session|session gone → released|→ lane interrupted|hold expired → released")
+DURATION_RE = re.compile(r"^(?P<n>\d+)\s*(?P<unit>[mhd])$")
+DURATION_UNITS = {"m": "minutes", "h": "hours", "d": "days"}
+HOLD_ETA_BASIS = "hold ends"
 
 
 class BoardError(Exception):
@@ -300,6 +306,33 @@ def gpu_indices(gpu: str) -> set[int]:
     return {int(part) for part in gpu.split(",")}
 
 
+def is_hold(lane: dict) -> bool:
+    return isinstance(lane.get("hold"), dict)
+
+
+def describe_hold(lane: dict) -> str:
+    info = lane.get("hold") or {}
+    return f"a hold until {info.get('until')} ({info.get('reason')})"
+
+
+def parse_until(value: str, start: datetime) -> datetime:
+    """`6h` / `90m` / `2d` from `start`, or an ISO time (naive means local); must lie in the future."""
+    text = value.strip()
+    match = DURATION_RE.fullmatch(text)
+    if match:
+        ends = start + timedelta(**{DURATION_UNITS[match.group("unit")]: int(match.group("n"))})
+    else:
+        try:
+            ends = datetime.fromisoformat(text)
+        except ValueError:
+            raise BoardError(f"until must be a duration like 6h, 90m, 2d or an ISO time; got {value!r}") from None
+        if ends.tzinfo is None:
+            ends = ends.astimezone()
+    if ends <= start:
+        raise BoardError(f"until must lie in the future; got {value!r}")
+    return ends
+
+
 # ───────────────────────────── claim / refresh / release ─────────────────────────────
 
 
@@ -324,18 +357,15 @@ def claim(config: BoardConfig, args: argparse.Namespace) -> int:
     with BoardLock(config):
         existing = read_json(path)
         if existing is not None and existing.get("tmux_session") != session:
-            holder = f"{existing.get('project')} wave {existing.get('wave_id')} ({existing.get('tmux_session')})"
+            holder = describe_hold(existing) if is_hold(existing) else f"{existing.get('project')} wave {existing.get('wave_id')} ({existing.get('tmux_session')})"
             print(f"[held] {rig.name} gpu{gpu} is held by {holder}; refusing to claim", file=sys.stderr)
             return 3
         for other in list_lanes(config):
             if other.get("rig") != rig.name or other.get("tmux_session") == session:
                 continue
             if gpu_indices(str(other.get("gpu", ""))) & gpu_indices(gpu):
-                print(
-                    f"[held] {rig.name} gpu{other.get('gpu')} overlaps gpu{gpu}: "
-                    f"{other.get('project')} wave {other.get('wave_id')}; refusing to claim",
-                    file=sys.stderr,
-                )
+                holder = describe_hold(other) if is_hold(other) else f"{other.get('project')} wave {other.get('wave_id')}"
+                print(f"[held] {rig.name} gpu{other.get('gpu')} overlaps gpu{gpu}: {holder}; refusing to claim", file=sys.stderr)
                 return 3
         lane = {
             "schema_version": SCHEMA_VERSION,
@@ -364,6 +394,58 @@ def claim(config: BoardConfig, args: argparse.Namespace) -> int:
     return 0
 
 
+def hold(config: BoardConfig, args: argparse.Namespace) -> int:
+    """Keep a GPU set away from every wave until `--until`; never evicts a lane that already holds it."""
+    rig = require_rig(config, args.rig)
+    gpu = validate_gpu(args.gpu)
+    reason = args.reason.strip()
+    if not reason:
+        raise BoardError("a hold needs a --reason")
+    start = now()
+    ends = iso(parse_until(args.until, start))
+    stamp = iso(start)
+    path = config.lane_path(rig.name, gpu)
+    with BoardLock(config):
+        existing = read_json(path)
+        if existing is not None and not is_hold(existing):
+            holder = f"{existing.get('project')} wave {existing.get('wave_id')} ({existing.get('tmux_session')})"
+            print(f"[held] {rig.name} gpu{gpu} is held by {holder}; refusing to hold", file=sys.stderr)
+            return 3
+        for other in list_lanes(config):
+            if other.get("rig") != rig.name or str(other.get("gpu")) == gpu:
+                continue
+            if gpu_indices(str(other.get("gpu", ""))) & gpu_indices(gpu):
+                holder = describe_hold(other) if is_hold(other) else f"{other.get('project')} wave {other.get('wave_id')}"
+                print(f"[held] {rig.name} gpu{other.get('gpu')} overlaps gpu{gpu}: {holder}; refusing to hold", file=sys.stderr)
+                return 3
+        lane = {
+            "schema_version": SCHEMA_VERSION,
+            "rig": rig.name,
+            "gpu": gpu,
+            # no wave and no tmux session: nothing a wave compares against can match a hold
+            "project": "hold",
+            "experiment": None,
+            "wave_id": None,
+            "tmux_session": None,
+            "hub_project_root": None,
+            "claimed_at": existing.get("claimed_at", stamp) if existing else stamp,
+            "last_claim_at": stamp,
+            "runs_total": None,
+            "runs_done": None,
+            "active_run": None,
+            "progress": None,
+            "eta": ends,
+            "eta_basis": HOLD_ETA_BASIS,
+            "updated_at": stamp,
+            "observed": {"at": stamp, "session_alive": None, "state": "hold"},
+            "hold": {"until": ends, "reason": reason},
+        }
+        write_json(path, lane)
+        append_history(config, "hold", rig=rig.name, gpu=gpu, until=ends, reason=reason, renewed=existing is not None)
+    print(f"[hold] {rig.name} gpu{gpu} until {ends} ({reason})")
+    return 0
+
+
 def refresh(config: BoardConfig, args: argparse.Namespace) -> int:
     rig = require_rig(config, args.rig)
     gpu = validate_gpu(args.gpu)
@@ -372,6 +454,8 @@ def refresh(config: BoardConfig, args: argparse.Namespace) -> int:
         lane = read_json(path)
         if lane is None:
             raise BoardError(f"{rig.name} gpu{gpu} is not held; claim it first")
+        if is_hold(lane):
+            raise BoardError(f"{rig.name} gpu{gpu} is {describe_hold(lane)}; change it with hold, end it with release")
         if args.wave and lane.get("wave_id") != args.wave:
             raise BoardError(
                 f"{rig.name} gpu{gpu} is held by wave {lane.get('wave_id')}, not {args.wave}"
@@ -1130,15 +1214,30 @@ def reconcile_rig(config: BoardConfig, rig: Rig, probe: dict) -> list[str]:
     ours = {name: parse_session_name(name) for name in probe["sessions"]}
     ours = {name: parsed for name, parsed in ours.items() if parsed and parsed["rig"] == rig.name}
 
+    # a hold has no session to watch: it lasts until its own end time, reachable rig or not
+    for gpu, lane in list(held.items()):
+        if not is_hold(lane):
+            continue
+        ends = parse_iso((lane.get("hold") or {}).get("until"))
+        if ends is None or ends <= now():
+            config.lane_path(rig.name, gpu).unlink()
+            del held[gpu]
+            append_history(config, "release", rig=rig.name, gpu=gpu, session=None, reason="hold expired")
+            changes.append(f"{rig.name} gpu{gpu}: hold expired → released ({lane['hold'].get('reason')})")
+
     if not probe["reachable"]:
         for gpu, lane in held.items():
+            if is_hold(lane):
+                continue
             lane["observed"] = {**lane.get("observed", {}), "at": stamp, "state": "unreachable"}
             write_json(config.lane_path(rig.name, gpu), lane)
-        return [f"{rig.name}: unreachable; kept {len(held)} lane(s) as last known"]
+        return [*changes, f"{rig.name}: unreachable; kept {len(held)} lane(s) as last known"]
 
     boot_at = parse_iso(probe.get("boot_at"))
     alive_sessions = set(ours)
     for gpu, lane in held.items():
+        if is_hold(lane):
+            continue
         session = lane.get("tmux_session")
         path = config.lane_path(rig.name, gpu)
         if session in alive_sessions:
@@ -1600,7 +1699,7 @@ def snapshot(config: BoardConfig) -> dict:
 
 def summarize(rigs: list[dict], slurm: list[dict]) -> dict:
     """Fleet-level counts and the soonest ETA, so one glance answers 'anything free?'."""
-    counts = {"gpus": 0, "free": 0, "held": 0, "foreign": 0, "interrupted": 0, "silent": 0, "unreachable_rigs": 0, "unknown_rigs": 0}
+    counts = {"gpus": 0, "free": 0, "held": 0, "on_hold": 0, "foreign": 0, "interrupted": 0, "silent": 0, "unreachable_rigs": 0, "unknown_rigs": 0}
     next_free: dict | None = None
     for rig in rigs:
         if rig.get("reachable") is False:
@@ -1611,7 +1710,10 @@ def summarize(rigs: list[dict], slurm: list[dict]) -> dict:
         counts["free"] += len(rig.get("free_gpus", []))
         counts["foreign"] += len(rig.get("foreign", []))
         for lane in rig.get("lanes", []):
-            counts["held"] += len(gpu_indices(str(lane.get("gpu", "0"))))
+            cards = len(gpu_indices(str(lane.get("gpu", "0"))))
+            counts["held"] += cards
+            if is_hold(lane):
+                counts["on_hold"] += cards
             observed = lane.get("observed") or {}
             if observed.get("state") == "interrupted":
                 counts["interrupted"] += 1
@@ -1628,6 +1730,7 @@ def summarize(rigs: list[dict], slurm: list[dict]) -> dict:
                     "experiment": lane.get("experiment"),
                     "eta": lane.get("eta"),
                     "eta_basis": lane.get("eta_basis"),
+                    "hold": lane.get("hold"),
                 }
     if next_free:
         next_free.pop("_eta")
@@ -1732,6 +1835,15 @@ def age(value: str | None) -> str:
     return humanize((now() - stamp).total_seconds()) if stamp else "?"
 
 
+def hold_end(lane: dict) -> str:
+    until = (lane.get("hold") or {}).get("until")
+    ends = parse_iso(until)
+    if ends is None:
+        return f"{until} (unreadable; the next reconcile releases it)"
+    left = (ends - now()).total_seconds()
+    return f"{until} (in {humanize(left)})" if left > 0 else f"{until} (ended {humanize(-left)} ago; the next reconcile releases it)"
+
+
 def describe_gpu(gpu: dict | None) -> str:
     if not gpu:
         return "no GPU facts (rig never probed)"
@@ -1773,6 +1885,8 @@ def history_cli(config: BoardConfig, args: argparse.Namespace) -> int:
     for record in events:
         where = f"{record.get('rig', '')}" + (f" gpu{record['gpu']}" if record.get("gpu") is not None else "")
         detail = record.get("reason") or record.get("session") or ""
+        if record.get("event") == "hold":
+            detail = f"until {record.get('until')}: {record.get('reason') or ''}"
         if record.get("event") == "reconcile":
             detail = "; ".join(record.get("changes", []))
         print(f"{record.get('at')}  {record.get('event'):<12} {where:<18} {detail}")
@@ -1789,8 +1903,9 @@ def status(config: BoardConfig, args: argparse.Namespace) -> int:
     summary = data["summary"]
     print(f"rig-board @ {data['generated_at']}  ({config.root})")
     line = (
-        f"fleet: {summary['free']} free · {summary['held']} held · {summary['foreign']} foreign"
-        f" · {summary['interrupted']} interrupted · {summary['unreachable_rigs']} unreachable rig(s)"
+        f"fleet: {summary['free']} free · {summary['held']} held"
+        + (f" ({summary['on_hold']} on hold)" if summary.get("on_hold") else "")
+        + f" · {summary['foreign']} foreign · {summary['interrupted']} interrupted · {summary['unreachable_rigs']} unreachable rig(s)"
     )
     if summary.get("next_free"):
         nf = summary["next_free"]
@@ -1815,6 +1930,9 @@ def status(config: BoardConfig, args: argparse.Namespace) -> int:
         if not rig["lanes"] and not rig["foreign"] and not rig.get("free_gpus"):
             print("  free" if rig["reachable"] else "  no lanes on the board")
         for lane in rig["lanes"]:
+            if is_hold(lane):
+                print(f"  gpu{lane['gpu']}  hold         {lane['hold'].get('reason')}  until {hold_end(lane)}  since {age(lane.get('claimed_at'))}")
+                continue
             state = lane.get("observed", {}).get("state", "?")
             eta = lane.get("eta") or "unavailable"
             print(
@@ -1918,6 +2036,9 @@ def free(config: BoardConfig, args: argparse.Namespace) -> int:
     wanted = gpu_indices(gpu)
     for lane in list_lanes(config):
         if lane.get("rig") == rig.name and gpu_indices(str(lane.get("gpu"))) & wanted:
+            if is_hold(lane):
+                print(f"[held] {rig.name} gpu{lane['gpu']}: hold ({lane['hold'].get('reason')}) until {hold_end(lane)}")
+                return 1
             eta = lane.get("eta") or "unavailable"
             print(
                 f"[held] {rig.name} gpu{lane['gpu']}: {lane['project']} / {lane['experiment']} wave {lane['wave_id']}"
@@ -2134,6 +2255,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--gpu", required=True)
     p.add_argument("--reason", default="lane terminal")
 
+    p = sub.add_parser("hold", help="keep <rig> gpu<ids> away from every wave until a time (ad-hoc work, a borrowed card)")
+    p.add_argument("--rig", required=True)
+    p.add_argument("--gpu", required=True)
+    p.add_argument("--until", required=True, help="ISO time, or a duration from now like 6h, 90m, 2d")
+    p.add_argument("--reason", required=True)
+
     p = sub.add_parser("reconcile", help="probe the rigs and correct the board")
     p.add_argument("--rig", action="append", dest="rigs", help="limit to this rig or Slurm target (repeatable)")
 
@@ -2169,6 +2296,8 @@ def main(argv: list[str] | None = None) -> int:
             return refresh(config, args)
         if args.command == "release":
             return release(config, args)
+        if args.command == "hold":
+            return hold(config, args)
         if args.command == "reconcile":
             return reconcile(config, rigs=args.rigs)
         if args.command == "serve":

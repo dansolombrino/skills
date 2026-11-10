@@ -40,7 +40,7 @@ reconcile_every = 120                                # seconds between rig probe
 <root>/
   lanes/<rig>/gpu<ids>.json   # one held lane; absent = free
   rigs/<rig>.json             # last probe: reachable, boot_at, sessions, gpus, foreign, net
-  history.jsonl               # claim / reclaim / refresh / release / adopt / interrupted / reconcile
+  history.jsonl               # claim / reclaim / refresh / release / hold / adopt / interrupted / reconcile
   .lock                       # advisory lock shared by chats and the viewer
 ```
 
@@ -61,8 +61,13 @@ Lane file (`schema_version` 1):
 ```
 
 `observed.state` is one of `claimed` (never probed yet), `running`, `interrupted` (rig rebooted
-after the claim; kept for recovery), `unreachable` (last probe failed; kept as last known).
+after the claim; kept for recovery), `unreachable` (last probe failed; kept as last known), `hold`.
 Claim fields belong to the orchestrator; `observed` belongs to `reconcile`.
+
+A hold (`hold`) is a lane file with `project: "hold"`, `experiment`, `wave_id`, `tmux_session`
+and the run fields `null`, `eta` equal to its end (`eta_basis: "hold ends"`),
+`observed.state: "hold"` and `hold: {"until": <ISO>, "reason": <text>}`. No wave's session can
+match it, so `claim` refuses it and its overlaps like any held lane; it counts as held.
 
 ## Reconcile rules
 
@@ -86,6 +91,8 @@ three-column GPU form parse unchanged.
 | lane held | its session alive | keep; record orchestrator silence (`updated_at` age) |
 | lane held | session gone, rig booted after the claim | mark `interrupted`, keep for recovery |
 | lane held | session gone, no reboot | release, reason `reconcile: session gone` |
+| hold, before `until` | anything (session, reboot, unreachable) | keep; never adopt a session over it |
+| hold, `until` passed | anything | release, reason `hold expired` |
 | no lane | live session matching `<project>_<NNN_exp>_<wave>_<rig>_gpu<ids>` | adopt as a lane (no ETA) |
 | any | GPU with ≥ 1 GiB used that no lane covers | list under `foreign`; never claimable |
 | any | probe failed | keep every lane as last known, flag the rig unreachable |

@@ -101,6 +101,8 @@ WALLTIME_STEP_S = 15 * 60
 SH_TIMEOUT_S = 120  # a probe, a queue write, an sbatch: none takes this long on a rig that works
 TRANSFER_TIMEOUT_S = 900  # one collect or offload pass; rsync keeps partial files, so the next pass resumes
 VERIFY_TIMEOUT_S = 900  # revision, environment and lane smoke before a lane starts
+REQUEST_TTL_S = 600  # a wave's request for a held card lapses this long after its last cycle renewed it
+YIELD_MARGIN = 0.2  # at equal priority a wave yields a card only to one with this much less work left
 EFFORT_VALUES = ("low", "medium", "high", "xhigh", "max")
 RUN_STATES = ("queued", "assigned", "running", "done", "failed", "excluded")
 TERMINAL_STATES = ("done", "failed", "excluded")
@@ -430,6 +432,36 @@ def finished_dir(board_config) -> Path:
     return index_dir(board_config) / "finished"
 
 
+def requests_path(board_config, rig: str, gpu: str) -> Path:
+    """Which waves ask for a card another wave holds. Not under the index itself: every *.json there is a wave."""
+    return index_dir(board_config) / "requests" / f"{rig}__gpu{gpu}.json"
+
+
+def wave_key(queue: dict) -> str:
+    return f"{queue['project']}__{queue['wave_id']}"
+
+
+def remaining_work(queue: dict) -> float:
+    """Weight-1.0 seconds of this wave's runs that have not ended; a run with no cost counts as a typical one."""
+    costs = [run["cost_s"] for run in queue["runs"] if run.get("cost_s")]
+    typical = statistics.median(costs) if costs else 3600.0
+    return float(sum(run.get("cost_s") or typical for run in queue["runs"] if run["state"] not in TERMINAL_STATES))
+
+
+def standing(queue: dict) -> dict:
+    """What decides which of two waves gets a card both want."""
+    return {"project": queue["project"], "wave_id": queue["wave_id"], "priority": int(queue.get("priority", 0)), "remaining_s": remaining_work(queue)}
+
+
+def goes_first(wave: dict, other: dict) -> bool:
+    """Whether `wave` takes a card from `other`: the higher priority; at equal priority the one with
+    clearly less work left, so the short wave is not stuck behind the long one and the long one loses
+    little. Waves closer than YIELD_MARGIN leave each other alone, or a card would change hands every run."""
+    if wave["priority"] != other["priority"]:
+        return wave["priority"] > other["priority"]
+    return wave["remaining_s"] < (1 - YIELD_MARGIN) * other["remaining_s"]
+
+
 FINISHED_KEEP_S = 14 * 86400
 
 
@@ -572,6 +604,9 @@ def build_queue(manifest: dict, project_root: Path, config, settings: Settings, 
     fix_depth = manifest.get("fix_depth", 0)
     if not isinstance(fix_depth, int) or isinstance(fix_depth, bool) or fix_depth < 0:
         raise SupervisorError("manifest: `fix_depth` must be a non-negative integer (automatic fix rounds behind this wave)")
+    priority = manifest.get("priority", 0)
+    if not isinstance(priority, int) or isinstance(priority, bool):
+        raise SupervisorError("manifest: `priority` must be an integer (higher goes first on a card several waves want; default 0)")
     # a fix round names the wave it replaces, so a chat watching that wave follows it here
     fixes_wave = manifest.get("fixes_wave")
     if fix_depth or fixes_wave is not None:
@@ -648,6 +683,7 @@ def build_queue(manifest: dict, project_root: Path, config, settings: Settings, 
         "waiting_lanes": {},
         "next_seq": 1,
         "fix_depth": fix_depth,
+        "priority": priority,
         "fixes_wave": fixes_wave,
         "runs": runs,
         "finished_at": None,
@@ -1460,6 +1496,62 @@ class Cycle:
             with path.open("a") as handle:
                 handle.write(f"{iso(self.at)} {job_id} {verb}\n")
 
+    # -- between waves ------------------------------------------------------
+
+    def card_requests(self, queue: dict, rig: str, gpu: str) -> dict[str, dict]:
+        """Other waves' standing requests for this card; one not refreshed for REQUEST_TTL_S is gone."""
+        cutoff = self.at - timedelta(seconds=REQUEST_TTL_S)
+        return {
+            key: entry for key, entry in (board.read_json(requests_path(self.board_config, rig, gpu)) or {}).items()
+            if key != wave_key(queue) and isinstance(entry, dict) and (parse_iso(entry.get("at")) or cutoff) > cutoff
+        }
+
+    def request_card(self, queue: dict, rig: str, gpu: str, *, wanted: bool) -> None:
+        """Keep, refresh or withdraw this wave's request for a card another wave holds."""
+        path = requests_path(self.board_config, rig, gpu)
+        entries = self.card_requests(queue, rig, gpu)
+        had = wave_key(queue) in (board.read_json(path) or {})
+        if wanted:
+            entries[wave_key(queue)] = {**standing(queue), "at": iso(self.at)}
+        if not wanted and not had:
+            return
+        if entries:
+            board.write_json(path, entries)
+        else:
+            path.unlink(missing_ok=True)
+
+    def outranked_by(self, queue: dict, rig: str, gpu: str) -> dict | None:
+        """The wave that goes first on this card, if one asks for it: this wave then leaves it alone."""
+        mine = standing(queue)
+        ahead = [entry for entry in self.card_requests(queue, rig, gpu).values() if goes_first(entry, mine)]
+        return min(ahead, key=lambda entry: (-entry["priority"], entry["remaining_s"]), default=None)
+
+    def yield_lane(self, queue: dict, machine, gpu: str, view: dict, ahead: dict, *, wants_back: bool) -> None:
+        """Hand this lane's card to a wave that goes first, between runs: the run in flight finishes,
+        a buffered one is taken back, the lane drains, and the card is released once its loop exits."""
+        rig = machine.name
+        lane = {"rig": rig, "gpu": gpu}
+        note = f"yielded to {ahead['project']} wave {ahead['wave_id']} (priority {ahead['priority']})"
+        waiting = queue.setdefault("waiting_lanes", {})
+        if waiting.get(f"{rig}:{gpu}") != note:
+            self.event("lane-yielded", rig=rig, gpu=gpu, to_project=ahead["project"], to_wave=ahead["wave_id"], to_priority=ahead["priority"])
+        waiting[f"{rig}:{gpu}"] = note
+        session = session_name(queue, rig, gpu)
+        for run in [r for r in queue["runs"] if r["state"] == "assigned" and r["lane"] == lane and r.get("entry")]:
+            result = sh(machine, 'mkdir -p "$1/retracted" && mv "$1/queue/$2" "$1/retracted/$2"', lane_dir(machine, queue["wave_id"], gpu), run["entry"])
+            if result.returncode == 0:  # else the lane started it first: it finishes here
+                self.requeue(run, front=True)
+                run["attempts"] -= 1  # it never started here
+                self.event("run-reclaimed", run=run["id"], rig=rig, gpu=gpu, reason=note)
+        busy = any(r["state"] in ("assigned", "running") and r["lane"] == lane for r in queue["runs"])
+        if session in view["sessions"]:
+            if not busy and not view["lanes"].get(gpu, {}).get("drain"):
+                sh(machine, 'mkdir -p "$1" && : > "$1/drain"', lane_dir(machine, queue["wave_id"], gpu))
+                self.event("lane-drained", rig=rig, gpu=gpu, unfed=True)
+        elif self.holds_lane(rig, gpu, session):
+            self.board_release(rig, gpu, f"wave {queue['wave_id']} {note}")
+        self.request_card(queue, rig, gpu, wanted=wants_back)
+
     # -- board ------------------------------------------------------------
 
     def holds_lane(self, rig: str, gpu: str, session: str) -> bool:
@@ -1671,14 +1763,19 @@ class Cycle:
                     self.absorb_rig(queue, rig, view)
             vram: dict[tuple[str, str], int | None] = {}
             live: list[tuple[str, str]] = []  # lanes whose session runs and whose card the board gives us
-            # the cards this wave could use now: ours on the board or nobody's, on a rig that answers
+            # the cards this wave could use now: ours on the board or nobody's, on a rig that answers,
+            # and not wanted by a wave that goes first
             usable: list[tuple[str, str]] = []
+            yielded: dict[tuple[str, str], dict] = {}
             for rig, pool in queue["pool"].items():
                 if views[rig] is None or pool["kind"] == "slurm":
                     continue
                 for gpu in pool["lanes"]:
                     vram[(rig, gpu)] = lane_vram(self.board_config, rig, gpu)
-                    if f"{rig}:{gpu}" not in queue["blocked_lanes"] and self.card_available(queue, rig, gpu):
+                    ahead = self.outranked_by(queue, rig, gpu)
+                    if ahead is not None:
+                        yielded[(rig, gpu)] = ahead
+                    elif f"{rig}:{gpu}" not in queue["blocked_lanes"] and self.card_available(queue, rig, gpu):
                         usable.append((rig, gpu))
             wanted = self.wanted_lanes(queue, usable, vram)
             for rig, pool in queue["pool"].items():
@@ -1698,6 +1795,13 @@ class Cycle:
                     # would use it, so the wait is on record and a freed card is not taken for nothing.
                     with_it = wanted if lane in usable else self.wanted_lanes(queue, [*usable, lane], vram)
                     feeds = waiting and lane in with_it
+                    if lane in yielded:
+                        if mine or feeds or self.holds_lane(rig, gpu, session_name(queue, rig, gpu)):
+                            self.yield_lane(queue, machine, gpu, view, yielded[lane], wants_back=feeds)
+                        else:  # a card this wave neither has nor would use: nothing to hand over
+                            queue.get("waiting_lanes", {}).pop(f"{rig}:{gpu}", None)
+                            self.request_card(queue, rig, gpu, wanted=False)
+                        continue
                     if not feeds and not mine:
                         queue.get("waiting_lanes", {}).pop(f"{rig}:{gpu}", None)
                     if not mine and not waiting and lane in usable:
@@ -1711,6 +1815,10 @@ class Cycle:
                     elif view["lanes"].get(gpu, {}).get("drain") and self.holds_lane(rig, gpu, session_name(queue, rig, gpu)):
                         # the drained loop has exited: only now is the card really free for someone else
                         self.board_release(rig, gpu, f"wave {queue['wave_id']} has nothing left for this lane")
+                    # a card another wave holds and this one would use is asked for, so a wave that goes
+                    # after this one hands it over between runs; never for a lane that could not start
+                    refused = f"{rig}:{gpu}" in queue.get("waiting_lanes", {}) and f"{rig}:{gpu}" not in queue["blocked_lanes"]
+                    self.request_card(queue, rig, gpu, wanted=feeds and refused)
             # every live lane is known before any is fed, so the plan weighs them all
             self.reclaim(queue, live, vram)
             for rig, gpu in live:
@@ -1829,7 +1937,7 @@ def build_snapshot(queue: dict, runtime: dict, wave: Wave, vram: dict, at: datet
                     "done": sum(r["state"] == "done" for r in mine),
                     "lane_free_at": iso(at + timedelta(seconds=free)) if free is not None and (active or buffered) else None,
                     "basis": basis or None,
-                    "problem": blocked or (f"down since {down}" if down else None),
+                    "problem": blocked or (f"down since {down}" if down else None) or (f"waiting for board: {waiting}" if state == "waiting for board" else None),
                 }
             )
     horizon, basis = simulate(queue, lane_free, vram) if any(r["state"] not in TERMINAL_STATES for r in queue["runs"]) else (0.0, "terminal")
@@ -1847,6 +1955,7 @@ def build_snapshot(queue: dict, runtime: dict, wave: Wave, vram: dict, at: datet
         "schema_version": SCHEMA_VERSION,
         "written_at": iso(at),
         "project": queue["project"], "experiment": queue["experiment"], "wave_id": queue["wave_id"],
+        "priority": int(queue.get("priority", 0)),
         "counts": counts, "total": len(queue["runs"]),
         "wave_eta": iso(at + timedelta(seconds=horizon)) if horizon is not None else None,
         "wave_eta_basis": basis,
@@ -2146,6 +2255,7 @@ def render_table(snapshot: dict, fmt: str) -> str:
         eta = f"finished {clock(snapshot['finished_at'], at)}"
     header = (
         f"Status written {at.strftime('%Y-%m-%d at %H:%M')} — wave `{snapshot['wave_id']}` · {snapshot['experiment']} · "
+        + (f"priority {snapshot['priority']} · " if snapshot.get("priority") else "") +
         f"**done {counts['done']} · running {counts['running']} · queued {counts['queued'] + counts['assigned']} · "
         f"failed {counts['failed']}** of {snapshot['total']} · wave {eta} · "
         f"supervisor cycle {humanize((at - written).total_seconds())} ago · agent tick {tick_age} "
@@ -3435,6 +3545,18 @@ def lane_command(wave: Wave, board_config, args: argparse.Namespace) -> int:
     return 0
 
 
+def priority_command(wave: Wave, args: argparse.Namespace) -> int:
+    """Set which wave goes first on a card several waves want. The user's call, never a tick's."""
+    with WaveLock(wave):
+        queue = wave.load()
+        old = int(queue.get("priority", 0))
+        queue["priority"] = args.value
+        wave.save(queue)
+        wave.log("priority", old=old, new=args.value, reason=args.reason)
+    print(f"[priority] wave {wave.wave_id}: {old} -> {args.value}")
+    return 0
+
+
 def pool_command(wave: Wave, args: argparse.Namespace) -> int:
     """Change a registered cluster's tracked core-hour cap; a raised cap clears the budget stop."""
     if args.core_hours_cap <= 0:
@@ -3714,6 +3836,9 @@ def build_parser() -> argparse.ArgumentParser:
     pool_p.add_argument("--rig", required=True)
     pool_p.add_argument("--core-hours-cap", type=float, required=True)
     pool_p.add_argument("--reason", required=True)
+    priority_p = wave_parser("priority")
+    priority_p.add_argument("--set", type=int, required=True, dest="value")
+    priority_p.add_argument("--reason", required=True)
     steal_p = wave_parser("steal")
     steal_p.add_argument("--run", required=True)
     steal_p.add_argument("--reason", required=True)
@@ -3848,6 +3973,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "pool":
             return pool_command(wave, args)
+        if args.command == "priority":
+            return priority_command(wave, args)
         if args.command == "steal":
             return steal(wave, project_config(wave, settings), board_config, args)
         if args.command == "supersede":

@@ -60,6 +60,7 @@ Each gate names what enforces it; a failure stops the wave and is reported as is
 - Order the queue longest-first by cost from the `experiments-tracking` hierarchy, and list every
   non-hub lane rig under `offload` (a rig short on disk is kept busy through offload, never left
   out).
+- Urgent wave: manifest `priority` (templates.md).
 - Mint the wave id on the hub when the pool is fixed: `date '+%Y%m%d-%H%M%S'`.
 
 ## Generate

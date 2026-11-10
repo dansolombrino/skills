@@ -114,10 +114,9 @@ work requests that same profile.
 - **Trouble ahead.** Two failed ticks in a row, a failing `health_command`, or a project checkout off
   its `sync.toml` branch (blocks relaunches and dispatch; follow-ups wait; nothing moves it: a person
   may be working there): a `⚠` line and a notice.
-- **Releases.** Running from a versioned install, the service moves onto a newer installed version
-  between cycles once that copy's `check` passes and no agent it started runs.
-- **Held GPUs.** A lane `waiting for board` never makes the wave ETA unavailable while others run.
-- **Cluster jobs.** Unstarted ones make the ETA a lower bound.
+- **Several waves, one fleet.** A card several waves want goes to the higher `priority` (manifest,
+  default 0; `priority --wave <id> --set <n> --reason "user: ..."`), then to the wave with clearly
+  less work left; the other hands it over between runs and takes it back after (references/setup.md).
 
 ## Follow-ups
 
@@ -157,7 +156,7 @@ whole wave. **Leonardo:** core-hours are not a gate; there is no cap unless the 
 outside the pool; a `behemoth` card without a grant for this wave; anything of another project or
 user; deleting anything `offload` and `prune` do not cover; cancelling or superseding runs outside
 the standing authorization (another wave's runs, a supersede, a running Slurm job); a run_id
-migration; a fix that changes the science; and settling an identity mismatch `collect` reports.
+migration; a wave's `priority`; a fix that changes the science; and settling an identity mismatch `collect` reports.
 
 Before any kill, prove ownership: the lane is held on the fleet board by this wave's session, the
 recorded pid belongs to this user and is this run's wave script, the card is not foreign. `steal`

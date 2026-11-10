@@ -432,7 +432,7 @@ def build_manifest(wave: dict, revision: str) -> dict:
         "fix_depth": wave.get("fix_depth", 0),
         "runs": runs,
     }
-    for key in ("gpu_grants", "fixes_wave"):
+    for key in ("gpu_grants", "fixes_wave", "priority"):
         if wave.get(key):
             manifest[key] = wave[key]
     return manifest

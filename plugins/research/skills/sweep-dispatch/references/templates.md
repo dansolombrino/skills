@@ -426,6 +426,7 @@ launch input, not an execution file), one JSON object:
   "gpu_grants": {"behemoth": {"gpus": [5], "user_words": "<the user's grant, verbatim>", "date": "<YYYY-MM-DD>"}},
   "offload": ["behemoth"],
   "fix_depth": 0,
+  "priority": 0,
   "fixes_wave": "<only in a fix round: the wave_id it replaces>",
   "runs": [
     {
@@ -458,7 +459,10 @@ rates measured in this wave. `fix_depth` is 0 for a wave the user asked for and 
 plus one for a wave an unattended `fix` follow-up dispatched (`sweep-supervisor` § Follow-ups); the
 supervisor refuses a third automatic fix round. Such a wave also names the wave it replaces in
 `fixes_wave` (omit the key otherwise): `register` refuses a fix round without it, and a chat
-watching the old wave follows the link to the new one.
+watching the old wave follows the link to the new one. `priority` (an integer, omitted for 0) says
+which wave goes first on a card several live waves want: the higher one, then the one with clearly
+less work left (`sweep-supervisor` references/setup.md); set it only when the user says this wave
+is urgent or may wait, and give a `fix` round the priority of the wave it replaces.
 
 ## Pool and initial estimate
 
@@ -534,7 +538,7 @@ this script imports no project code.
 ```
 
 `resumes`, `cost_s`, `min_vram_mib`, and `needs` are optional. `pool`, `weights`, and the optional
-`gpu_grants`, `fix_depth`, and `fixes_wave` pass to the manifest as described above; `offload` defaults
+`gpu_grants`, `fix_depth`, `fixes_wave`, and `priority` pass to the manifest as described above; `offload` defaults
 to every non-hub lane rig. A pool entry with `max_jobs` adds the job header to every script and needs
 `slurm_account`. An older pin sets `run_id_layout`, gives each run its `folder`, and sets
 `run_id_segments` for a segments pin (`run-identity` references/legacy-layouts.md).

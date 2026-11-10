@@ -53,6 +53,32 @@ Nothing the service runs can hold it forever: a shell snippet on a rig is cut af
 revision/environment check after fifteen. A cut `offload` pass keeps its partial files and resumes
 next cycle; a wave whose cycle fails or crashes is skipped that pass and the others go on.
 
+## Several waves, one fleet
+
+A wave may use only the cards its pool lists, and a card runs one wave's lane at a time. When
+several live waves want the same card:
+
+- The wave with the higher `priority` goes first. `priority` is an integer in the manifest (default
+  0) and only the user changes it later: `priority --wave <id> --set <n> --reason "user: ..."`.
+- At equal priority the wave with clearly less work left goes first (at least 20% less, counted in
+  weight-1.0 seconds of its unfinished runs): a short wave is not stuck behind a long one, and the
+  long one loses little. Waves closer than that leave each other's cards alone, so a card does not
+  change hands every run.
+- A hand-over happens between runs, never by stopping one: the wave that goes after lets its run in
+  flight finish, takes back the run it had buffered, drains the lane and releases the card
+  (`lane-yielded`, and the lane reads `waiting for board: yielded to …`). It asks for the card back
+  and gets it when the other wave has nothing left for it.
+- A free card is left alone by a wave while one that goes first asks for it.
+
+A wave asks by keeping its standing (project, wave, priority, work left) in
+`<board root>/supervisor/requests/<rig>__gpu<ids>.json`, renewed every cycle; a request not renewed
+for ten minutes lapses, so a wave that ended, lost its rig or stopped wanting the card never keeps
+one idle. A lane that could not start (`blocked`) asks for nothing. To keep a card away from every
+wave (ad-hoc work, a colleague), `rig-board hold` it.
+
+ETA notes: a lane `waiting for board` never makes the wave ETA unavailable while others run, and
+cluster jobs not started make it a lower bound (`at the earliest: N cluster jobs not started`).
+
 `command` is an argv list, never a shell string. `{prompt}`, `{model}`, and `{effort}` are
 substituted per tick; `{prompt}` is required. The tick runs with the project root as its working
 directory and `SWEEP_SUPERVISOR_MODEL`/`SWEEP_SUPERVISOR_EFFORT` in its environment, so every
