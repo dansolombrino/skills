@@ -44,6 +44,8 @@ python3 scripts/tokens.py scan [--verbose]      # index this machine's new calls
 python3 scripts/tokens.py pull                  # fetch every fleet machine now
 python3 scripts/tokens.py report [--range all] [--group tool|model|project|machine] [--metric tokens|cost] [--tools claude,omp] [--json]
 python3 scripts/tokens.py serve [--no-scan]     # what the service runs
+python3 scripts/tokens.py backup [--dir D] [--no-git]  # dump the index to tokens.backup_dir, commit and push
+python3 scripts/tokens.py restore [--dir D]     # merge a backup into the index
 ```
 
 Answer usage questions from `report` (or `/api/series`), not by reading the logs by hand. Report
@@ -60,3 +62,5 @@ the page's hub URL from `hub.py url tokens` (service-hub), never the backend por
   and SVG without parsing markup.
 - Share it only through a service-hub guest token, and only with people who may see the project
   names.
+- `backup` pushes working directories, model and machine names to the backup repository's
+  remote: only ever a private repository.

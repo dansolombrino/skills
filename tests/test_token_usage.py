@@ -204,6 +204,27 @@ class TokenUsageTests(unittest.TestCase):
             t.ingest(hub, "rig", out.getvalue().splitlines()[:-1])
         hub.close()
 
+    def test_backup_restores_calls_whose_logs_are_gone(self) -> None:
+        ts = NOW - 3600
+        log = self.dirs["claude"] / "p/c.jsonl"
+        write(log, [claude_line("m1", ts, 5), claude_line("m2", ts + 40 * 86400, 7)])
+        write(self.dirs["omp"] / "p/s.jsonl", omp_lines(ts))
+        t.scan(self.db, self.config)
+        before = self.rows()
+        backup = self.base / "backup"
+        self.assertEqual(t.dump(self.db, backup), 3)
+        self.assertEqual(len(list((backup / "calls" / "here").glob("*.jsonl"))), 2)  # one file per month
+        log.unlink()  # Claude Code deleted the transcript, then the index was lost
+        fresh = t.connect(self.base / "fresh.sqlite")
+        self.assertEqual(t.restore(fresh, backup), 3)
+        t.restore(fresh, backup)  # restoring twice adds nothing
+        self.db.close()
+        self.db = fresh
+        self.assertEqual(self.rows(), before)
+        self.assertEqual(t.load_prices(fresh)["claude-x"]["output"], 1.5e-5)
+        t.scan(fresh, self.config)  # a pass over the remaining logs keeps the restored calls
+        self.assertEqual(self.rows(), before)
+
     def test_bind_must_stay_loopback(self) -> None:
         registry = Path(self.tmp.name) / "machines.toml"
         registry.write_text('[tokens]\nbind = "0.0.0.0"\n')

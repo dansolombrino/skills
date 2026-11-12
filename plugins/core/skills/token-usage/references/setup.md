@@ -51,22 +51,49 @@ hosts_file = "~/path/hosts"   # more of them, one per line, # for comments
 machine    = "rig-4090"       # this machine's name on the page; default: the short hostname
 db         = "~/.local/share/token-usage/usage.sqlite"
 title      = "Token usage"
+backup_dir = "~/.local/share/token-usage/backup"  # where `backup` writes; a git checkout gets committed and pushed
 
 [tokens.sources]              # replaces the default directories of an agent
 claude = ["~/.claude/projects"]
 ```
 
 Deleting the database rebuilds it from the logs that still exist; what only the database held
-(calls of logs deleted since, older pulls) is lost.
+(calls of logs deleted since, older pulls) is lost unless `backup_dir` is set (next section).
+
+## Back it up
+
+The index is the only copy of every call whose log is gone (Claude Code deletes transcripts after
+`cleanupPeriodDays`, 30 by default). `tokens.py backup` writes every call and price under
+`backup_dir` as JSON lines, one file per machine and UTC month (`calls/<machine>/<YYYY-MM>.jsonl`,
+`prices.jsonl`), each with a header naming its columns; files are rewritten only when they
+changed. When `backup_dir` is a git checkout it then commits and pushes, so make it a clone of a
+**private** repository: the files hold working directories, model and machine names. About 50 MB
+for 200k calls; a month's file changes only while that month is current.
+
+`tokens.py restore` merges a backup into the index: a call already held keeps the larger count of
+each kind, so it never lowers a total and is safe to repeat. `serve` restores by itself when its
+index is new (deleted, or rebuilt after a schema change), before the first scan.
+
+```bash
+gh repo create <owner>/token-usage-backup --private
+git clone https://github.com/<owner>/token-usage-backup ~/.local/share/token-usage/backup
+```
 
 ## Install as a user service
 
 ```bash
-mkdir -p ~/.config/systemd/user && cp <skill>/assets/token-usage.service ~/.config/systemd/user/
-sed -i "s|__TOKENS_PY__|<absolute path to this skill's scripts/tokens.py>|" ~/.config/systemd/user/token-usage.service
-systemctl --user daemon-reload && systemctl --user enable --now token-usage.service
+mkdir -p ~/.config/systemd/user
+for unit in token-usage.service token-usage-backup.service token-usage-backup.timer; do
+  sed "s|__TOKENS_PY__|<absolute path to this skill's scripts/tokens.py>|" <skill>/assets/$unit > ~/.config/systemd/user/$unit
+done
+systemctl --user daemon-reload && systemctl --user enable --now token-usage.service token-usage-backup.timer
+loginctl enable-linger "$USER"   # keep both running without a login session
 python3 <skill>/scripts/tokens.py report --range all --group machine
 ```
+
+The service restarts whenever it stops, without a retry limit. The timer backs up every 6 hours,
+and on the next boot when a run was missed; `journalctl --user -u token-usage-backup` shows each
+run. Skip the two backup units on a machine without `backup_dir`.
 
 Point the unit at a repository checkout on the machine, or at a small launcher you keep outside
 the install that starts the newest installed copy. Never point it straight at the installed skill

@@ -29,6 +29,8 @@ Subcommands:
   pull     fetch every configured machine now
   report   print the totals for a range
   export   (run over ssh by `pull`) scan here, print the calls recorded since a cursor
+  backup   write every call to tokens.backup_dir as JSON lines, then commit and push it if that is a git checkout
+  restore  merge such a backup into the index (serve does it by itself when the index is new)
 """
 
 from __future__ import annotations
@@ -113,6 +115,7 @@ class Config:
     machine: str = "local"
     hosts: tuple[str, ...] = ()
     pull_every: int = 300
+    backup_dir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -180,9 +183,12 @@ def load_config(path: Path) -> Config:
             raise TokensError(f"{path}: tokens.hosts_file must be a path")
         hosts = hosts + read_hosts(Path(table["hosts_file"]).expanduser())
     machine = values.get("machine") or socket.gethostname().split(".")[0] or "local"
+    backup_dir = table.get("backup_dir")
+    if backup_dir is not None and (not isinstance(backup_dir, str) or not backup_dir):
+        raise TokensError(f"{path}: tokens.backup_dir must be a path")
     return Config(values["port"], values["bind"], values["every"], Path(str(values.get("db", DEFAULT_DB))).expanduser(),
                   values["title"], sources, machine, tuple(dict.fromkeys(h for h in hosts if h != machine)),
-                  values["pull_every"])
+                  values["pull_every"], Path(backup_dir).expanduser() if backup_dir else None)
 
 
 # ---------------------------------------------------------------------------- parsing
@@ -620,6 +626,101 @@ def puller(config: Config, stop: threading.Event, log=print) -> None:
         stop.wait(max(1.0, config.pull_every - (time.time() - started)))
 
 
+# ---------------------------------------------------------------------------- backup
+
+BACKUP_COLUMNS = ("tool", "key", "ts", "model", "cwd", "input", "output", "cache_read", "cache_write")
+PRICE_COLUMNS = ("model", "kind", "ts", "price")
+
+
+def write_if_changed(path: Path, text: str) -> None:
+    try:
+        if path.read_text() == text:
+            return
+    except OSError:
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(path.name + ".tmp")
+    temp.write_text(text)
+    temp.replace(path)
+
+
+def dump(db: sqlite3.Connection, root: Path) -> int:
+    """Every call and price as JSON lines under `root`: calls/<machine>/<UTC month>.jsonl, prices.jsonl.
+
+    Each file opens with a header naming its machine and columns, rows sorted by time, so a git commit
+    of the tree changes only the months that changed, and a later schema can still read it. `seen` is
+    left out: it is bookkeeping that changes on every pass. Files of months no longer held are removed."""
+    files: dict[Path, list[str]] = {}
+    db.execute("BEGIN")  # one snapshot for calls and prices
+    try:
+        for machine, month, *row in db.execute(
+                f"SELECT machine, strftime('%Y-%m', ts, 'unixepoch'), {', '.join(BACKUP_COLUMNS)} FROM calls "
+                "ORDER BY machine, ts, tool, key"):
+            path = root / "calls" / re.sub(r"[^A-Za-z0-9._-]", "_", machine) / f"{month}.jsonl"
+            if path not in files:
+                files[path] = [json.dumps({"machine": machine, "columns": BACKUP_COLUMNS})]
+            files[path].append(json.dumps(row, separators=(",", ":")))
+        prices = [json.dumps({"columns": PRICE_COLUMNS})] + [
+            json.dumps(row, separators=(",", ":")) for row in db.execute(
+                f"SELECT {', '.join(PRICE_COLUMNS)} FROM prices ORDER BY model, kind")]
+    finally:
+        db.rollback()
+    for path, lines in files.items():
+        write_if_changed(path, "\n".join(lines) + "\n")
+    write_if_changed(root / "prices.jsonl", "\n".join(prices) + "\n")
+    for stale in set((root / "calls").glob("*/*.jsonl")) - set(files):
+        stale.unlink()
+    return sum(len(lines) - 1 for lines in files.values())
+
+
+def restore(db: sqlite3.Connection, root: Path) -> int:
+    """Merge a dump into the index. A call already held keeps the larger count of each kind, so restoring
+    never lowers a total and restoring twice changes nothing; history rows are recomputed by the next pass."""
+    now = int(time.time() * 1000)
+    restored = 0
+    try:
+        for path in sorted((root / "calls").glob("*/*.jsonl")):
+            with path.open() as handle:
+                head = json.loads(handle.readline())
+                at = [head["columns"].index(column) for column in BACKUP_COLUMNS]
+                rows = [(head["machine"], *(item[i] for i in at), now) for item in map(json.loads, handle)]
+            with db:
+                db.executemany(UPSERT, rows)
+            restored += len(rows)
+        prices = root / "prices.jsonl"
+        if prices.exists():
+            with prices.open() as handle:
+                columns = json.loads(handle.readline())["columns"]
+                at = [columns.index(column) for column in PRICE_COLUMNS]
+                rows = [tuple(item[i] for i in at) for item in map(json.loads, handle)]
+            with db:
+                db.executemany(PRICE_UPSERT, rows)
+    except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
+        raise TokensError(f"unreadable backup in {root}: {exc}") from exc
+    return restored
+
+
+def commit_backup(root: Path) -> str:
+    """Commit the dump and push every commit not yet pushed, when `root` is a git checkout."""
+    if not (root / ".git").exists():
+        return "not a git checkout: written, not committed"
+
+    def git(*args: str) -> subprocess.CompletedProcess:
+        done = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=900)
+        if done.returncode and args[0] != "diff":
+            raise TokensError(f"git {args[0]}: {(done.stderr.strip().splitlines() or ['failed'])[-1][:200]}")
+        return done
+
+    git("add", "-A")
+    changed = git("diff", "--cached", "--quiet").returncode != 0
+    if changed:
+        git("commit", "-q", "-m", f"token usage {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC")
+    if git("remote").stdout.strip():
+        git("push", "-q", "origin", "HEAD")
+        return ("committed" if changed else "unchanged") + ", pushed"
+    return "committed" if changed else "unchanged"
+
+
 # ---------------------------------------------------------------------------- series
 
 
@@ -845,7 +946,13 @@ def log_line(line: str) -> None:
 
 
 def cmd_serve(config: Config, args: argparse.Namespace) -> int:
-    connect(config.db).close()
+    db = connect(config.db)
+    if config.backup_dir and get_meta(db, "restored") is None and (config.backup_dir / "calls").is_dir():
+        n = restore(db, config.backup_dir)  # a new or rebuilt index starts from the last backup
+        with db:
+            set_meta(db, "restored", int(time.time()))
+        log_line(f"[serve] restored {n} calls from {config.backup_dir}")
+    db.close()
     stop = threading.Event()
     if not args.no_scan:
         threading.Thread(target=scanner, args=(config, stop, log_line), daemon=True).start()
@@ -883,6 +990,32 @@ def cmd_export(config: Config, args: argparse.Namespace) -> int:
     db = connect(config.db)
     scan(db, config)
     export(db, config, args.since, sys.stdout)
+    return 0
+
+
+def backup_dir(config: Config, args: argparse.Namespace) -> Path:
+    root = Path(args.dir).expanduser() if args.dir else config.backup_dir
+    if root is None:
+        raise TokensError("no backup directory: set tokens.backup_dir or pass --dir")
+    return root
+
+
+def cmd_backup(config: Config, args: argparse.Namespace) -> int:
+    root = backup_dir(config, args)
+    db = connect(config.db)
+    n = dump(db, root)
+    db.close()
+    print(f"backed up {n} calls to {root}: {'not committed' if args.no_git else commit_backup(root)}", flush=True)
+    return 0
+
+
+def cmd_restore(config: Config, args: argparse.Namespace) -> int:
+    root = backup_dir(config, args)
+    db = connect(config.db)
+    n = restore(db, root)
+    with db:
+        set_meta(db, "restored", int(time.time()))
+    print(f"merged {n} calls from {root}")
     return 0
 
 
@@ -925,11 +1058,17 @@ def main(argv: list[str] | None = None) -> int:
     report.add_argument("--metric", default="tokens", choices=METRICS)
     report.add_argument("--tools", default=",".join(STATUS_BAR_TOOLS), help="comma list of claude, omp, codex")
     report.add_argument("--json", action="store_true")
+    backup = sub.add_parser("backup", help="write every call to the backup directory, commit and push it")
+    backup.add_argument("--dir", help="backup directory (default: tokens.backup_dir)")
+    backup.add_argument("--no-git", action="store_true", help="write the files only")
+    restore_parser = sub.add_parser("restore", help="merge a backup into the index")
+    restore_parser.add_argument("--dir", help="backup directory (default: tokens.backup_dir)")
     args = parser.parse_args(argv)
     try:
         path = Path(args.registry or os.environ.get("RIGSYNC_REGISTRY") or DEFAULT_REGISTRY).expanduser()
         config = load_config(path)
-        commands = {"serve": cmd_serve, "scan": cmd_scan, "pull": cmd_pull, "export": cmd_export, "report": cmd_report}
+        commands = {"serve": cmd_serve, "scan": cmd_scan, "pull": cmd_pull, "export": cmd_export, "report": cmd_report,
+                    "backup": cmd_backup, "restore": cmd_restore}
         return commands[args.command](config, args)
     except TokensError as exc:
         print(f"tokens: {exc}", file=sys.stderr)

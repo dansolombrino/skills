@@ -1,0 +1,10 @@
+[Unit]
+Description=token-usage: write the index to tokens.backup_dir, commit and push it
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env python3 __TOKENS_PY__ backup
+NoNewPrivileges=true
+UMask=0077
+Nice=10

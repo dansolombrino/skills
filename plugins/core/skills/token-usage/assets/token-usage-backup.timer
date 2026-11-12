@@ -1,0 +1,10 @@
+[Unit]
+Description=token-usage: back up the index every 6 hours
+
+[Timer]
+OnCalendar=00/6:17
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target
