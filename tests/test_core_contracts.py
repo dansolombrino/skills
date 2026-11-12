@@ -31,7 +31,7 @@ class CoreContractTests(unittest.TestCase):
     def test_distributed_skills(self) -> None:
         self.assertEqual(
             {path.parent.name for path in (CORE / "skills").glob("*/SKILL.md")},
-            {"behemoth-gpu-niceness", "progress-updates", "project-init", "service-hub"},
+            {"behemoth-gpu-niceness", "progress-updates", "project-init", "service-hub", "token-usage"},
         )
 
     def test_core_is_installed_by_default_in_codex(self) -> None:

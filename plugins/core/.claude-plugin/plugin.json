@@ -1,7 +1,7 @@
 {
   "name": "core",
-  "version": "5.5.0",
-  "description": "Always-on working discipline for every project: report status and ETA for long-running tasks when they finish, fail, or stall, and tag each project with its categories so domain plugins such as research load only where they belong, put every web service a machine hosts behind one token-gated entry point, and keep a shareable per-user GPU niceness counter for the shared behemoth box.",
+  "version": "5.6.0",
+  "description": "Always-on working discipline for every project: report status and ETA for long-running tasks when they finish, fail, or stall, and tag each project with its categories so domain plugins such as research load only where they belong, put every web service a machine hosts behind one token-gated entry point, keep a shareable per-user GPU niceness counter for the shared behemoth box, and chart every model call of the local coding agents like a stock.",
   "author": {
     "name": "Dan Solombrino",
     "email": "dansolombrino@gmail.com",
@@ -15,6 +15,7 @@
     "eta",
     "service-hub",
     "reverse-proxy",
-    "gpu-usage"
+    "gpu-usage",
+    "token-usage"
   ]
 }

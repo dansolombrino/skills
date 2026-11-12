@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Token usage</title>
+<link rel="stylesheet" href="app.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<main>
+  <header class="top">
+    <div class="ticker">
+      <div class="eyebrow" id="eyebrow">Token usage</div>
+      <div class="quote"><span id="total" class="price">–</span><span id="change" class="chg"></span></div>
+      <p class="sub" id="summary">Loading…</p>
+    </div>
+    <div class="seg" role="group" aria-label="Range" id="ranges">
+      <button type="button" data-range="1d">1D</button>
+      <button type="button" data-range="1w">1W</button>
+      <button type="button" data-range="1m">1M</button>
+      <button type="button" data-range="3m">3M</button>
+      <button type="button" data-range="ytd">YTD</button>
+      <button type="button" data-range="all">All</button>
+    </div>
+  </header>
+
+  <div class="controls">
+    <div class="seg" role="group" aria-label="Chart">
+      <button type="button" data-chart="line">Line</button>
+      <button type="button" data-chart="candles">Candles</button>
+    </div>
+    <div class="seg" role="group" aria-label="Metric">
+      <button type="button" data-metric="tokens">Tokens</button>
+      <button type="button" data-metric="cost">Cost</button>
+    </div>
+    <div class="seg" role="group" aria-label="Split by">
+      <button type="button" data-group="tool">Agent</button>
+      <button type="button" data-group="model">Model</button>
+      <button type="button" data-group="project">Project</button>
+      <button type="button" data-group="machine">Machine</button>
+    </div>
+    <div class="chips" role="group" aria-label="Agents">
+      <button type="button" data-tool="claude">Claude Code</button>
+      <button type="button" data-tool="omp">omp</button>
+      <button type="button" data-tool="codex">Codex</button>
+    </div>
+    <div class="chips" role="group" aria-label="Count">
+      <button type="button" data-kind="input">Input</button>
+      <button type="button" data-kind="output">Output</button>
+      <button type="button" data-kind="cache_read">Cache read</button>
+      <button type="button" data-kind="cache_write">Cache write</button>
+    </div>
+  </div>
+
+  <section class="card chart-card">
+    <div id="chart" class="chart" role="img" aria-label="Token usage chart"></div>
+    <div id="tip" class="tip" hidden></div>
+  </section>
+
+  <section class="card">
+    <table id="legend">
+      <thead><tr>
+        <th scope="col">Series</th>
+        <th scope="col" class="num">Total</th>
+        <th scope="col" class="bar-col">Share</th>
+        <th scope="col" class="num">vs previous</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <p class="foot" id="foot"></p>
+</main>
+</body>
+</html>

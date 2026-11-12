@@ -1,0 +1,15 @@
+[Unit]
+Description=token-usage: indexes the coding agents' session logs and serves the read-only token chart (loopback, behind service-hub)
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 __TOKENS_PY__ serve
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+UMask=0077
+Nice=10
+
+[Install]
+WantedBy=default.target

@@ -21,6 +21,8 @@ HOST_NAME_RE = re.compile(r"\b(Claude|Codex|Anthropic|OpenAI|ChatGPT|oh-my-pi|om
 HOST_NAME_ALLOWLIST = {
     "plugins/core/skills/project-init/SKILL.md",  # generates each host's settings
     "plugins/research/skills/sweep-supervisor/references/setup.md",  # per-host agent commands
+    "plugins/core/skills/token-usage/SKILL.md",  # reads each host's session logs
+    "plugins/core/skills/token-usage/references/setup.md",  # per-host log locations
 }
 SKILL_KEYS = {"name", "description"}
 # A Claude pointer may add Claude-only guardrails. A distributed skill may not: the field would do

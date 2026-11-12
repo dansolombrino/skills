@@ -1,0 +1,4 @@
+interface:
+  display_name: "Token Usage"
+  short_description: "Chart the coding agents' token usage like a stock"
+  default_prompt: "Use $token-usage to show how many tokens the agents used this week, by project."
