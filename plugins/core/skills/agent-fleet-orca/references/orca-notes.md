@@ -50,3 +50,25 @@ names it generated itself, so a branch renamed by the worker, or the coordinator
 `worktree create --agent … --prompt …` submits the prompt to the new chat at once. Specs reach
 workers pasted after Orca's brief and are size-limited, so specs live in files and the
 `--spec` text only points to one.
+
+## Closing workers and removing workspaces
+
+Tried by hand on Orca 1.4.257 with throwaway workspaces:
+
+- A finished worker's terminal closes by itself about two minutes after an accepted
+  `worker_done` (`autoReleaseAt` in `worker-list`), unless it is kept open. `worker-release`
+  closes it sooner and keeps its output readable with `worker-read`. Neither removes the
+  worktree.
+- `worktree rm` does not cascade. Removing a parent leaves its children in place as top-level
+  workspaces, so `close-out` removes children first.
+- Without `--force`, `worktree rm` refuses a checkout with uncommitted or untracked files
+  (`runtime_error`, naming the paths), and nothing is removed.
+- With `--delete-branch`, Orca deletes a branch only when it can prove the branch is merged.
+  Otherwise it keeps the branch and reports it as `preservedBranch` in the result. Without the
+  flag every branch is kept.
+- `worktree rm` refuses `--worktree current`/`active`; it needs an exact `id:` selector.
+- Removing the workspace a command runs in works, but Orca stops that workspace's sessions,
+  including the caller (it exited with 143), so the caller never sees the reply. That is why the
+  report and the archived state are written before `l0-<group>` goes.
+- The sidebar's Delete with Descendants does the same cascade in the UI. The CLI has no
+  equivalent.

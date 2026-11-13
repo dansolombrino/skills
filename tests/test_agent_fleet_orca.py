@@ -24,7 +24,7 @@ args = sys.argv[1:]
 with open(os.environ["FAKE_ORCA_LOG"], "a") as log:
     log.write(json.dumps(args) + "\n")
 responses = json.loads(open(os.environ["FAKE_ORCA_RESPONSES"]).read())
-reply = responses.get(" ".join(args[:2]), {"stdout": {"ok": False, "error": {"code": "unknown", "message": "no canned reply"}}, "exit": 1})
+reply = responses.get(" ".join(args)) or responses.get(" ".join(args[:2]), {"stdout": {"ok": False, "error": {"code": "unknown", "message": "no canned reply"}}, "exit": 1})
 out = reply["stdout"]
 print(out if isinstance(out, str) else json.dumps(out))
 if reply.get("stderr"):
@@ -77,13 +77,15 @@ class AgentFleetOrcaTests(unittest.TestCase):
 
     # helpers ---------------------------------------------------------------------------------
 
-    def reply(self, *, current: dict, run_id: str | None = None, **extra: dict) -> None:
+    def reply(self, *, current: dict, run_id: str | None = None, raw: dict | None = None, **extra: dict) -> None:
+        """Canned replies keyed by the first two args; `raw` keys are full argv strings and win."""
         canned = {
             "worktree current": ok({"worktree": current}),
             "orchestration run-current": {"stdout": {"ok": True, "result": {"runId": run_id}}},
             "orchestration run-use": {"stdout": {"ok": True, "result": {"runId": run_id}}},
         }
         canned.update({key.replace("_", " ", 1).replace("_", "-"): value for key, value in extra.items()})
+        canned.update(raw or {})
         self.responses.write_text(json.dumps(canned))
 
     def cli(self, *args: str) -> tuple[int, dict]:
@@ -339,6 +341,105 @@ class AgentFleetOrcaTests(unittest.TestCase):
     def test_usage_errors_are_json(self) -> None:
         code, out = self.cli("bootstrap", "--group", "alpha")
         self.assertEqual((code, out["error"]), (1, "usage"))
+
+    # close-out -------------------------------------------------------------------------------
+
+    def close_out_fixture(self, *, states: dict | None = None, rm: dict | None = None) -> None:
+        """l0-alpha holds item a (recorded workspace id, with a nested helper h), item b (matched
+        by its `alpha-b` name) and a hand-made `scratch` workspace."""
+        def wt(name: str, parent: str, children: tuple[str, ...] = ()) -> dict:
+            return {"id": f"{REPO}::/wt/{name}", "path": f"/wt/{name}", "displayName": name,
+                    "isMainWorktree": False, "parentWorktreeId": parent,
+                    "childWorktreeIds": [f"{REPO}::/wt/{c}" for c in children], "branch": f"refs/heads/{name}"}
+        records = {
+            "l0-alpha": {**L0, "childWorktreeIds": [f"{REPO}::/wt/{c}" for c in ("alpha-a", "alpha-b", "scratch")]},
+            "alpha-a": wt("alpha-a", L0["id"], ("alpha-a-h",)),
+            "alpha-a-h": wt("alpha-a-h", f"{REPO}::/wt/alpha-a"),
+            "alpha-b": wt("alpha-b", L0["id"]),
+            "scratch": wt("scratch", L0["id"]),
+        }
+        states = {"dA": "succeeded", "dH": "succeeded", "dB": "failed", **(states or {})}
+        where = {"dA": "alpha-a", "dH": "alpha-a-h", "dB": "alpha-b"}
+        workers = [{"dispatchId": d, "state": s, "workspace": f"{REPO}::/wt/{where[d]}"} for d, s in states.items()]
+        raw = {f"worktree show --worktree id:{r['id']} --json": ok({"worktree": r}) for r in records.values()}
+        raw.update(rm or {})
+        self.write_state(workspace_id=L0["id"], run_id="run_1", items={
+            "a": {"dispatch": "dA", "workspace": f"{REPO}::/wt/alpha-a"}, "b": {"dispatch": "dB"}})
+        os.environ["ORCA_WORKTREE_ID"] = L0["id"]
+        self.reply(current=L0, run_id="run_1", raw=raw,
+                   orchestration_worker_list=ok({"workers": workers}),
+                   orchestration_worker_release=ok({"status": "already_released"}),
+                   worktree_rm=ok({"removed": True}))
+        clean = mock.patch.object(self.module, "dirty_files", return_value=[])
+        clean.start()
+        self.addCleanup(clean.stop)
+
+    def removals(self) -> list[str]:
+        return [call[call.index("--worktree") + 1].rsplit("/", 1)[1] for call in self.calls() if call[:2] == ["worktree", "rm"]]
+
+    def test_close_out_plans_without_touching_anything(self) -> None:
+        self.close_out_fixture()
+        code, out = self.cli("close-out")
+        self.assertEqual(code, 0, out)
+        self.assertTrue(out["dry_run"])
+        self.assertEqual([(t["workspace"], t["role"], t["item"]) for t in out["targets"]], [
+            ("alpha-a-h", "other", None), ("alpha-a", "worker", "a"), ("alpha-b", "worker", "b"),
+            ("scratch", "other", None), ("l0-alpha", "coordinator", None)])
+        self.assertFalse(out["blocked"])
+        self.assertEqual([c for c in self.calls() if c[:2] in (["worktree", "rm"], ["orchestration", "worker-release"])], [])
+
+    def test_close_out_removes_children_first_then_archives_and_removes_l0(self) -> None:
+        self.close_out_fixture(rm={
+            f"worktree rm --worktree id:{REPO}::/wt/alpha-a --delete-branch --json":
+                ok({"removed": True, "preservedBranch": {"branchName": "alpha-a"}})})
+        code, out = self.cli("close-out", "--confirm")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.removals(), ["alpha-a-h", "alpha-a", "alpha-b", "scratch", "l0-alpha"])
+        released = [c[c.index("--dispatch") + 1] for c in self.calls() if c[:2] == ["orchestration", "worker-release"]]
+        self.assertEqual(released, ["dH", "dA", "dB"])
+        self.assertTrue(all("--force" not in c for c in self.calls()))
+        self.assertEqual((out["coordinator"], out["preserved_branches"]), ("removed", ["alpha-a"]))
+        self.assertFalse(self.group_dir().exists())
+        [archive] = (self.state_root / REPO / ".closed").iterdir()
+        self.assertTrue(archive.name.startswith("alpha-"))
+        self.assertEqual(json.loads((archive / "state.json").read_text())["items"]["b"]["status"], "removed")
+        self.assertEqual(json.loads((archive / "close-out.json").read_text())["coordinator"], "removed")
+
+    def test_close_out_refuses_while_a_worker_works_or_a_checkout_is_dirty(self) -> None:
+        self.close_out_fixture(states={"dB": "running"})
+        code, out = self.cli("close-out", "--confirm")
+        self.assertEqual((code, out["error"]), (1, "close-out-blocked"))
+        self.assertEqual(self.removals(), [])
+        self.close_out_fixture()
+        with mock.patch.object(self.module, "dirty_files", return_value=["?? notes.txt"]):
+            code, out = self.cli("close-out", "--confirm")
+            self.assertEqual((code, out["error"]), (1, "close-out-blocked"))
+            self.assertEqual(self.removals(), [])
+            code, out = self.cli("close-out", "--confirm", "--force")
+        self.assertEqual(code, 0, out)
+        self.assertTrue(all("--force" in c for c in self.calls() if c[:2] == ["worktree", "rm"]))
+
+    def test_close_out_items_removes_their_subtree_and_keeps_coordinator(self) -> None:
+        self.close_out_fixture()
+        code, out = self.cli("close-out", "--item", "a", "--confirm")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.removals(), ["alpha-a-h", "alpha-a"])
+        self.assertEqual(out["coordinator"], "kept")
+        state = self.read_state()
+        self.assertEqual((state["items"]["a"].get("status"), state["items"]["b"].get("status")), ("removed", None))
+        code, out = self.cli("close-out", "--item", "zzz")
+        self.assertEqual((code, out["error"]), (1, "unknown-item"))
+
+    def test_close_out_stops_at_first_failed_removal_and_keeps_l0(self) -> None:
+        self.close_out_fixture(rm={
+            f"worktree rm --worktree id:{REPO}::/wt/alpha-b --delete-branch --json":
+                {"stdout": {"ok": False, "error": {"code": "runtime_error", "message": "locked"}}, "exit": 1}})
+        code, out = self.cli("close-out", "--confirm")
+        self.assertEqual((code, out["error"]), (1, "remove-failed"))
+        self.assertEqual(self.removals(), ["alpha-a-h", "alpha-a", "alpha-b"])
+        self.assertEqual(self.read_state()["items"]["a"]["status"], "removed")
+        report = json.loads((self.group_dir() / "close-out.json").read_text())
+        self.assertEqual((report["coordinator"], report["removed"]), ("kept", ["alpha-a-h", "alpha-a"]))
 
 
 if __name__ == "__main__":

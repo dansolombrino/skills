@@ -68,4 +68,9 @@ failed or was not done. Ask for each decision as a concrete choice.
 
 ## 7. Close out
 
-After the user has given or declined every go, run `close-out`.
+`close-out` removes workspaces only on the user's explicit go, after showing them its plan.
+
+- An item that needs nothing more (merged, declined, or dropped) can be closed on its own, as
+  soon as the user says so; the rest of the group keeps running.
+- When the user has given or declined every go, close the whole group. Give your final report
+  first: removing the coordinator workspace ends this chat.

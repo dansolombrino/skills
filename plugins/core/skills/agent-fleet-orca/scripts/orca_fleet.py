@@ -14,6 +14,8 @@ Orca calls whose order matters; every subcommand prints ONE JSON object and exit
     record-run [--run R]                     -> store the Run (default: the one bound here)
     record-worker --item NAME --dispatch D [--workspace W] [--agent A] [--status S]
     show                                     -> the state of this l0 workspace
+    close-out [--item NAME ...] [--force] [--confirm]
+                                             -> plan (default) or remove the group's workspaces
 
 The Orca CLI is $ORCA_CLI_COMMAND, else `orca-ide` on Linux (bare `orca` there is the GNOME
 screen reader), else `orca`. State lives in $AGENT_FLEET_STATE_DIR, else
@@ -42,6 +44,9 @@ CLI_TIMEOUT = 120
 TAIL_CHARS = 800
 STATE_VERSION = 1
 ITEM_FIELDS = ("dispatch", "workspace", "agent", "status")
+# Worker states after which a workspace may be removed; any other state means still working.
+SETTLED_WORKER_STATES = frozenset({"succeeded", "failed", "canceled", "cancelled", "stopped", "abandoned"})
+DIRTY_SHOWN = 10
 
 
 class FleetError(Exception):
@@ -152,6 +157,68 @@ def current_workspace(cli: list[str]) -> dict:
 def current_run_id(cli: list[str]) -> str | None:
     run_id = run_orca(cli, "orchestration", "run-current", "--json").get("runId")
     return run_id if isinstance(run_id, str) and run_id else None
+
+
+def show_workspace(cli: list[str], worktree_id: str) -> dict:
+    record = run_orca(cli, "worktree", "show", "--worktree", f"id:{worktree_id}", "--json").get("worktree")
+    if not isinstance(record, dict) or not record.get("id"):
+        raise FleetError(
+            "orca-cli-failed",
+            f"`worktree show` returned no record for {worktree_id}.",
+            "Check the workspace with `worktree list --json`, then retry.",
+        )
+    return record
+
+
+def nested_workspaces(cli: list[str], root_id: str) -> list[dict]:
+    """Every workspace nested under root_id at any depth, each listed before its parent.
+
+    Orca's `worktree rm` does not cascade: removing a parent leaves its children as top-level
+    workspaces. Removal therefore goes children first, in this order."""
+    out: list[dict] = []
+    seen = {root_id}
+
+    def walk(record: dict) -> None:
+        for child_id in record.get("childWorktreeIds") or []:
+            if not isinstance(child_id, str) or child_id in seen:
+                continue
+            seen.add(child_id)
+            child = show_workspace(cli, child_id)
+            walk(child)
+            out.append(child)
+
+    walk(show_workspace(cli, root_id))
+    return out
+
+
+def run_workers(cli: list[str], run_id: str) -> list[dict]:
+    rows: list[dict] = []
+    cursor = None
+    while True:
+        argv = ["orchestration", "worker-list", "--run", run_id, "--limit", "100", "--json"]
+        if cursor:
+            argv += ["--cursor", cursor]
+        result = run_orca(cli, *argv)
+        rows += [row for row in result.get("workers") or [] if isinstance(row, dict)]
+        cursor = result.get("nextCursor")
+        if not cursor:
+            return rows
+
+
+def dirty_files(path: str | None) -> list[str] | None:
+    """`git status --porcelain` lines of a checkout (what makes `worktree rm` refuse without
+    --force), [] when clean, None when git cannot read it."""
+    if not path:
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "-C", path, "status", "--porcelain"], capture_output=True, text=True, timeout=CLI_TIMEOUT
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    return [line for line in proc.stdout.splitlines() if line.strip()]
 
 
 def workspace_summary(record: dict) -> dict:
@@ -569,6 +636,206 @@ def cmd_show(_: argparse.Namespace) -> dict:
     return {"ok": True, "group": l0.group, "state_dir": str(l0.dir), "state": l0.require_state()}
 
 
+def short_branch(record: dict) -> str | None:
+    branch = record.get("branch")
+    return branch.removeprefix("refs/heads/") if isinstance(branch, str) and branch else None
+
+
+def item_of(record: dict, items: dict, group: str) -> str | None:
+    for name, item in items.items():
+        if item.get("workspace") in (record.get("id"), workspace_name(record)):
+            return name
+    name = workspace_name(record)
+    prefix = f"{group}-"
+    if name.startswith(prefix) and name[len(prefix) :] in items:
+        return name[len(prefix) :]
+    return None
+
+
+def close_out_target(record: dict, role: str, item: str | None, workers: list[dict], force: bool) -> dict:
+    dispatches = [
+        {"dispatch": row.get("dispatchId"), "state": row.get("state")}
+        for row in workers
+        if row.get("workspace") == record["id"] and row.get("dispatchId")
+    ]
+    blockers = []
+    active = [d["dispatch"] for d in dispatches if d["state"] not in SETTLED_WORKER_STATES]
+    if active:
+        blockers.append(f"worker still working: {', '.join(active)}")
+    dirty = dirty_files(record.get("path"))
+    if not force:
+        if dirty is None:
+            blockers.append("git cannot read the checkout")
+        elif dirty:
+            blockers.append(f"{len(dirty)} uncommitted or untracked path(s)")
+    return {
+        "workspace": workspace_name(record),
+        "id": record["id"],
+        "path": record.get("path"),
+        "branch": short_branch(record),
+        "role": role,
+        "item": item,
+        "dispatches": dispatches,
+        "dirty": (dirty or [])[:DIRTY_SHOWN],
+        "blockers": blockers,
+    }
+
+
+def remove_workspace(cli: list[str], target: dict, force: bool) -> dict:
+    argv = ["worktree", "rm", "--worktree", f"id:{target['id']}", "--delete-branch", "--json"]
+    if force:
+        argv.insert(-1, "--force")
+    return run_orca(cli, *argv)
+
+
+def write_report(directory: Path, report: dict) -> Path:
+    path = directory / "close-out.json"
+    path.write_text(json.dumps(report, indent=2) + "\n")
+    return path
+
+
+def cmd_close_out(args: argparse.Namespace) -> dict:
+    """Remove the group's workspaces: workers deepest first, the coordinator workspace last.
+
+    Without --confirm only the plan is printed. With --item only those items' workspaces (and
+    anything nested under them) go and the coordinator stays. Branches go only where Orca can
+    prove them merged (`worktree rm --delete-branch`); the others are kept and reported."""
+    l0 = L0(require_orca())
+    state = l0.require_terminal()
+    items = state.get("items") or {}
+    run_id = state.get("run_id")
+    if items and not run_id:
+        raise FleetError(
+            "no-run",
+            f"Group {l0.group!r} has workers but no Run recorded, so their states cannot be checked.",
+            "Run `record-run` (or `record-run --run <id>`), then retry.",
+        )
+    unknown = [name for name in args.item if name not in items]
+    if unknown:
+        raise FleetError(
+            "unknown-item",
+            f"No item {', '.join(map(repr, unknown))} in group {l0.group!r}.",
+            f"Pick from: {', '.join(sorted(items)) or '(none recorded)'}.",
+        )
+
+    workers = run_workers(l0.cli, run_id) if run_id else []
+    nested = nested_workspaces(l0.cli, state["workspace_id"])
+    owner = {record["id"]: item_of(record, items, l0.group) for record in nested}
+    if args.item:
+        parents = {record["id"]: record.get("parentWorktreeId") for record in nested}
+
+        def selected(worktree_id: str | None) -> bool:
+            while worktree_id in parents:
+                if owner.get(worktree_id) in args.item:
+                    return True
+                worktree_id = parents[worktree_id]
+            return False
+
+        nested = [record for record in nested if selected(record["id"])]
+        missing = sorted(set(args.item) - {owner.get(record["id"]) for record in nested})
+        if missing:
+            raise FleetError(
+                "no-workspace",
+                f"Item(s) {', '.join(missing)} have no workspace under l0-{l0.group}.",
+                "Check `worktree ps --json`; a workspace already removed needs nothing more.",
+            )
+    targets = [
+        close_out_target(r, "worker" if owner[r["id"]] else "other", owner[r["id"]], workers, args.force)
+        for r in nested
+    ]
+    removes_coordinator = not args.item
+    if removes_coordinator:
+        targets.append(close_out_target(show_workspace(l0.cli, state["workspace_id"]), "coordinator", None, workers, args.force))
+    blocked = any(target["blockers"] for target in targets)
+    plan = {
+        "group": l0.group,
+        "removes_coordinator": removes_coordinator,
+        "force": args.force,
+        "targets": targets,
+        "blocked": blocked,
+    }
+    if not args.confirm:
+        return {
+            "ok": True,
+            "dry_run": True,
+            **plan,
+            "next": "Show this plan to the user; on their explicit go, rerun with --confirm."
+            + (" Removing the coordinator workspace ends this chat." if removes_coordinator else ""),
+        }
+    if blocked:
+        return {
+            "ok": False,
+            "error": "close-out-blocked",
+            "message": "Some workspaces cannot be removed yet; nothing was removed.",
+            "next": "Resolve each target's blockers (wait for the worker, or have it commit or discard "
+            "its changes), or rerun with --force only on the user's explicit go to discard them.",
+            **plan,
+        }
+
+    report = {
+        "group": l0.group,
+        "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "removed": [],
+        "preserved_branches": [],
+        "warnings": [],
+        "coordinator": "removing" if removes_coordinator else "kept",
+    }
+    for target in targets:
+        if target["role"] == "coordinator":
+            continue
+        for dispatch in target["dispatches"]:
+            try:
+                run_orca(l0.cli, "orchestration", "worker-release", "--dispatch", dispatch["dispatch"], "--json")
+            except FleetError as exc:
+                report["warnings"].append(f"worker-release {dispatch['dispatch']}: {exc.message}")
+        try:
+            result = remove_workspace(l0.cli, target, args.force)
+        except FleetError as exc:
+            report["coordinator"] = "kept"
+            save_state(l0.dir, state)
+            path = write_report(l0.dir, report)
+            raise FleetError(
+                "remove-failed",
+                f"Removing {target['workspace']} failed after {len(report['removed'])} removal(s): {exc.message}",
+                f"Nothing after it was touched. Fix the cause, then rerun close-out; report: {path}",
+            ) from exc
+        report["removed"].append(target["workspace"])
+        preserved = result.get("preservedBranch")
+        if isinstance(preserved, dict) and preserved.get("branchName"):
+            report["preserved_branches"].append(preserved["branchName"])
+        if target["item"]:
+            items[target["item"]]["status"] = "removed"
+    save_state(l0.dir, state)
+    if not removes_coordinator:
+        return {"ok": True, **report, "report": str(write_report(l0.dir, report))}
+
+    # Last step: the coordinator workspace. Orca stops every session in it, this process and the
+    # chat that started it included, so the report and the archived state are written first.
+    # The state moves aside so the group name can be used again.
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    archive = l0.dir.parent / ".closed" / f"{l0.group}-{stamp}"
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(l0.dir), str(archive))
+    write_report(archive, report)
+    coordinator = targets[-1]
+    try:
+        result = remove_workspace(l0.cli, coordinator, args.force)
+    except FleetError as exc:
+        shutil.move(str(archive), str(l0.dir))
+        report["coordinator"] = "kept"
+        path = write_report(l0.dir, report)
+        raise FleetError(
+            "remove-failed",
+            f"Every worker workspace is gone, but removing l0-{l0.group} failed: {exc.message}",
+            f"Fix the cause and rerun close-out, or delete l0-{l0.group} from Orca's sidebar; report: {path}",
+        ) from exc
+    report["coordinator"] = "removed"
+    preserved = result.get("preservedBranch")
+    if isinstance(preserved, dict) and preserved.get("branchName"):
+        report["preserved_branches"].append(preserved["branchName"])
+    return {"ok": True, **report, "report": str(write_report(archive, report))}
+
+
 # --- entry point -------------------------------------------------------------------------------
 
 
@@ -612,6 +879,12 @@ def build_parser() -> Parser:
     worker.set_defaults(func=cmd_record_worker)
 
     sub.add_parser("show").set_defaults(func=cmd_show)
+
+    close = sub.add_parser("close-out")
+    close.add_argument("--item", action="append", default=[])
+    close.add_argument("--force", action="store_true")
+    close.add_argument("--confirm", action="store_true")
+    close.set_defaults(func=cmd_close_out)
     return parser
 
 

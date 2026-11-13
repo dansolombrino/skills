@@ -45,7 +45,7 @@ Every adapter provides the same operations, and level-0.md uses only these names
 | `start-worker` | One level-1 agent on one spec, in a new worktree nested under the coordinator workspace |
 | `message-worker` / `answer-question` | A follow-up, fix, or answer delivered to one worker |
 | `wait` | The coordinator ends its turn and is woken by the orchestrator, never by polling |
-| `close-out` | Settled workers released; the user told how to remove the group |
+| `close-out` | On the user's go, the group's worktrees removed (workers first, the coordinator workspace last, which ends the coordinator chat) or only the named items'; branches not proven merged are kept |
 
 A new orchestrator means a new sibling skill, `agent-fleet-<orchestrator>`, providing the same
 operations; this file only gains a row in the Adapter table.

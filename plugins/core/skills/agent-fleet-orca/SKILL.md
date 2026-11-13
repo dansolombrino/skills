@@ -80,8 +80,27 @@ a `check` command, and you run exactly that one. Never run `check`, `worker-list
 you.
 
 ### close-out
-- Release settled workers nobody will use again: `ORCA orchestration worker-release` (see
-  `--help`). Workers in their own worktrees stay open until released.
-- Tell the user the group can be removed in one step: right-click `l0-<group>` in Orca's sidebar,
-  then Delete with Descendants. Orca keeps any branch with unmerged commits for review. Never
-  delete workspaces or branches yourself without the user's explicit go.
+Orca closes a finished worker's terminal by itself about two minutes after its `worker_done`
+(`send` reopens it), but it never removes a worktree. This step does, for the whole group or for
+some items, and only on the user's explicit go.
+
+1. **Plan.** `python3 FLEET close-out`, plus `--item <item>` once per item to close only those
+   (their nested workspaces go with them; `l0-<group>` stays). It changes nothing and lists every
+   workspace to remove, children first and `l0-<group>` last, each with its branch, its workers'
+   states, uncommitted paths, and `blockers`.
+2. **Ask.** Show the plan and get an explicit go. Say that Orca deletes only the branches it can
+   prove merged and keeps the rest, and, for the whole group, that removing `l0-<group>` ends
+   this chat.
+3. **Report, then confirm.** For the whole group, give the user your final report first, with
+   where the close-out report will be: `<state root>/<repo id>/.closed/<group>-<UTC time>/close-out.json`
+   (it lists what was removed and every branch kept). Then run the same command with
+   `--confirm`. It releases each worker (`worker-read` still works afterwards), removes each
+   workspace with `worktree rm --delete-branch`, children first, moves the group state to that
+   `.closed` folder, and removes `l0-<group>` last, which stops this chat.
+4. **Refusals.** `close-out-blocked` removed nothing. A worker still working: wait for it, or on
+   the user's cancellation `ORCA orchestration worker-stop --dispatch <id>`. Uncommitted paths:
+   have the worker commit or discard them; `--force` discards them, only on a go that names
+   those workspaces. `remove-failed` stopped at the named workspace and kept `l0-<group>`: fix
+   the cause and rerun; workspaces already removed no longer appear.
+
+Never remove a fleet workspace or branch any other way, and never without the user's go.
