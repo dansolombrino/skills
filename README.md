@@ -5,8 +5,8 @@ Personal skills distributed as a private plugin marketplace for **Codex, Claude 
 Skills are organized as domain plugins: one plugin per domain, each containing related skills
 installed as a unit. Two plugins exist:
 
-- **core** — always on in every project: `progress-updates`, `project-init`, `service-hub`, and
-  `behemoth-gpu-niceness`.
+- **core** — always on in every project: `progress-updates`, `project-init`, `service-hub`,
+  `behemoth-gpu-niceness`, `token-usage`, `agent-fleet`, and its Orca adapter `agent-fleet-orca`.
 - **research** — Research 2.0 GPU experiment workflow. Off by default; enabled per project.
 
 All three hosts read the same `SKILL.md` files. Only the manifests differ, so a skill is written

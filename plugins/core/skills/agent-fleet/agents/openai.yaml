@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Fleet"
+  short_description: "One agent per work item, each in its own worktree"
+  default_prompt: "Use $agent-fleet to fix these five audit findings in parallel, one agent per finding, reporting back to this chat."

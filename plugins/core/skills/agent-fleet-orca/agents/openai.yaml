@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Fleet: Orca"
+  short_description: "Orca adapter for agent-fleet workers and workspaces"
+  default_prompt: "Use $agent-fleet-orca to resume this fleet coordinator chat in its Orca workspace."
