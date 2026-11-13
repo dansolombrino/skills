@@ -69,7 +69,9 @@ class WaveReminderTests(unittest.TestCase):
             "rigs": {"hub": {"kind": "lanes", "done": 2}}, "certs": {}, **fields,
         }
         (self.state / wave_id / "snapshot.json").write_text(json.dumps(snapshot))
-        return (now + timedelta(hours=2)).strftime("%H:%M")
+        eta = now + timedelta(hours=2)
+        # The reminder names the day too when the ETA falls on another day than today.
+        return eta.strftime("%H:%M" if eta.date() == now.date() else "%m-%d %H:%M")
 
     def marker(self, wave_id: str, **fields) -> None:
         """What a running `watch` keeps fresh in the wave's state directory."""
