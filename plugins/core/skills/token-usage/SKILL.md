@@ -35,13 +35,20 @@ usually shows:
   dotted. A candle is the burn rate per hour over the trailing candle-length window: it opens
   where the previous candle closed, green when the rate rose.
 - The range and the candle interval are separate choices, as on TradingView: 1m, 5m, 15m, 30m,
-  1h, 4h, 6h, 12h, 1D, 1W or Auto (1h for a day, 6h for a week, 1D up to 120 days, 1W beyond). An
-  interval fits a range when it gives 1 to 1600 candles; the page greys out the others. Candles
-  follow the local clock: a day starts at local midnight, so it has 23 or 25 hours across a daylight
-  saving change, and a week starts on Monday. Every range starts at a local hour, so changing the
-  interval never changes the totals; a candle the range start cuts is drawn partial. The
+  1h, 4h, 6h, 12h, 1D, 1W or Auto (the finest giving at most 120 candles). Zoom with the wheel or a
+  pinch, pan by dragging, double-click (or Reset zoom) to go back to the range; a range button also
+  resets. An interval fits the visible window when it gives 1 to 2 candles per pixel column, so
+  zooming in unlocks finer ones (1m on any stretch of All) and, with an interval chosen, zooming
+  out stops at that limit. The line is sampled at least twice per pixel column, which draws a
+  running total exactly (M4); every answer is sized by the plot's width, not by the window.
+- Candles follow the local clock: a day starts at local midnight, so it has 23 or 25 hours across
+  a daylight saving change, and a week starts on Monday. Every range starts at a local hour, so
+  changing the interval never changes the totals; a candle the window cuts is drawn partial. The
   `(Claude Code history)` rows are daily totals placed at noon UTC, so candles under a day show
   them as a spike at that hour.
+- The chart reads `roll`, sums of calls per 10 s and 5 min and per machine, agent, model and
+  directory, kept exact by SQLite triggers on `calls` and rebuilt from it when `ROLL_VERSION`
+  changes; a window answers in about 0.1 s however long it is.
 - Projects are the basename of the working directory, so an agent run in a worktree counts under
   the worktree's name; a directory named by a hash counts under its parent.
 
@@ -66,8 +73,8 @@ the page's hub URL from `hub.py url tokens` (service-hub), never the backend por
 - `export` on a fleet machine only reads its logs and writes its own index under
   `~/.local/share/token-usage/`; it changes nothing else there.
 - The service binds loopback only (a non-loopback `bind` is refused), answers GET/HEAD only, and
-  sends a strict Content-Security-Policy. The page loads no external scripts and builds its DOM
-  and SVG without parsing markup.
+  sends a strict Content-Security-Policy. The page loads no external scripts, builds its DOM
+  without parsing markup, and draws the chart on canvas.
 - Share it only through a service-hub guest token, and only with people who may see the project
   names.
 - `backup` pushes working directories, model and machine names to the backup repository's

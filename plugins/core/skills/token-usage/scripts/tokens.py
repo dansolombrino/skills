@@ -322,21 +322,90 @@ UPSERT = """INSERT INTO calls VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLI
      OR excluded.cache_write > cache_write"""
 PRICE_UPSERT = """INSERT INTO prices VALUES (?, ?, ?, ?) ON CONFLICT(model, kind) DO UPDATE SET
   ts = excluded.ts, price = excluded.price WHERE excluded.ts >= prices.ts"""
+# The chart reads rollups, not calls: grouping 200k calls on their text columns takes seconds, which
+# zooming cannot wait for. `roll` sums calls per sampling step (ROLL_STEPS seconds) and dimension
+# (machine, tool, model, cwd, interned in `dims`); triggers keep it exact on every insert, update and
+# delete, whichever code writes `calls` (INSERT OR REPLACE needs recursive_triggers, set in connect).
+ROLL_STEPS = (10, 300)
+ROLL_VERSION = "2"  # bump when the rollup's tables or triggers change: every index rebuilds it on connect
+ROLL_TABLES = """
+CREATE TABLE dims(id INTEGER PRIMARY KEY, machine TEXT NOT NULL, tool TEXT NOT NULL, model TEXT NOT NULL,
+  cwd TEXT NOT NULL, UNIQUE(machine, tool, model, cwd));
+CREATE TABLE roll(step INTEGER NOT NULL, b INTEGER NOT NULL, dim INTEGER NOT NULL, n INTEGER NOT NULL,
+  input INTEGER NOT NULL, output INTEGER NOT NULL, cache_read INTEGER NOT NULL, cache_write INTEGER NOT NULL,
+  PRIMARY KEY(step, b, dim)) WITHOUT ROWID;
+"""
+_STEPS = " UNION ALL ".join(f"SELECT {s} AS step" for s in ROLL_STEPS)
+_STEP_IN = ", ".join(map(str, ROLL_STEPS))
+_DIM = "(SELECT id FROM dims WHERE machine = {r}.machine AND tool = {r}.tool AND model = {r}.model AND cwd = {r}.cwd)"
+# No statement in a trigger body may hit a conflict: the firing statement's policy (OR REPLACE, an
+# upsert) would override its own and replace the sums. So: update what exists, insert what does not.
+_ADD = f"""INSERT INTO dims(machine, tool, model, cwd) SELECT NEW.machine, NEW.tool, NEW.model, NEW.cwd
+    WHERE NOT EXISTS {_DIM.format(r="NEW")};
+  UPDATE roll SET n = n + 1, input = input + NEW.input, output = output + NEW.output,
+    cache_read = cache_read + NEW.cache_read, cache_write = cache_write + NEW.cache_write
+    WHERE step IN ({_STEP_IN}) AND b = NEW.ts / step AND dim = {_DIM.format(r="NEW")};
+  INSERT INTO roll SELECT s.step, NEW.ts / s.step, {_DIM.format(r="NEW")}, 1, NEW.input, NEW.output,
+    NEW.cache_read, NEW.cache_write FROM ({_STEPS}) s
+    WHERE NOT EXISTS (SELECT 1 FROM roll r WHERE r.step = s.step AND r.b = NEW.ts / s.step AND r.dim = {_DIM.format(r="NEW")});"""
+_SUB = f"""UPDATE roll SET n = n - 1, input = input - OLD.input, output = output - OLD.output,
+    cache_read = cache_read - OLD.cache_read, cache_write = cache_write - OLD.cache_write
+    WHERE step IN ({_STEP_IN}) AND b = OLD.ts / step AND dim = {_DIM.format(r="OLD")};
+  DELETE FROM roll WHERE n = 0 AND step IN ({_STEP_IN}) AND b = OLD.ts / step
+    AND dim = {_DIM.format(r="OLD")};"""
+ROLL_TRIGGERS = (
+    f"CREATE TRIGGER calls_roll_insert AFTER INSERT ON calls BEGIN {_ADD} END",
+    f"""CREATE TRIGGER calls_roll_update AFTER UPDATE OF machine, tool, ts, model, cwd, input, output,
+      cache_read, cache_write ON calls BEGIN {_SUB} {_ADD} END""",
+    f"CREATE TRIGGER calls_roll_delete AFTER DELETE ON calls BEGIN {_SUB} END",
+)
 
 
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(path, timeout=30)
     db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA recursive_triggers=ON")  # so INSERT OR REPLACE subtracts the row it replaces
     db.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
     version = db.execute("SELECT value FROM meta WHERE key = 'schema'").fetchone()
     if not version or version[0] != SCHEMA_VERSION:  # an older layout: rebuild it from the logs
         with db:
-            for table in ("calls", "files", "prices"):
+            for table in ("calls", "files", "prices", "roll", "dims"):
                 db.execute(f"DROP TABLE IF EXISTS {table}")
             db.execute("DELETE FROM meta")
             db.execute("INSERT INTO meta VALUES ('schema', ?)", (SCHEMA_VERSION,))
     db.executescript(SCHEMA)
+
+    def roll_version() -> str | None:
+        row = db.execute("SELECT value FROM meta WHERE key = 'roll'").fetchone()
+        return row[0] if row else None
+
+    if roll_version() != ROLL_VERSION:
+        # Dropped and rebuilt from calls whenever its layout or triggers change. Tables, backfill and
+        # triggers go in one write transaction: no call is missed or counted twice, and of several
+        # processes one builds it while the others wait, then find it built.
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            if roll_version() != ROLL_VERSION:
+                for name in ("calls_roll_insert", "calls_roll_update", "calls_roll_delete"):
+                    db.execute(f"DROP TRIGGER IF EXISTS {name}")
+                db.execute("DROP TABLE IF EXISTS roll")
+                db.execute("DROP TABLE IF EXISTS dims")
+                for statement in ROLL_TABLES.split(";"):
+                    if statement.strip():
+                        db.execute(statement)
+                db.execute("INSERT INTO dims(machine, tool, model, cwd) SELECT DISTINCT machine, tool, model, cwd FROM calls")
+                db.execute(f"""INSERT INTO roll SELECT s.step, c.ts / s.step, d.id, COUNT(*), SUM(c.input), SUM(c.output),
+                    SUM(c.cache_read), SUM(c.cache_write) FROM calls c
+                    JOIN dims d ON d.machine = c.machine AND d.tool = c.tool AND d.model = c.model AND d.cwd = c.cwd,
+                    ({_STEPS}) s GROUP BY 1, 2, 3""")
+                for trigger in ROLL_TRIGGERS:
+                    db.execute(trigger)
+                db.execute("INSERT OR REPLACE INTO meta VALUES ('roll', ?)", (ROLL_VERSION,))
+            db.execute("COMMIT")
+        except BaseException:
+            db.execute("ROLLBACK")
+            raise
     return db
 
 
@@ -773,31 +842,37 @@ def floor_to(ts: int, step: int, offset: int) -> int:
     return (ts + offset) // step * step - offset
 
 
-# Candle lengths, TradingView style, and the step each is sampled at for the line and the burn rate.
-# Every step divides an hour, so a local midnight or Monday after a daylight saving change still
-# falls on the sampling grid (offsets change by whole hours).
+# Candle lengths, TradingView style.
 INTERVALS = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": HOUR, "4h": 4 * HOUR, "6h": 6 * HOUR,
              "12h": 12 * HOUR, "1D": DAY, "1W": 7 * DAY}
-SAMPLE = {"1m": 10, "5m": 30, "15m": 90, "30m": 180, "1h": 300, "4h": 1200, "6h": 1800,
-          "12h": HOUR, "1D": HOUR, "1W": HOUR}
-MAX_CANDLES = 1600  # 1m over a day fits; beyond this a candle is under a pixel wide and the page slows down
+# Sampling steps for the line and the burn rate. Each divides an hour, so a local midnight or
+# Monday after a daylight saving change still falls on the grid (offsets change by whole hours).
+STEPS = (10, 30, 60, 90, 180, 300, 600, 900, 1200, 1800, HOUR)
+AUTO_BARS = 120  # Auto takes the finest interval that keeps the view under this many candles
+
+
+def max_bars(width: int) -> int:
+    """Candles a view may hold: two per pixel column, TradingView's tightest bar spacing."""
+    return 2 * width
 
 
 def auto_interval(span: int) -> str:
-    """The interval a range gets when none is chosen; candles stay between ~20 and ~120."""
-    if span <= DAY:
-        return "1h"
-    if span <= 7 * DAY:
-        return "6h"
-    if span <= 120 * DAY:
-        return "1D"
-    return "1W"
+    return next((name for name, step in INTERVALS.items() if span / step <= AUTO_BARS), "1W")
 
 
-def fits(span: int, interval: str) -> bool:
-    """Whether a range of `span` seconds (plus the hour its start is floored by) takes 1 to MAX_CANDLES candles."""
+def fits(span: int, interval: str, width: int) -> bool:
+    """Whether a view of `span` seconds holds 1 to max_bars(width) candles of `interval`."""
     step = INTERVALS[interval]
-    return step <= span and -(-(span + HOUR) // step) + 1 <= MAX_CANDLES
+    return step <= span and -(-span // step) + 1 <= max_bars(width)
+
+
+def sample_step(span: int, interval: str, width: int) -> int:
+    """The sampling step: at least two samples per pixel column, so the running total (it only
+    rises) is drawn exactly, as M4 shows for any line (Jugel et al., VLDB 2014); at least four per
+    candle for its burn-rate path; and dividing the candle, so candles start on a sample."""
+    step = INTERVALS[interval]
+    usable = [s for s in STEPS if step % s == 0 and s <= max(STEPS[0], step // 4)]
+    return max((s for s in usable if span / s >= 2 * width), default=usable[0])
 
 
 def candle_floor(ts: int, interval: str) -> int:
@@ -822,40 +897,63 @@ def range_span(db: sqlite3.Connection, name: str, now: int, where: str, args: tu
     return RANGES[name]
 
 
-def window(db: sqlite3.Connection, name: str, interval: str, now: int, where: str,
-           args: tuple) -> tuple[int, int, str, int | None]:
-    """(start, end, interval, span of the previous period or None) for a range and interval name."""
-    span = range_span(db, name, now, where, args)
+def window(db: sqlite3.Connection, name: str, interval: str, now: int, where: str, args: tuple, width: int,
+           view: tuple[int | None, int | None] = (None, None)) -> tuple[int, int, str, int, int | None]:
+    """(start, end, interval, sample step, span of the previous period or None).
+
+    Without a view the range sets the window, starting at a local hour, so switching intervals never
+    changes its totals. A view (from, to; to None means now) is a zoomed or panned window: it may
+    reach before the range, and starts on the sampling grid."""
+    first = db.execute(f"SELECT MIN(ts) FROM calls WHERE {where}", args).fetchone()[0]
+    if view[0] is None:
+        span = range_span(db, name, now, where, args)
+        start, end = candle_floor(now - span, "1h"), now
+    else:
+        end = now if view[1] is None else max(min(int(view[1]), now), int(view[0]) + 60)
+        start = int(view[0])
+    span = end - start
     if interval == "auto":
         interval = auto_interval(span)
     if interval not in INTERVALS:
         raise TokensError(f"unknown interval {interval!r}; one of auto, {', '.join(INTERVALS)}")
-    if not fits(span, interval):
-        raise TokensError(f"interval {interval} does not fit range {name}: a range shows 1 to {MAX_CANDLES} candles")
-    # Every interval starts the range at the same local hour, so switching candles never changes the
-    # totals; a first candle that starts before the range is drawn partial.
-    start = candle_floor(now - span, "1h")
-    return start, now, interval, (None if name == "all" else now - start)
+    if not fits(span, interval, width):
+        raise TokensError(f"interval {interval} does not fit this view: it shows 1 to {max_bars(width)} candles")
+    sub = sample_step(span, interval, width)
+    if view[0] is not None:
+        start = floor_to(start, sub, utc_offset(start))
+    # Nothing before the first call to compare with: All, or a view that reaches back that far.
+    previous = None if (view[0] is None and name == "all") or first is None or start <= first else end - start
+    return start, end, interval, sub, previous
 
 
-def candle_edges(start: int, n: int, interval: str) -> list[int]:
-    """Indices of the samples where a candle starts: the first, then every local candle boundary.
-
-    Candles of an hour or less are every k samples from the aligned start (whole-hour offset changes
-    move none of their boundaries); longer ones follow the local clock, so a day across a daylight
-    saving change has 23 or 25 hours and a week starts on Monday at local midnight."""
-    sub, k = SAMPLE[interval], INTERVALS[interval] // SAMPLE[interval]
-    if INTERVALS[interval] <= HOUR:
-        return list(range(0, n, k))
+def candle_edges(start: int, n: int, interval: str, sub: int) -> list[int]:
+    """Indices of the samples where a candle starts: the first, then every local candle boundary, so
+    a day across a daylight saving change has 23 or 25 hours and a week starts on Monday."""
     return [0] + [i for i in range(1, n) if candle_floor(start + i * sub, interval) == start + i * sub]
 
 
-def spans(db: sqlite3.Connection, now: int, where: str, args: tuple) -> dict[str, int]:
-    return {name: range_span(db, name, now, where, args) for name in RANGES}
+def roll_sums(db: sqlite3.Connection, tools: tuple[str, ...], lo: int, hi: int) -> dict[int, list[int]]:
+    """Per dimension, the four token sums of calls with lo <= ts < hi, rounded to 10 s: 5-minute rows
+    inside, 10-second rows at the edges."""
+    tool_in = ", ".join("?" * len(tools))
+    lo, hi = lo // 10 * 10, hi // 10 * 10
+    inner_lo, inner_hi = -(-lo // 300) * 300, hi // 300 * 300
+    parts = [(300, inner_lo, inner_hi), (10, lo, inner_lo), (10, inner_hi, hi)] if inner_lo < inner_hi else [(10, lo, hi)]
+    out: dict[int, list[int]] = {}
+    for step, a, z in parts:
+        for dim, *t in db.execute(
+                "SELECT r.dim, SUM(r.input), SUM(r.output), SUM(r.cache_read), SUM(r.cache_write) FROM roll r "
+                f"JOIN dims d ON d.id = r.dim WHERE r.step = ? AND r.b >= ? AND r.b < ? AND d.tool IN ({tool_in}) "
+                "GROUP BY r.dim", (step, a // step, z // step, *tools)):
+            row = out.setdefault(dim, [0, 0, 0, 0])
+            for i in range(4):
+                row[i] += t[i]
+    return out
 
 
 def machines(db: sqlite3.Connection, config: Config) -> list[dict]:
-    counts = dict(db.execute("SELECT machine, COUNT(*) FROM calls GROUP BY machine"))
+    counts = dict(db.execute("SELECT d.machine, SUM(r.n) FROM roll r JOIN dims d ON d.id = r.dim "
+                             "WHERE r.step = 300 GROUP BY d.machine"))
     out = [{"name": config.machine, "local": True, "calls": counts.get(config.machine, 0),
             "ok": get_meta(db, "last_scan"), "error": STATUS["error"]}]
     for host in config.hosts:
@@ -867,7 +965,8 @@ def machines(db: sqlite3.Connection, config: Config) -> list[dict]:
 
 def series(db: sqlite3.Connection, config: Config, range_name: str = "1w", group: str = "tool",
            metric: str = "tokens", kinds: tuple[str, ...] = KINDS, tools: tuple[str, ...] = STATUS_BAR_TOOLS,
-           now: int | None = None, interval: str = "auto") -> dict:
+           now: int | None = None, interval: str = "auto", width: int = 1000,
+           view: tuple[int | None, int | None] = (None, None)) -> dict:
     if group not in GROUPS:
         raise TokensError(f"unknown group {group!r}; one of {', '.join(GROUPS)}")
     if metric not in METRICS:
@@ -877,9 +976,10 @@ def series(db: sqlite3.Connection, config: Config, range_name: str = "1w", group
     if not tools or set(tools) - set(TOOLS):
         raise TokensError(f"tools must be some of {', '.join(TOOLS)}")
     now = int(time.time()) if now is None else now
+    width = min(max(int(width), 200), 4000)  # the plot's pixel columns; bounds every answer's size
     where = f"tool IN ({', '.join('?' * len(tools))})"
-    start, end, interval, previous = window(db, range_name, interval, now, where, tuple(tools))
-    bucket, sub = INTERVALS[interval], SAMPLE[interval]
+    start, end, interval, sub, previous = window(db, range_name, interval, now, where, tuple(tools), width, view)
+    bucket = INTERVALS[interval]
     offset = utc_offset(now)
     prices = load_prices(db) if metric == "cost" else {}
     n = max(1, -(-(end - start) // sub))
@@ -900,11 +1000,16 @@ def series(db: sqlite3.Connection, config: Config, range_name: str = "1w", group
     def label(machine: str, tool: str, model: str, cwd: str) -> str:
         return {"tool": tool, "model": model, "machine": machine}.get(group) or project_label(cwd)
 
-    sums = "SUM(input), SUM(output), SUM(cache_read), SUM(cache_write)"
+    dims = {i: (machine, tool, model, cwd) for i, machine, tool, model, cwd in db.execute("SELECT * FROM dims")}
+    tool_in = ", ".join("?" * len(tools))
+    lo = start - lead * sub
+    step = 300 if sub % 300 == 0 and lo % 300 == 0 else 10  # the coarsest rollup that splits into samples
     values: dict[str, list[float]] = {}
-    for b, machine, tool, model, cwd, *t in db.execute(
-            f"SELECT (ts - ?) / ?, machine, tool, model, cwd, {sums} FROM calls WHERE ts >= ? AND ts < ? AND {where} "
-            "GROUP BY 1, machine, tool, model, cwd", (start - lead * sub, sub, start - lead * sub, end + 1, *tools)):
+    for b, dim, *t in db.execute(
+            "SELECT (r.b * ? - ?) / ?, r.dim, SUM(r.input), SUM(r.output), SUM(r.cache_read), SUM(r.cache_write) "
+            f"FROM roll r JOIN dims d ON d.id = r.dim WHERE r.step = ? AND r.b >= ? AND r.b <= ? AND d.tool IN ({tool_in}) "
+            "GROUP BY 1, r.dim", (step, lo, sub, step, lo // step, end // step, *tools)):
+        machine, tool, model, cwd = dims[dim]
         row = values.setdefault(label(machine, tool, model, cwd), [0.0] * (lead + n))
         kept = uncosted
         row[min(int(b), lead + n - 1)] += value(model, dict(zip(KINDS, t)))
@@ -913,9 +1018,8 @@ def series(db: sqlite3.Connection, config: Config, range_name: str = "1w", group
     before: dict[str, float] = {}
     if previous:
         kept = uncosted
-        for machine, tool, model, cwd, *t in db.execute(
-                f"SELECT machine, tool, model, cwd, {sums} FROM calls WHERE ts >= ? AND ts < ? AND {where} "
-                "GROUP BY machine, tool, model, cwd", (start - previous, start, *tools)):
+        for dim, t in roll_sums(db, tools, start - previous, start).items():
+            machine, tool, model, cwd = dims[dim]
             name = label(machine, tool, model, cwd)
             before[name] = before.get(name, 0.0) + value(model, dict(zip(KINDS, t)))
         uncosted = kept  # report only what the shown range could not price
@@ -927,19 +1031,24 @@ def series(db: sqlite3.Connection, config: Config, range_name: str = "1w", group
             before[OTHER] = before.get(OTHER, 0.0) + before.pop(name, 0.0)
         values[OTHER] = folded
         ranked = ranked[:MAX_SERIES - 1] + [OTHER]
-    first, last, calls = db.execute(f"SELECT MIN(ts), MAX(ts), COUNT(*) FROM calls WHERE {where}", tools).fetchone()
+    first = db.execute(f"SELECT MIN(ts) FROM calls WHERE {where}", tools).fetchone()[0]
+    last = db.execute(f"SELECT MAX(ts) FROM calls WHERE {where}", tools).fetchone()[0]
+    calls = db.execute(f"SELECT SUM(r.n) FROM roll r JOIN dims d ON d.id = r.dim WHERE r.step = 300 "
+                       f"AND d.tool IN ({tool_in})", tools).fetchone()[0] or 0
     digits = 6 if metric == "cost" else 0
+    num = (lambda v: round(v, 6)) if metric == "cost" else (lambda v: int(round(v)))  # "12", not "12.0"
     return {
-        "title": config.title, "range": range_name, "interval": interval, "group": group, "metric": metric,
+        "title": config.title, "range": range_name, "view": view[0] is not None, "live": end == now,
+        "interval": interval, "group": group, "metric": metric,
         "kinds": list(kinds), "tools": list(tools), "start": start, "end": end, "bucket": bucket, "sub": sub,
-        "points": n, "edges": candle_edges(start, n, interval), "tz_offset": offset,
-        "intervals": INTERVALS, "max_candles": MAX_CANDLES, "spans": spans(db, now, where, tuple(tools)),
+        "points": n, "edges": candle_edges(start, n, interval, sub), "tz_offset": offset,
+        "intervals": INTERVALS, "width": width, "max_bars": max_bars(width),
         "total": round(sum(sum(v[lead:]) for v in values.values()), digits),
         "previous_total": round(sum(before.values()), digits) if previous else None,
         "series": [{"name": name, "total": round(sum(values[name][lead:]), digits),
                     "previous": round(before.get(name, 0.0), digits) if previous else None,
-                    "lead": [round(v, digits) for v in values[name][:lead]],
-                    "values": [round(v, digits) for v in values[name][lead:]]} for name in ranked],
+                    "lead": [num(v) for v in values[name][:lead]],
+                    "values": [num(v) for v in values[name][lead:]]} for name in ranked],
         "uncosted_tokens": uncosted,
         "index": {"calls": calls, "first": first, "last": last, "scanning": STATUS["scanning"],
                   "pulling": STATUS["pulling"], "machines": machines(db, config)},
@@ -969,14 +1078,21 @@ def make_handler(config: Config):
                     query = {k: v[0] for k, v in parse_qs(url.query).items()}
                     kinds = tuple(k for k in query.get("kinds", ",".join(KINDS)).split(",") if k)
                     tools = tuple(k for k in query.get("tools", ",".join(STATUS_BAR_TOOLS)).split(",") if k)
+                    try:
+                        width = int(query.get("width", "1000"))
+                        view = (int(query["from"]) if "from" in query else None,
+                                int(query["to"]) if "to" in query else None)
+                    except ValueError:
+                        raise TokensError("width, from and to are whole numbers (pixels, Unix seconds)") from None
                     db = connect(config.db)
                     try:
                         data = series(db, config, query.get("range", "1w"), query.get("group", "tool"),
                                       query.get("metric", "tokens"), kinds, tools,
-                                      interval=query.get("interval", "auto"))
+                                      interval=query.get("interval", "auto"), width=width, view=view)
                     finally:
                         db.close()
-                    self._send(200, "application/json; charset=utf-8", json.dumps(data).encode())
+                    self._send(200, "application/json; charset=utf-8", json.dumps(data, separators=(",", ":")).encode(),
+                               compress=True)
                 else:
                     self._send(404, "text/plain; charset=utf-8", b"not found\n")
             except TokensError as exc:
@@ -991,10 +1107,18 @@ def make_handler(config: Config):
 
         do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = _refuse  # noqa: N815
 
-        def _send(self, code: int, ctype: str, body: bytes, cache: str = "no-store") -> None:
+        def _send(self, code: int, ctype: str, body: bytes, cache: str = "no-store", compress: bool = False) -> None:
+            # The series are mostly zeros: gzip shrinks them about tenfold (the hub passes it through).
+            gzipped = compress and "gzip" in self.headers.get("Accept-Encoding", "")
+            if gzipped:
+                body = gzip.compress(body, compresslevel=5)
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
+            if compress:
+                self.send_header("Vary", "Accept-Encoding")
+            if gzipped:
+                self.send_header("Content-Encoding", "gzip")
             self.send_header("Cache-Control", cache)
             for key, value in SECURITY_HEADERS.items():
                 self.send_header(key, value)
@@ -1131,7 +1255,7 @@ def main(argv: list[str] | None = None) -> int:
     report = sub.add_parser("report", help="print the totals for a range")
     report.add_argument("--range", default="1w", choices=list(RANGES))
     report.add_argument("--interval", default="auto", choices=["auto", *INTERVALS],
-                        help="candle length; a 1W candle starts on Monday, so it can move the range start")
+                        help="candle length (--json shows the bars); the totals never depend on it")
     report.add_argument("--group", default="tool", choices=GROUPS)
     report.add_argument("--metric", default="tokens", choices=METRICS)
     report.add_argument("--tools", default=",".join(STATUS_BAR_TOOLS), help="comma list of claude, omp, codex")

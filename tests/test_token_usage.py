@@ -198,6 +198,46 @@ class TokenUsageTests(unittest.TestCase):
         for range_name, interval in (("1d", "1W"), ("1m", "5m")):  # longer than the range; over the candle cap
             with self.assertRaises(t.TokensError):
                 t.series(self.db, self.config, range_name, now=now, interval=interval)
+        # A zoomed view: any window, any interval that fits it; the span before it is the comparison.
+        zoom = t.series(self.db, self.config, "1w", kinds=("output",), now=now, interval="1m",
+                        view=(now - 30 * 3600, now - 6 * 3600))
+        self.assertEqual((zoom["total"], zoom["previous_total"], zoom["live"]), (4 * 5, 3 * 5, False))
+        self.assertLessEqual(len(zoom["edges"]), zoom["max_bars"])
+        with self.assertRaises(t.TokensError):  # a week of minutes is more candles than the plot has room for
+            t.series(self.db, self.config, "1w", now=now, interval="1m")
+
+    def test_rollup_follows_every_write_to_calls(self) -> None:
+        def raw() -> tuple:
+            return self.db.execute("SELECT COUNT(*), SUM(input), SUM(output), SUM(cache_read), SUM(cache_write) FROM calls").fetchone()
+
+        def rolled(step: int) -> tuple:
+            return self.db.execute("SELECT SUM(n), SUM(input), SUM(output), SUM(cache_read), SUM(cache_write) "
+                                   "FROM roll WHERE step = ?", (step,)).fetchone()
+        row = ["here", "claude", "k1", NOW - 99, "m", "/w/a", 10, 20, 30, 40, 1]
+        with self.db:
+            self.db.execute(t.UPSERT, row)                                   # a new call
+            self.db.execute(t.UPSERT, row[:6] + [15, 25, 30, 40, 2])         # it grew: counted once, larger
+            self.db.execute(t.UPSERT, ["here", "omp", "k2", NOW - 5, "m", "/w/b", 1, 2, 3, 4, 3])
+            self.db.execute("INSERT OR REPLACE INTO calls VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            ["here", "omp", "k2", NOW - 400, "m2", "/w/c", 5, 6, 7, 8, 4])  # replaced, moved
+            self.db.execute("INSERT INTO calls VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            ["here", "codex", "k3", NOW, "m", "/w/a", 1, 1, 1, 1, 5])
+            self.db.execute("DELETE FROM calls WHERE key = 'k3'")
+        self.assertEqual(raw(), (2, 20, 31, 37, 48))
+        for step in t.ROLL_STEPS:
+            self.assertEqual(rolled(step), raw())
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM roll WHERE n = 0").fetchone()[0], 0)
+        # An index made before the rollup existed gets it on the next connect, from its calls.
+        with self.db:
+            self.db.execute("DROP TABLE roll")
+            self.db.execute("DROP TABLE dims")
+            self.db.execute("DELETE FROM meta WHERE key = 'roll'")
+            for name in ("calls_roll_insert", "calls_roll_update", "calls_roll_delete"):
+                self.db.execute(f"DROP TRIGGER {name}")
+        self.db.close()
+        self.db = t.connect(self.config.db)
+        for step in t.ROLL_STEPS:
+            self.assertEqual(rolled(step), raw())
 
     def test_claude_history_makes_the_totals_match_stats(self) -> None:
         d2 = int(t.datetime(2026, 1, 11, 9, tzinfo=t.timezone.utc).timestamp())
