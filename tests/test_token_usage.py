@@ -134,6 +134,16 @@ class TokenUsageTests(unittest.TestCase):
         t.scan(self.db, self.config)
         self.assertEqual(self.rows(), {("omp", "claude-x"): (1, 100, 50, 1000, 10)})
 
+    def test_codex_homes_matched_by_wildcard_count_a_shared_rollout_once(self) -> None:
+        ts = NOW - 3600
+        accounts = self.base / "orca/codex-accounts"
+        for account in ("a1", "a2"):  # two account homes holding a copy of the same rollout
+            write(accounts / account / "home/sessions/2026/rollout-x.jsonl", codex_lines(ts))
+        config = t.Config(40978, "127.0.0.1", 60, self.config.db, "Token usage",
+                          {"codex": (accounts / "*" / "home/sessions",)}, machine="here")
+        t.scan(self.db, config)
+        self.assertEqual(self.rows(), {("codex", "gpt-y"): (2, 500, 50, 2000, 0)})
+
     def test_cost_uses_omp_prices_for_every_agent(self) -> None:
         ts = NOW - 3600
         write(self.dirs["omp"] / "p/s.jsonl", omp_lines(ts))

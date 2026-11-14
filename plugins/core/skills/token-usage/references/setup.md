@@ -8,7 +8,7 @@ Each agent's logs, searched recursively; a missing directory is skipped.
 |---|---|---|
 | Claude Code (`claude`) | `~/.claude/projects` (subagent transcripts included), and `stats-cache.json` next to it | every assistant line, as `/stats` counts; the history `/stats` kept for days whose transcripts are gone |
 | omp (`omp`) | `~/.omp/agent/sessions` (subagent sessions included), `~/.omp/agent/archive/sessions` (`.jsonl.gz`, moved there by `omp gc`) | an assistant message or a side call (`model_usage`), once per entry id and time; a Claude Code session imported into omp (`claude-` ids) is left to Claude Code |
-| Codex (`codex`) | `~/.codex/sessions`, `~/.codex/archived_sessions` (`.jsonl.zst` needs the `zstd` CLI) | the growth of the session's running token totals at each token event |
+| Codex (`codex`) | `~/.codex/sessions`, `~/.codex/archived_sessions`, and the same two folders of each per-account Codex home Orca runs Codex in (`orca/codex-accounts/*/home` under `~/Library/Application Support` or `~/.config`); `.jsonl.zst` needs the `zstd` CLI, looked for on `PATH` and in `/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin`, `~/.local/bin` | the growth of the session's running token totals at each token event; a rollout found in several homes counts once |
 
 Orca launches these same agents, so their calls are in these logs; the worktree an agent ran in is
 its project. A file is read from where the previous pass stopped, and only up to its last complete
@@ -53,7 +53,7 @@ db         = "~/.local/share/token-usage/usage.sqlite"
 title      = "Token usage"
 backup_dir = "~/.local/share/token-usage/backup"  # where `backup` writes; a git checkout gets committed and pushed
 
-[tokens.sources]              # replaces the default directories of an agent
+[tokens.sources]              # replaces the default directories of an agent; * and ? wildcards match several
 claude = ["~/.claude/projects"]
 ```
 

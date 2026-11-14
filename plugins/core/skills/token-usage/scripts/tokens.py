@@ -14,8 +14,9 @@ It counts the way Claude Code's /stats and omp's own stats do, so it agrees with
           ~/.claude/stats-cache.json keeps for days whose transcripts Claude Code has deleted.
   omp     omp sessions, ~/.omp/agent/sessions and ~/.omp/agent/archive/sessions (gzipped by gc):
           assistant messages and side calls, once per (entry id, time).
-  codex   Codex rollouts, ~/.codex/sessions and archived_sessions: the growth of the session's
-          running totals. Off by default on the page, to match that sum.
+  codex   Codex rollouts, ~/.codex/sessions and archived_sessions, and the per-account Codex homes
+          Orca runs Codex in: the growth of the session's running totals. Off by default on the
+          page, to match that sum.
 
 Only timestamps, model names, working directories and token counts are stored: never prompts,
 answers or tool output. Cost is an estimate: the per-token prices omp records for each model,
@@ -36,6 +37,8 @@ Subcommands:
 from __future__ import annotations
 
 import argparse
+import functools
+import glob
 import gzip
 import json
 import os
@@ -65,7 +68,12 @@ DEFAULTS = {"port": 40978, "bind": "127.0.0.1", "every": 60, "pull_every": 300, 
 DEFAULT_SOURCES = {
     "claude": ["~/.claude/projects"],
     "omp": ["~/.omp/agent/sessions", "~/.omp/agent/archive/sessions"],
-    "codex": ["~/.codex/sessions", "~/.codex/archived_sessions"],
+    "codex": ["~/.codex/sessions", "~/.codex/archived_sessions",
+              # Orca runs Codex with CODEX_HOME set to one of these per account, not ~/.codex (macOS, Linux)
+              "~/Library/Application Support/orca/codex-accounts/*/home/sessions",
+              "~/Library/Application Support/orca/codex-accounts/*/home/archived_sessions",
+              "~/.config/orca/codex-accounts/*/home/sessions",
+              "~/.config/orca/codex-accounts/*/home/archived_sessions"],
 }
 TOOLS = tuple(DEFAULT_SOURCES)
 STATUS_BAR_TOOLS = ("claude", "omp")  # what /stats plus omp's own count cover: the default
@@ -94,6 +102,8 @@ SECURITY_HEADERS = {
 ID_DIR = re.compile(r"[0-9a-f][0-9a-f-]{5,}")  # throwaway run directories named by a hash
 DATE_SUFFIX = re.compile(r"-\d{8}$")
 COMPRESSED = {"codex": ("*.jsonl.zst",), "omp": ("*.jsonl.gz",)}  # archived logs: written once, read whole
+# Searched for zstd beyond PATH: a bare `ssh host python3 -` (what `pull` runs) has a minimal one.
+ZSTD_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin", "~/.local/bin")
 HISTORY = "stats:"  # key prefix of the rows taken from Claude Code's stats-cache.json
 HISTORY_CWD = "(Claude Code history)"  # their project: /stats keeps no directory
 STATS_FIELDS = ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens")
@@ -340,12 +350,21 @@ def set_meta(db: sqlite3.Connection, key: str, value) -> None:
 
 
 def source_files(config: Config):
+    """(tool, root, path) of every log; a source directory may hold glob wildcards (one root per match)."""
     for tool, dirs in config.sources.items():
-        for root in dirs:
-            if root.is_dir():
-                for pattern in COMPRESSED.get(tool, ()) + ("*.jsonl",):
-                    for path in sorted(root.rglob(pattern)):
-                        yield tool, root, path
+        for source in dirs:
+            roots = [Path(p) for p in sorted(glob.glob(str(source)))] if glob.has_magic(str(source)) else [source]
+            for root in roots:
+                if root.is_dir():
+                    for pattern in COMPRESSED.get(tool, ()) + ("*.jsonl",):
+                        for path in sorted(root.rglob(pattern)):
+                            yield tool, root, path
+
+
+@functools.lru_cache(maxsize=None)
+def zstd_cli() -> str | None:
+    extra = [str(Path(d).expanduser()) for d in ZSTD_DIRS]
+    return shutil.which("zstd", path=os.pathsep.join([os.environ.get("PATH", "")] + extra))
 
 
 def read_lines(path: Path, offset: int):
@@ -358,9 +377,9 @@ def read_lines(path: Path, offset: int):
             except (OSError, EOFError):
                 return
         else:
-            if not shutil.which("zstd"):
+            if not zstd_cli():
                 return
-            done = subprocess.run(["zstd", "-dcq", str(path)], capture_output=True, timeout=300)
+            done = subprocess.run([zstd_cli(), "-dcq", str(path)], capture_output=True, timeout=300)
             if done.returncode:
                 return
             data = done.stdout
@@ -512,6 +531,8 @@ def scan(db: sqlite3.Connection, config: Config, log=None) -> dict:
             previous = known.get(str(path))
             if previous and previous[0] == stat.st_size and previous[1] == stat.st_mtime_ns:
                 continue
+            if path.suffix == ".zst" and not zstd_cli():
+                continue  # unreadable here: left unrecorded, so a pass that has zstd reads it
             offset, state = 0, {}
             whole = path.suffix in (".zst", ".gz")
             if previous and not whole and stat.st_size >= previous[2]:
