@@ -483,9 +483,9 @@ class HooksJsonTests(unittest.TestCase):
         manifest = json.loads((research / "package.json").read_text())
         self.assertEqual([(research / e).resolve() for e in manifest["omp"]["extensions"]], [OMP_EXTENSION])
 
-    def test_core_ships_no_hooks(self) -> None:
+    def test_core_ships_no_claude_hooks(self) -> None:
         core = ROOT / "plugins/core"
-        self.assertFalse((core / "hooks").exists())
+        self.assertFalse((core / "hooks/hooks.json").exists())
         self.assertFalse((core / "skills/progress-updates/scripts/long_task_reminder.py").exists())
         for manifest in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json"):
             self.assertNotIn("hooks", json.loads((core / manifest).read_text()), manifest)
@@ -618,6 +618,47 @@ class OmpSessionStartTests(unittest.TestCase):
                                  f"\n\nplain {source}\n</system-reminder>")
         self.assertEqual(out[-1]["sent"][0]["message"]["content"],
                          f"<system-reminder>\nSessionStart hook additional context: SessionStart compact s1 True {root} True\n</system-reminder>")
+
+
+ORCHESTRATE_EXTENSION = ROOT / "plugins/core/hooks/omp_orchestrate_keyword.ts"
+
+
+@unittest.skipUnless(shutil.which("bun"), "needs bun to load the omp extension")
+class OmpOrchestrateKeywordTests(unittest.TestCase):
+    """plugins/core/hooks/omp_orchestrate_keyword.ts: "orchestrate" in a prompt routes to the multi-agent skills."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.harness = Path(tmp.name) / "harness.mjs"
+        self.harness.write_text(OMP_HARNESS)
+
+    def results(self, prompts: list[str], reason: str = "prompt", kind: str = "main") -> list:
+        steps = [["before_agent_start", {"reason": reason, "prompt": p}, {"cwd": "/", "kind": kind}] for p in prompts]
+        proc = subprocess.run(["bun", str(self.harness), str(ORCHESTRATE_EXTENSION), json.dumps(steps)],
+                              capture_output=True, text=True, timeout=60, check=True)
+        return [step["result"] for step in json.loads(proc.stdout)]
+
+    def test_the_word_as_prose_gets_the_routing_note(self) -> None:
+        prompts = ["orchestrate the migration in docs/plan.md", "please, orchestrate.", 'Do it: "orchestrate"!',
+                   "fix these three bugs\n\norchestrate (one agent each)", "see `x.ts` and orchestrate"]
+        for prompt, result in zip(prompts, self.results(prompts)):
+            with self.subTest(prompt=prompt):
+                message = result["message"]
+                self.assertEqual((message["customType"], message["display"]), ("core-orchestrate-keyword", False))
+                for skill in ("`agent-fleet`", "`agent-fleet-orca`", "`orchestration`"):
+                    self.assertIn(skill, message["content"])
+
+    def test_code_paths_symbols_and_other_spellings_get_nothing(self) -> None:
+        prompts = ["Orchestrate this", "it orchestrated well", "open orchestrate.ts", "call foo::orchestrate",
+                   "call orchestrate() now", "run obj.orchestrate", "src/orchestrate", "pre-orchestrate step",
+                   "orchestrate_all", "the `orchestrate` keyword", "```\norchestrate\n```",
+                   "<!-- orchestrate -->", "<note>orchestrate</note>", "fix the bug"]
+        self.assertEqual(self.results(prompts), [None] * len(prompts))
+
+    def test_subagents_and_revivals_get_nothing(self) -> None:
+        self.assertEqual(self.results(["orchestrate this"], kind="sub"), [None])
+        self.assertEqual(self.results(["orchestrate this"], reason="revive"), [None])
 
 
 if __name__ == "__main__":

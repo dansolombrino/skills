@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "omp": {
+    "extensions": ["./hooks/omp_orchestrate_keyword.ts"]
+  }
+}

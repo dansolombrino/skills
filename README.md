@@ -23,7 +23,7 @@ plugins/<plugin>/
 ├── .codex-plugin/plugin.json             # Codex manifest and version
 ├── .claude-plugin/plugin.json            # Claude manifest and version (lockstep); omp reads it
 ├── package.json                          # omp extensions (`omp.extensions`), where a plugin has them
-├── hooks/                                # Claude hooks.json and the omp extension mirroring it
+├── hooks/                                # Claude hooks.json and omp extensions
 ├── agents/<name>.md                      # subagents for Claude Code and omp, where a plugin has them
 ├── evals/<case>/                         # trigger evals, run by hand with `claude plugin eval`
 └── skills/<skill>/
@@ -37,6 +37,13 @@ fallback when there is no `.omp-plugin/` catalog) and takes a plugin's version f
 manifest. omp does not run Claude's command hooks, so a plugin that ships `hooks/hooks.json` also
 ships an omp extension doing the same work, listed under `omp.extensions` in its `package.json`.
 That file never carries a `version`.
+
+`core` also ships an omp-only extension, `hooks/omp_orchestrate_keyword.ts`. When a prompt uses the
+word `orchestrate` as plain prose, it attaches a hidden note that points the model at `agent-fleet`
+(several items, one agent each), Orca's `orchestration` skill (Orca workers or a different agent),
+or its own subagents. omp's built-in `orchestrate` magic keyword only knows its own subagents, and no
+setting changes its text, so turn it off where the extension runs:
+`omp config set magicKeywords.orchestrate false`. While it stays on, the model gets both notes.
 
 ## Install on a new machine
 
