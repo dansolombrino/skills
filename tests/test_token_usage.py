@@ -174,6 +174,31 @@ class TokenUsageTests(unittest.TestCase):
         with self.assertRaises(t.TokensError):
             t.series(self.db, self.config, "1d", "tool", "tokens", kinds=("everything",), now=NOW)
 
+    def test_intervals_keep_the_totals_and_follow_the_local_clock(self) -> None:
+        import os
+        import time
+        old = os.environ.get("TZ")
+        os.environ["TZ"] = "Europe/Rome"
+        time.tzset()
+        self.addCleanup(lambda: (os.environ.pop("TZ") if old is None else os.environ.__setitem__("TZ", old), time.tzset()))
+        now = int(t.datetime(2026, 10, 28, 12, 0).timestamp())  # a Wednesday; summer time ended on Sunday 25
+        write(self.dirs["claude"] / "p/c.jsonl", [claude_line(f"m{h}", now - h * 3600 - 17, 5) for h in range(0, 160, 7)])
+        t.scan(self.db, self.config)
+        runs = {i: t.series(self.db, self.config, "1w", kinds=("output",), now=now, interval=i)
+                for i in ("15m", "1h", "4h", "1D", "1W")}
+        self.assertEqual({d["total"] for d in runs.values()}, {5 * len(range(0, 160, 7))})  # switching never moves it
+        day = runs["1D"]
+        starts = [day["start"] + e * day["sub"] for e in day["edges"]]
+        self.assertTrue(all(t.datetime.fromtimestamp(s).hour == 0 for s in starts[1:]))  # local midnights
+        self.assertIn(25 * 3600, {b - a for a, b in zip(starts, starts[1:])})  # 25 October has 25 hours
+        week = runs["1W"]
+        mondays = [t.datetime.fromtimestamp(week["start"] + e * week["sub"]) for e in week["edges"][1:]]
+        self.assertEqual([(m.weekday(), m.hour) for m in mondays], [(0, 0)])  # Monday 26 October, 00:00
+        self.assertEqual(len(week["series"][0]["lead"]), week["bucket"] // week["sub"])
+        for range_name, interval in (("1d", "1W"), ("1m", "5m")):  # longer than the range; over the candle cap
+            with self.assertRaises(t.TokensError):
+                t.series(self.db, self.config, range_name, now=now, interval=interval)
+
     def test_claude_history_makes_the_totals_match_stats(self) -> None:
         d2 = int(t.datetime(2026, 1, 11, 9, tzinfo=t.timezone.utc).timestamp())
         write(self.dirs["claude"] / "p/c.jsonl", [claude_line("m1", d2, 5),         # a day /stats has computed

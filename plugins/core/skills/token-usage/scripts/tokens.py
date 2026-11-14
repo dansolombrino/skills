@@ -773,34 +773,85 @@ def floor_to(ts: int, step: int, offset: int) -> int:
     return (ts + offset) // step * step - offset
 
 
-def steps_for(span: int) -> tuple[int, int]:
-    """(candle bucket, sub-bucket) seconds for a span; candles stay between ~20 and ~120."""
+# Candle lengths, TradingView style, and the step each is sampled at for the line and the burn rate.
+# Every step divides an hour, so a local midnight or Monday after a daylight saving change still
+# falls on the sampling grid (offsets change by whole hours).
+INTERVALS = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": HOUR, "4h": 4 * HOUR, "6h": 6 * HOUR,
+             "12h": 12 * HOUR, "1D": DAY, "1W": 7 * DAY}
+SAMPLE = {"1m": 10, "5m": 30, "15m": 90, "30m": 180, "1h": 300, "4h": 1200, "6h": 1800,
+          "12h": HOUR, "1D": HOUR, "1W": HOUR}
+MAX_CANDLES = 1600  # 1m over a day fits; beyond this a candle is under a pixel wide and the page slows down
+
+
+def auto_interval(span: int) -> str:
+    """The interval a range gets when none is chosen; candles stay between ~20 and ~120."""
     if span <= DAY:
-        return HOUR, 300
+        return "1h"
     if span <= 7 * DAY:
-        return 6 * HOUR, 1800
+        return "6h"
     if span <= 120 * DAY:
-        return DAY, HOUR
-    return 7 * DAY, 6 * HOUR
+        return "1D"
+    return "1W"
 
 
-def window(db: sqlite3.Connection, name: str, now: int, where: str, args: tuple) -> tuple[int, int, int, int, int | None]:
-    """(start, end, bucket, sub, span of the previous period or None) for a range name."""
+def fits(span: int, interval: str) -> bool:
+    """Whether a range of `span` seconds (plus the hour its start is floored by) takes 1 to MAX_CANDLES candles."""
+    step = INTERVALS[interval]
+    return step <= span and -(-(span + HOUR) // step) + 1 <= MAX_CANDLES
+
+
+def candle_floor(ts: int, interval: str) -> int:
+    """The start of the local candle holding ts: clock multiples under a day, local midnight, Monday."""
+    step = INTERVALS[interval]
+    if step < DAY:
+        return floor_to(ts, step, utc_offset(ts))
+    day = datetime.fromtimestamp(ts).replace(hour=0, minute=0, second=0, microsecond=0)
+    if step == 7 * DAY:
+        day = datetime.fromordinal(day.toordinal() - day.weekday())
+    return int(day.timestamp())
+
+
+def range_span(db: sqlite3.Connection, name: str, now: int, where: str, args: tuple) -> int:
     if name not in RANGES:
         raise TokensError(f"unknown range {name!r}; one of {', '.join(RANGES)}")
-    offset = utc_offset(now)
     if name == "all":
         first = db.execute(f"SELECT MIN(ts) FROM calls WHERE {where}", args).fetchone()[0]
-        span = max(now - (first if first is not None else now), DAY)
-    elif name == "ytd":
-        span = max(now - int(datetime(datetime.fromtimestamp(now).year, 1, 1).timestamp()), DAY)
-    else:
-        span = RANGES[name]
-    bucket, sub = steps_for(span)
-    start = floor_to(now - span, bucket if bucket <= DAY else DAY, offset)
+        return max(now - (first if first is not None else now), DAY)
     if name == "ytd":
-        start = now - span
-    return start, now, bucket, sub, (None if name == "all" else now - start)
+        return max(now - int(datetime(datetime.fromtimestamp(now).year, 1, 1).timestamp()), DAY)
+    return RANGES[name]
+
+
+def window(db: sqlite3.Connection, name: str, interval: str, now: int, where: str,
+           args: tuple) -> tuple[int, int, str, int | None]:
+    """(start, end, interval, span of the previous period or None) for a range and interval name."""
+    span = range_span(db, name, now, where, args)
+    if interval == "auto":
+        interval = auto_interval(span)
+    if interval not in INTERVALS:
+        raise TokensError(f"unknown interval {interval!r}; one of auto, {', '.join(INTERVALS)}")
+    if not fits(span, interval):
+        raise TokensError(f"interval {interval} does not fit range {name}: a range shows 1 to {MAX_CANDLES} candles")
+    # Every interval starts the range at the same local hour, so switching candles never changes the
+    # totals; a first candle that starts before the range is drawn partial.
+    start = candle_floor(now - span, "1h")
+    return start, now, interval, (None if name == "all" else now - start)
+
+
+def candle_edges(start: int, n: int, interval: str) -> list[int]:
+    """Indices of the samples where a candle starts: the first, then every local candle boundary.
+
+    Candles of an hour or less are every k samples from the aligned start (whole-hour offset changes
+    move none of their boundaries); longer ones follow the local clock, so a day across a daylight
+    saving change has 23 or 25 hours and a week starts on Monday at local midnight."""
+    sub, k = SAMPLE[interval], INTERVALS[interval] // SAMPLE[interval]
+    if INTERVALS[interval] <= HOUR:
+        return list(range(0, n, k))
+    return [0] + [i for i in range(1, n) if candle_floor(start + i * sub, interval) == start + i * sub]
+
+
+def spans(db: sqlite3.Connection, now: int, where: str, args: tuple) -> dict[str, int]:
+    return {name: range_span(db, name, now, where, args) for name in RANGES}
 
 
 def machines(db: sqlite3.Connection, config: Config) -> list[dict]:
@@ -816,7 +867,7 @@ def machines(db: sqlite3.Connection, config: Config) -> list[dict]:
 
 def series(db: sqlite3.Connection, config: Config, range_name: str = "1w", group: str = "tool",
            metric: str = "tokens", kinds: tuple[str, ...] = KINDS, tools: tuple[str, ...] = STATUS_BAR_TOOLS,
-           now: int | None = None) -> dict:
+           now: int | None = None, interval: str = "auto") -> dict:
     if group not in GROUPS:
         raise TokensError(f"unknown group {group!r}; one of {', '.join(GROUPS)}")
     if metric not in METRICS:
@@ -827,7 +878,8 @@ def series(db: sqlite3.Connection, config: Config, range_name: str = "1w", group
         raise TokensError(f"tools must be some of {', '.join(TOOLS)}")
     now = int(time.time()) if now is None else now
     where = f"tool IN ({', '.join('?' * len(tools))})"
-    start, end, bucket, sub, previous = window(db, range_name, now, where, tuple(tools))
+    start, end, interval, previous = window(db, range_name, interval, now, where, tuple(tools))
+    bucket, sub = INTERVALS[interval], SAMPLE[interval]
     offset = utc_offset(now)
     prices = load_prices(db) if metric == "cost" else {}
     n = max(1, -(-(end - start) // sub))
@@ -878,8 +930,10 @@ def series(db: sqlite3.Connection, config: Config, range_name: str = "1w", group
     first, last, calls = db.execute(f"SELECT MIN(ts), MAX(ts), COUNT(*) FROM calls WHERE {where}", tools).fetchone()
     digits = 6 if metric == "cost" else 0
     return {
-        "title": config.title, "range": range_name, "group": group, "metric": metric, "kinds": list(kinds),
-        "tools": list(tools), "start": start, "end": end, "bucket": bucket, "sub": sub, "points": n, "tz_offset": offset,
+        "title": config.title, "range": range_name, "interval": interval, "group": group, "metric": metric,
+        "kinds": list(kinds), "tools": list(tools), "start": start, "end": end, "bucket": bucket, "sub": sub,
+        "points": n, "edges": candle_edges(start, n, interval), "tz_offset": offset,
+        "intervals": INTERVALS, "max_candles": MAX_CANDLES, "spans": spans(db, now, where, tuple(tools)),
         "total": round(sum(sum(v[lead:]) for v in values.values()), digits),
         "previous_total": round(sum(before.values()), digits) if previous else None,
         "series": [{"name": name, "total": round(sum(values[name][lead:]), digits),
@@ -918,7 +972,8 @@ def make_handler(config: Config):
                     db = connect(config.db)
                     try:
                         data = series(db, config, query.get("range", "1w"), query.get("group", "tool"),
-                                      query.get("metric", "tokens"), kinds, tools)
+                                      query.get("metric", "tokens"), kinds, tools,
+                                      interval=query.get("interval", "auto"))
                     finally:
                         db.close()
                     self._send(200, "application/json; charset=utf-8", json.dumps(data).encode())
@@ -1043,16 +1098,16 @@ def cmd_restore(config: Config, args: argparse.Namespace) -> int:
 def cmd_report(config: Config, args: argparse.Namespace) -> int:
     db = connect(config.db)
     tools = tuple(t for t in args.tools.split(",") if t)
-    data = series(db, config, args.range, args.group, args.metric, tools=tools)
+    data = series(db, config, args.range, args.group, args.metric, tools=tools, interval=args.interval)
     db.close()
     if args.json:
-        print(json.dumps({k: v for k, v in data.items() if k != "series"} | {
+        print(json.dumps({k: v for k, v in data.items() if k not in ("series", "edges")} | {
             "series": [{k: v for k, v in s.items() if k not in ("values", "lead")} for s in data["series"]]}, indent=2))
         return 0
     change = ""
     if data["previous_total"]:
         change = f"  ({(data['total'] / data['previous_total'] - 1) * 100:+.1f}% vs the previous period)"
-    print(f"{config.title} - {args.range}, {args.metric} of {args.tools} by {args.group}: "
+    print(f"{config.title} - {args.range} in {data['interval']} candles, {args.metric} of {args.tools} by {args.group}: "
           f"{human(data['total'], args.metric)}{change}")
     for s in data["series"]:
         share = s["total"] / data["total"] * 100 if data["total"] else 0
@@ -1075,6 +1130,8 @@ def main(argv: list[str] | None = None) -> int:
     export_parser.add_argument("--since", type=int, default=0)
     report = sub.add_parser("report", help="print the totals for a range")
     report.add_argument("--range", default="1w", choices=list(RANGES))
+    report.add_argument("--interval", default="auto", choices=["auto", *INTERVALS],
+                        help="candle length; a 1W candle starts on Monday, so it can move the range start")
     report.add_argument("--group", default="tool", choices=GROUPS)
     report.add_argument("--metric", default="tokens", choices=METRICS)
     report.add_argument("--tools", default=",".join(STATUS_BAR_TOOLS), help="comma list of claude, omp, codex")

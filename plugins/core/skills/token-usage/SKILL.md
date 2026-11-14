@@ -34,6 +34,14 @@ usually shows:
 - The price line is the running total since the range start, with the previous period's total
   dotted. A candle is the burn rate per hour over the trailing candle-length window: it opens
   where the previous candle closed, green when the rate rose.
+- The range and the candle interval are separate choices, as on TradingView: 1m, 5m, 15m, 30m,
+  1h, 4h, 6h, 12h, 1D, 1W or Auto (1h for a day, 6h for a week, 1D up to 120 days, 1W beyond). An
+  interval fits a range when it gives 1 to 1600 candles; the page greys out the others. Candles
+  follow the local clock: a day starts at local midnight, so it has 23 or 25 hours across a daylight
+  saving change, and a week starts on Monday. Every range starts at a local hour, so changing the
+  interval never changes the totals; a candle the range start cuts is drawn partial. The
+  `(Claude Code history)` rows are daily totals placed at noon UTC, so candles under a day show
+  them as a spike at that hour.
 - Projects are the basename of the working directory, so an agent run in a worktree counts under
   the worktree's name; a directory named by a hash counts under its parent.
 
@@ -42,7 +50,7 @@ usually shows:
 ```bash
 python3 scripts/tokens.py scan [--verbose]      # index this machine's new calls now
 python3 scripts/tokens.py pull                  # fetch every fleet machine now
-python3 scripts/tokens.py report [--range all] [--group tool|model|project|machine] [--metric tokens|cost] [--tools claude,omp] [--json]
+python3 scripts/tokens.py report [--range all] [--interval auto|1m|…|1W] [--group tool|model|project|machine] [--metric tokens|cost] [--tools claude,omp] [--json]
 python3 scripts/tokens.py serve [--no-scan]     # what the service runs
 python3 scripts/tokens.py backup [--dir D] [--no-git]  # dump the index to tokens.backup_dir, commit and push
 python3 scripts/tokens.py restore [--dir D]     # merge a backup into the index
